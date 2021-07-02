@@ -10,7 +10,7 @@
 
 #![allow(dead_code)]
 
-use hyper::{body, header, Body, Client, Method, Request, StatusCode};
+use hyper::{body, header, Client, Body, Method, Request, StatusCode};
 use hyper_tls::HttpsConnector;
 // TODO: https://github.com/mozilla/mentat/issues/570
 // use serde_cbor;

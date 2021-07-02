@@ -16,7 +16,7 @@ syncable = ["tolstoy_traits", "hyper", "serde_json"]
 failure = "~0.1"
 failure_derive = "~0.1"
 http = "~0.2"
-tokio = { version = "~1.8", features = ["rt-core"] }
+tokio = { version = "1.8.0", features = ["full"] }
 uuid = "~0.8"
 
 [dependencies.rusqlite]

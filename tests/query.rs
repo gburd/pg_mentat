@@ -20,6 +20,7 @@ use chrono::FixedOffset;
 
 use core_traits::{Entid, KnownEntid, ValueType, ValueTypeSet};
 
+use edn::OrderedFloat;
 use mentat_core::{DateTime, HasSchema, Utc, Uuid};
 
 use query_projector_traits::aggregates::SimpleAggregationOp;
@@ -470,7 +471,7 @@ fn test_fulltext() {
                 ) => {
                     assert_eq!(x, v);
                     assert_eq!(text.as_str(), "hello darkness my old friend");
-                    assert_approx_eq!(score, 0.0f64.into());
+                    assert_approx_eq!(score, OrderedFloat(0.0f64));
                 }
                 _ => panic!("Unexpected results."),
             }
@@ -1953,7 +1954,7 @@ fn run_tx_data_test(mut store: Store) {
             }
             x => panic!("Got unexpected results {:?}", x),
         }
-    };
+    }
 
     assert_tx_data(&store, &tx1, "1".into());
     assert_tx_data(&store, &tx2, "2".into());
