@@ -24,7 +24,7 @@ version = "~0.24"
 features = ["limits", "bundled"]
 
 [dependencies.hyper]
-version = "~0.13"
+version = "~0.14"
 optional = true
 
 [dependencies.serde_json]
