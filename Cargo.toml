@@ -24,7 +24,12 @@ sqlcipher = ["rusqlite/sqlcipher", "mentat_db/sqlcipher"]
 syncable = ["mentat_tolstoy", "tolstoy_traits", "mentat_db/syncable"]
 
 [workspace]
-members = ["tools/cli", "ffi"]
+members = [
+  "tools/cli",
+  "ffi", "core", "core-traits","db", "db-traits", "edn", "public-traits", "query-algebrizer",
+  "query-algebrizer-traits", "query-projector", "query-projector-traits","query-pull",
+  "query-sql", "sql", "sql-traits", "tolstoy-traits", "tolstoy", "transaction"
+  ]
 
 [build-dependencies]
 rustc_version = "~0.4"
@@ -32,10 +37,10 @@ rustc_version = "~0.4"
 [dev-dependencies]
 assert_approx_eq = "~1.1"
 
-[dev-dependencies.cargo-husky]
-version = "1"
-default-features = false # Disable features which are enabled by default
-features = ["run-for-all", "precommit-hook", "run-cargo-fmt", "run-cargo-test", "run-cargo-check", "run-cargo-clippy"]
+#[dev-dependencies.cargo-husky]
+#version = "1"
+#default-features = false # Disable features which are enabled by default
+#features = ["run-for-all", "precommit-hook", "run-cargo-fmt", "run-cargo-test", "run-cargo-check", "run-cargo-clippy"]
 #cargo audit
 #cargo outdated
 
