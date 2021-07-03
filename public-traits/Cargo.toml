@@ -20,7 +20,7 @@ tokio = { version = "1.8.0", features = ["full"] }
 uuid = "~0.8"
 
 [dependencies.rusqlite]
-version = "~0.24"
+version = "~0.25"
 features = ["limits", "bundled"]
 
 [dependencies.hyper]

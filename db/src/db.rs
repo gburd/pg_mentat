@@ -24,6 +24,7 @@ use rusqlite;
 use rusqlite::limits::Limit;
 use rusqlite::types::{ToSql, ToSqlOutput};
 use rusqlite::TransactionBehavior;
+use rusqlite::{params_from_iter};
 
 use crate::bootstrap;
 use crate::{repeat_values, to_namespaced_keyword};
@@ -804,7 +805,7 @@ impl MentatStoring for rusqlite::Connection {
                                     values);
             let mut stmt: rusqlite::Statement = self.prepare(s.as_str())?;
 
-            let m: Result<Vec<(i64, Entid)>> = stmt.query_and_then(&params, |row| -> Result<(i64, Entid)> {
+            let m: Result<Vec<(i64, Entid)>> = stmt.query_and_then(params_from_iter(&params), |row| -> Result<(i64, Entid)> {
                 Ok((row.get(0)?, row.get(1)?))
             })?.collect();
             m
@@ -948,7 +949,7 @@ impl MentatStoring for rusqlite::Connection {
 
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(s.as_str())?;
-            stmt.execute(&params)
+            stmt.execute(params_from_iter(&params))
                 .context(DbErrorKind::NonFtsInsertionIntoTempSearchTableFailed)
                 .map_err(|e| e.into())
                 .map(|_c| ())
@@ -1042,7 +1043,7 @@ impl MentatStoring for rusqlite::Connection {
 
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(fts_s.as_str())?;
-            stmt.execute(&fts_params).context(DbErrorKind::FtsInsertionFailed)?;
+            stmt.execute(params_from_iter(&fts_params)).context(DbErrorKind::FtsInsertionFailed)?;
 
             // Second, insert searches.
             // `params` reference computed values in `block`.
@@ -1070,7 +1071,7 @@ impl MentatStoring for rusqlite::Connection {
 
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(s.as_str())?;
-            stmt.execute(&params).context(DbErrorKind::FtsInsertionIntoTempSearchTableFailed)
+            stmt.execute(params_from_iter(&params)).context(DbErrorKind::FtsInsertionIntoTempSearchTableFailed)
                 .map_err(|e| e.into())
                 .map(|_c| ())
         }).collect::<Result<Vec<()>>>();

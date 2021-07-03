@@ -10,7 +10,7 @@
 
 use std::ops::RangeFrom;
 
-use rusqlite;
+use rusqlite::{self, params_from_iter};
 
 use db_traits::errors::{DbErrorKind, Result};
 
@@ -81,10 +81,7 @@ fn move_transactions_to(
             new_timeline,
             crate::repeat_values(tx_ids.len(), 1)
         ),
-        &(tx_ids
-            .iter()
-            .map(|x| x as &dyn rusqlite::types::ToSql)
-            .collect::<Vec<_>>()),
+        params_from_iter(tx_ids.iter())
     )?;
     Ok(())
 }

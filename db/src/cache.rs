@@ -61,6 +61,7 @@ use std::iter::Peekable;
 use failure::ResultExt;
 
 use rusqlite;
+use rusqlite::{params_from_iter};
 
 use core_traits::{Binding, Entid, TypedValue};
 
@@ -1071,7 +1072,7 @@ impl AttributeCaches {
         replacing: bool,
     ) -> Result<()> {
         let mut aev_factory = AevFactory::new();
-        let rows = statement.query_map(&args, |row| Ok(aev_factory.row_to_aev(row)))?;
+        let rows = statement.query_map(params_from_iter(&args), |row| Ok(aev_factory.row_to_aev(row)))?;
         let aevs = AevRows { rows };
         self.accumulate_into_cache(
             None,
