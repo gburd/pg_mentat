@@ -1145,7 +1145,7 @@ fn test_upgrade_with_functions() {
             )?;
             ip.transact_builder(builder).and(Ok(())).map_err(|e| e)
         }
-    };
+    }
 
     {
         let mut in_progress = store.begin_transaction().expect("began");

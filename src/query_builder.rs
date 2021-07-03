@@ -424,7 +424,7 @@ mod test {
             entid: i64,
             boolean: bool,
             long_val: i64,
-        };
+        }
 
         let mut results: Vec<Res> = QueryBuilder::new(
             &mut store,
