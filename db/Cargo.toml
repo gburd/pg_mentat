@@ -45,5 +45,5 @@ path = "../sql"
 version = "~1.2"
 
 [dev-dependencies]
-env_logger = "0.8"
+env_logger = "0.9"
 #tabwriter = { version = "1.2.1" }
