@@ -741,13 +741,14 @@ impl Syncer {
         // Since we've "merged" with the remote bootstrap, the "no-op" and
         // "local fast-forward" cases are reported as merges.
         match Syncer::what_do(remote_state, local_state) {
-            SyncAction::NoOp => {
-                Ok(SyncReport::Merge(SyncFollowup::None))
-            }
+            SyncAction::NoOp => Ok(SyncReport::Merge(SyncFollowup::None)),
 
             SyncAction::PopulateRemote => {
                 // This is a programming error.
-                bail!(TolstoyError::UnexpectedState("Remote state can't be empty on first sync against non-empty remote".to_string()))
+                bail!(TolstoyError::UnexpectedState(
+                    "Remote state can't be empty on first sync against non-empty remote"
+                        .to_string()
+                ))
             }
 
             SyncAction::RemoteFastForward => {
@@ -761,12 +762,11 @@ impl Syncer {
 
             SyncAction::CombineChanges => {
                 let local_txs = Processor::process(
-                    &ip.transaction, Some(local_metadata.root), LocalTxSet::new())?;
-                Syncer::merge(
-                    ip,
-                    incoming_txs[1..].to_vec(),
-                    local_txs,
-                )
+                    &ip.transaction,
+                    Some(local_metadata.root),
+                    LocalTxSet::new(),
+                )?;
+                Syncer::merge(ip, incoming_txs[1..].to_vec(), local_txs)
             }
         }
     }

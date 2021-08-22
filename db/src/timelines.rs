@@ -81,7 +81,7 @@ fn move_transactions_to(
             new_timeline,
             crate::repeat_values(tx_ids.len(), 1)
         ),
-        params_from_iter(tx_ids.iter())
+        params_from_iter(tx_ids.iter()),
     )?;
     Ok(())
 }

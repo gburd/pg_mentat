@@ -75,7 +75,7 @@ impl TransactableValue for ValueAndSpan {
                 }
             }
             Nil | Boolean(_) | Instant(_) | BigInteger(_) | Float(_) | Uuid(_) | PlainSymbol(_)
-            | NamespacedSymbol(_) | Vector(_) | Set(_) | Map(_) => {
+            | NamespacedSymbol(_) | Vector(_) | Set(_) | Map(_) | Bytes(_) => {
                 bail!(DbErrorKind::InputError(errors::InputError::BadEntityPlace))
             }
         }

@@ -27,6 +27,8 @@ use uuid::Uuid;
 
 use crate::symbols;
 
+use bytes::Bytes;
+use hex::encode;
 /// Value represents one of the allowed values in an EDN string.
 #[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub enum Value {
@@ -52,6 +54,7 @@ pub enum Value {
     // See https://internals.rust-lang.org/t/implementing-hash-for-hashset-hashmap/3817/1
     Set(BTreeSet<Value>),
     Map(BTreeMap<Value, Value>),
+    Bytes(Bytes),
 }
 
 /// `SpannedValue` is the parallel to `Value` but used in `ValueAndSpan`.
@@ -73,6 +76,7 @@ pub enum SpannedValue {
     List(LinkedList<ValueAndSpan>),
     Set(BTreeSet<ValueAndSpan>),
     Map(BTreeMap<ValueAndSpan, ValueAndSpan>),
+    Bytes(Bytes),
 }
 
 /// Span represents the current offset (start, end) into the input string.
@@ -172,6 +176,7 @@ impl From<SpannedValue> for Value {
                     .map(|(x, y)| (x.without_spans(), y.without_spans()))
                     .collect(),
             ),
+            SpannedValue::Bytes(b) => Value::Bytes(b),
         }
     }
 }
@@ -328,6 +333,7 @@ macro_rules! def_common_value_methods {
         def_is!(is_list, $t::List(_));
         def_is!(is_set, $t::Set(_));
         def_is!(is_map, $t::Map(_));
+        def_is!(is_bytes, $t::Bytes(_));
 
         pub fn is_keyword(&self) -> bool {
             match self {
@@ -360,6 +366,7 @@ macro_rules! def_common_value_methods {
         def_as_ref!(as_uuid, $t::Uuid, Uuid);
         def_as_ref!(as_symbol, $t::PlainSymbol, symbols::PlainSymbol);
         def_as_ref!(as_namespaced_symbol, $t::NamespacedSymbol, symbols::NamespacedSymbol);
+        def_as_ref!(as_bytes, $t::Bytes, Bytes);
 
         pub fn as_keyword(&self) -> Option<&symbols::Keyword> {
             match self {
@@ -397,6 +404,7 @@ macro_rules! def_common_value_methods {
         def_into!(into_uuid, $t::Uuid, Uuid,);
         def_into!(into_symbol, $t::PlainSymbol, symbols::PlainSymbol,);
         def_into!(into_namespaced_symbol, $t::NamespacedSymbol, symbols::NamespacedSymbol,);
+        def_into!(into_bytes, $t::Bytes, Bytes,);
 
         pub fn into_keyword(self) -> Option<symbols::Keyword> {
             match self {
@@ -467,6 +475,7 @@ macro_rules! def_common_value_methods {
                 $t::List(_) => 13,
                 $t::Set(_) => 14,
                 $t::Map(_) => 15,
+                $t::Bytes(_) => 16,
             }
         }
 
@@ -487,6 +496,7 @@ macro_rules! def_common_value_methods {
                 $t::List(_) => true,
                 $t::Set(_) => true,
                 $t::Map(_) => true,
+                $t::Bytes(_) => true,
             }
         }
 
@@ -524,6 +534,7 @@ macro_rules! def_common_value_ord {
             (&$t::List(ref a), &$t::List(ref b)) => b.cmp(a),
             (&$t::Set(ref a), &$t::Set(ref b)) => b.cmp(a),
             (&$t::Map(ref a), &$t::Map(ref b)) => b.cmp(a),
+            (&$t::Bytes(ref a), &$t::Bytes(ref b)) => b.cmp(a),
             _ => $value.precedence().cmp(&$other.precedence()),
         }
     };
@@ -589,6 +600,10 @@ macro_rules! def_common_value_display {
                     write!($f, " {} {}", key, val)?;
                 }
                 write!($f, " }}")
+            }
+            $t::Bytes(ref v) => {
+                let s = encode(v);
+                write!($f, "#bytes \"{}\"", s)
             }
         }
     };

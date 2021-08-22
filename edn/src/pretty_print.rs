@@ -58,9 +58,7 @@ impl Value {
         let open = open.into();
         let n = open.len() as isize;
         let i = {
-            let this = vs
-                .into_iter()
-                .map(|v| v.as_doc(allocator));
+            let this = vs.into_iter().map(|v| v.as_doc(allocator));
             let element = allocator.line();
             Itertools::intersperse(this, element)
         };
@@ -86,9 +84,9 @@ impl Value {
             Value::Map(ref vs) => {
                 let xs = {
                     let this = vs
-                                .iter()
-                                .rev()
-                                .map(|(k, v)| k.as_doc(pp).append(pp.line()).append(v.as_doc(pp)).group());
+                        .iter()
+                        .rev()
+                        .map(|(k, v)| k.as_doc(pp).append(pp.line()).append(v.as_doc(pp)).group());
                     let element = pp.line();
                     Itertools::intersperse(this, element)
                 };

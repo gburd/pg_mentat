@@ -22,9 +22,9 @@ use itertools;
 use itertools::Itertools;
 use rusqlite;
 use rusqlite::limits::Limit;
+use rusqlite::params_from_iter;
 use rusqlite::types::{ToSql, ToSqlOutput};
 use rusqlite::TransactionBehavior;
-use rusqlite::{params_from_iter};
 
 use crate::bootstrap;
 use crate::{repeat_values, to_namespaced_keyword};
