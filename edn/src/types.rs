@@ -496,7 +496,7 @@ macro_rules! def_common_value_methods {
                 $t::List(_) => true,
                 $t::Set(_) => true,
                 $t::Map(_) => true,
-                $t::Bytes(_) => true,
+                $t::Bytes(_) => false,
             }
         }
 
@@ -603,7 +603,7 @@ macro_rules! def_common_value_display {
             }
             $t::Bytes(ref v) => {
                 let s = encode(v);
-                write!($f, "#bytes \"{}\"", s)
+                write!($f, "#bytes {}", s)
             }
         }
     };

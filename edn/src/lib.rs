@@ -177,12 +177,13 @@ peg::parser!(pub grammar parse() for str {
         { SpannedValue::Uuid(u) }
 
     rule byte_buffer() -> Bytes =
-        u:$( ['a'..='f' | 'A'..='F' | '0'..='9']* ) {
+        u:$( hex()+ ) {
             let b = decode(u).expect("this is a valid hex byte string");
             Bytes::copy_from_slice(&b)
         }
     pub rule bytes() -> SpannedValue = "#bytes" whitespace()+ u:byte_buffer()
         { SpannedValue::Bytes(u) }
+
     rule namespace_divider() = "."
     rule namespace_separator() = "/"
 
@@ -230,7 +231,7 @@ peg::parser!(pub grammar parse() for str {
 
     // Note: It's important that float comes before integer or the parser assumes that floats are integers and fails to parse.
     pub rule value() -> ValueAndSpan =
-        __ start:position!() v:(nil() / nan() / infinity() / boolean() / number() / inst() / uuid() / text() / keyword() / symbol() / list() / vector() / map() / set() / bytes() ) end:position!() __ {
+        __ start:position!() v:(nil() / nan() / infinity() / boolean() / number() / inst() / uuid() / bytes() / text() / keyword() / symbol() / list() / vector() / map() / set()  ) end:position!() __ {
             ValueAndSpan {
                 inner: v,
                 span: Span::new(start, end)

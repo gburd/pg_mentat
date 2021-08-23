@@ -336,7 +336,19 @@ fn test_bytes() {
             1, 2, 3, 5, 4, 3, 2, 42
         )))
     );
+    let data = r#"[ { :test/instant #inst "2018-01-01T11:00:00Z" :test/bytes #bytes 010203050403022a } ]"#;
+    let result = parse::value(data).unwrap().without_spans().to_string();
+    assert_eq!(data, result);
 }
+
+
+#[test]
+fn test_entities() {
+    let d2 = r#"[ { :test/boolean true :test/long 33 :test/double 1.4 :test/string "foo" :test/keyword :foo/bar :test/uuid #uuid "12341234-1234-1234-1234-123412341234" :test/instant #inst "2018-01-01T11:00:00Z" :test/ref 1 :test/bytes #bytes 010203050403022a } ]"#;
+    let r2 = parse::entities(d2);
+    assert!(r2.is_ok());
+}
+
 
 #[test]
 fn test_inst() {
