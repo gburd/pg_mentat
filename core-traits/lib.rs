@@ -16,6 +16,7 @@ extern crate ordered_float;
 extern crate serde_derive;
 extern crate edn;
 extern crate uuid;
+extern crate bytes;
 #[macro_use]
 extern crate lazy_static;
 
@@ -33,6 +34,7 @@ use std::sync::Arc;
 
 use std::collections::BTreeMap;
 
+use bytes::Bytes;
 use indexmap::IndexMap;
 
 use enum_set::EnumSet;
@@ -280,6 +282,7 @@ pub enum ValueType {
     String,
     Keyword,
     Uuid,
+    Bytes,
 }
 
 impl ValueType {
@@ -294,6 +297,7 @@ impl ValueType {
         s.insert(ValueType::String);
         s.insert(ValueType::Keyword);
         s.insert(ValueType::Uuid);
+        s.insert(ValueType::Bytes);
         s
     }
 }
@@ -321,6 +325,7 @@ impl ValueType {
                 ValueType::String => "string",
                 ValueType::Keyword => "keyword",
                 ValueType::Uuid => "uuid",
+                ValueType::Bytes => "bytes",
             },
         )
     }
@@ -338,6 +343,7 @@ impl ValueType {
                 "string" => Some(ValueType::String),
                 "keyword" => Some(ValueType::Keyword),
                 "uuid" => Some(ValueType::Uuid),
+                "bytes" => Some(ValueType::Bytes),
                 _ => None,
             }
         }
@@ -355,6 +361,7 @@ impl ValueType {
                 ValueType::String => "string",
                 ValueType::Keyword => "keyword",
                 ValueType::Uuid => "uuid",
+                ValueType::Bytes => "bytes",
             },
         )
     }
@@ -369,6 +376,7 @@ impl ValueType {
             ValueType::String => values::DB_TYPE_STRING.clone(),
             ValueType::Keyword => values::DB_TYPE_KEYWORD.clone(),
             ValueType::Uuid => values::DB_TYPE_UUID.clone(),
+            ValueType::Bytes => values::DB_TYPE_BYTES.clone(),
         }
     }
 
@@ -391,6 +399,7 @@ impl fmt::Display for ValueType {
                 ValueType::String => ":db.type/string",
                 ValueType::Keyword => ":db.type/keyword",
                 ValueType::Uuid => ":db.type/uuid",
+                ValueType::Bytes => ":db.type/bytes",
             }
         )
     }
@@ -414,6 +423,7 @@ pub enum TypedValue {
     String(ValueRc<String>),
     Keyword(ValueRc<Keyword>),
     Uuid(Uuid), // It's only 128 bits, so this should be acceptable to clone.
+    Bytes(Bytes),
 }
 
 impl From<KnownEntid> for TypedValue {
@@ -445,6 +455,7 @@ impl TypedValue {
             TypedValue::String(_) => ValueType::String,
             TypedValue::Keyword(_) => ValueType::Keyword,
             TypedValue::Uuid(_) => ValueType::Uuid,
+            TypedValue::Bytes(_) => ValueType::Bytes,
         }
     }
 
@@ -596,6 +607,13 @@ impl TypedValue {
             _ => None,
         }
     }
+
+    pub fn into_bytes(self) -> Option<Bytes> {
+        match self {
+            TypedValue::Bytes(b) => Some(b),
+            _ => None,
+        }
+    }
 }
 
 // We don't do From<i64> or From<Entid> 'cos it's ambiguous.
@@ -683,6 +701,12 @@ impl From<i32> for TypedValue {
 impl From<f64> for TypedValue {
     fn from(value: f64) -> TypedValue {
         TypedValue::Double(OrderedFloat(value))
+    }
+}
+
+impl From<&[u8]> for TypedValue {
+    fn from(bslice: &[u8]) -> Self {
+        TypedValue::Bytes(Bytes::copy_from_slice(bslice))
     }
 }
 

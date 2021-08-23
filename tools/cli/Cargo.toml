@@ -32,6 +32,8 @@ tabwriter = "~1.2"
 tempfile = "~3.2"
 termion = "~1.5"
 time = "~0.3"
+bytes = { version = "1.0.1", features = ["serde"] }
+hex = "0.4.3"
 
 [dependencies.rusqlite]
 version = "~0.25"

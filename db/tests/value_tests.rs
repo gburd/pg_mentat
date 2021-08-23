@@ -67,6 +67,11 @@ fn test_from_sql_value_pair() {
             .unwrap(),
         TypedValue::typed_ns_keyword("db", "keyword")
     );
+    assert_eq!(
+        TypedValue::from_sql_value_pair(rusqlite::types::Value::Blob(vec![1,2,3,42]), 15)
+            .unwrap(),
+        TypedValue::Bytes((vec![1,2,3,42]).into())
+    );
 }
 
 #[test]

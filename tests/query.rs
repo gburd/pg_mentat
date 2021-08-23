@@ -835,6 +835,7 @@ fn test_type_reqs() {
         {:db/ident :test/uuid    :db/valueType :db.type/uuid    :db/cardinality :db.cardinality/one}
         {:db/ident :test/instant :db/valueType :db.type/instant :db/cardinality :db.cardinality/one}
         {:db/ident :test/ref     :db/valueType :db.type/ref     :db/cardinality :db.cardinality/one}
+        {:db/ident :test/bytes   :db/valueType :db.type/bytes   :db/cardinality :db.cardinality/one}
     ]"#,
     )
     .unwrap();
@@ -849,7 +850,8 @@ fn test_type_reqs() {
          :test/keyword :foo/bar
          :test/uuid    #uuid "12341234-1234-1234-1234-123412341234"
          :test/instant #inst "2018-01-01T11:00:00.000Z"
-         :test/ref     1}
+         :test/ref     1
+         :test/bytes   #bytes 010203050403022a }
     ]"#,
     )
     .unwrap();

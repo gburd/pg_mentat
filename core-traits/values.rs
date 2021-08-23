@@ -58,6 +58,7 @@ lazy_static_namespaced_keyword_value!(DB_TYPE_REF, "db.type", "ref");
 lazy_static_namespaced_keyword_value!(DB_TYPE_STRING, "db.type", "string");
 lazy_static_namespaced_keyword_value!(DB_TYPE_URI, "db.type", "uri");
 lazy_static_namespaced_keyword_value!(DB_TYPE_UUID, "db.type", "uuid");
+lazy_static_namespaced_keyword_value!(DB_TYPE_BYTES, "db.type", "bytes");
 lazy_static_namespaced_keyword_value!(DB_UNIQUE, "db", "unique");
 lazy_static_namespaced_keyword_value!(DB_UNIQUE_IDENTITY, "db.unique", "identity");
 lazy_static_namespaced_keyword_value!(DB_UNIQUE_VALUE, "db.unique", "value");

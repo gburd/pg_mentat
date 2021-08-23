@@ -362,6 +362,7 @@ impl SchemaTypeChecking for Schema {
                 (ValueType::Uuid, tv @ TypedValue::Uuid(_)) => Ok(tv),
                 (ValueType::Instant, tv @ TypedValue::Instant(_)) => Ok(tv),
                 (ValueType::Keyword, tv @ TypedValue::Keyword(_)) => Ok(tv),
+                (ValueType::Bytes, tv @ TypedValue::Bytes(_)) => Ok(tv),
                 // Ref coerces a little: we interpret some things depending on the schema as a Ref.
                 (ValueType::Ref, TypedValue::Long(x)) => Ok(TypedValue::Ref(x)),
                 (ValueType::Ref, TypedValue::Keyword(ref x)) => {
@@ -379,6 +380,7 @@ impl SchemaTypeChecking for Schema {
                 | (vt @ ValueType::Uuid, _)
                 | (vt @ ValueType::Instant, _)
                 | (vt @ ValueType::Keyword, _)
+                | (vt @ ValueType::Bytes, _)
                 | (vt @ ValueType::Ref, _) => {
                     bail!(DbErrorKind::BadValuePair(format!("{}", value), vt))
                 }

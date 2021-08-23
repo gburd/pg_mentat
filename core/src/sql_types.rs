@@ -51,6 +51,7 @@ impl SQLValueType for ValueType {
             ValueType::String => (10, None),
             ValueType::Uuid => (11, None),
             ValueType::Keyword => (13, None),
+            ValueType::Bytes => (15, Some(SQLTypeAffinity::Blob)),
         }
     }
 
@@ -71,6 +72,7 @@ impl SQLValueType for ValueType {
             ValueType::String => false,
             Keyword => false,
             Uuid => false,
+            Bytes => false,
         }
     }
 }

@@ -105,7 +105,8 @@ impl TransactableValue for TypedValue {
             | TypedValue::Long(_)
             | TypedValue::Double(_)
             | TypedValue::Instant(_)
-            | TypedValue::Uuid(_) => {
+            | TypedValue::Uuid(_)
+            | TypedValue::Bytes(_) => {
                 bail!(DbErrorKind::InputError(errors::InputError::BadEntityPlace))
             }
         }
