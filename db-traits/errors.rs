@@ -118,10 +118,10 @@ impl ::std::fmt::Display for InputError {
         match self {
             BadDbId => {
                 writeln!(f, ":db/id in map notation must either not be present or be an entid, an ident, or a tempid")
-            },
+            }
             BadEntityPlace => {
                 writeln!(f, "cannot convert value place into entity place")
-            },
+            }
         }
     }
 }

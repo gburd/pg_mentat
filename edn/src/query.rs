@@ -233,7 +233,7 @@ impl FromValue<FnArg> for FnArg {
             {
                 Some(FnArg::Constant(x.clone().into()))
             }
-            Nil | NamespacedSymbol(_) | Vector(_) | List(_) | Set(_) | Map(_) => None,
+            Nil | NamespacedSymbol(_) | Vector(_) | List(_) | Set(_) | Map(_) | Bytes(_) => None,
         }
     }
 }
@@ -410,6 +410,7 @@ impl FromValue<PatternValuePlace> for PatternValuePlace {
             crate::SpannedValue::List(_) => None,
             crate::SpannedValue::Set(_) => None,
             crate::SpannedValue::Vector(_) => None,
+            crate::SpannedValue::Bytes(_) => None,
         }
     }
 }

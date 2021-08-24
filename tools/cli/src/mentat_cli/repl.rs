@@ -613,6 +613,7 @@ impl Repl {
             Ref(r) => format!("{}", r),
             String(ref s) => format!("{:?}", s.to_string()),
             Uuid(ref u) => format!("{}", u),
+            Bytes(b) => format!("#bytes {:?}", b.to_vec()),
         }
     }
 }

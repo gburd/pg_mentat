@@ -34,6 +34,7 @@ fn prepopulated_schema() -> Schema {
         .define_simple_attr("test", "uuid", ValueType::Uuid, false)
         .define_simple_attr("test", "instant", ValueType::Instant, false)
         .define_simple_attr("test", "ref", ValueType::Ref, false)
+        .define_simple_attr("test", "bytes", ValueType::Bytes, false)
         .schema
 }
 

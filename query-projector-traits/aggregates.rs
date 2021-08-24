@@ -110,7 +110,7 @@ impl SimpleAggregationOp {
                         String => Ok(the_type),
 
                         // Unordered types.
-                        Keyword | Ref | Uuid => {
+                        Keyword | Ref | Uuid | Bytes => {
                             bail!(ProjectorError::CannotApplyAggregateOperationToTypes(
                                 self,
                                 possibilities

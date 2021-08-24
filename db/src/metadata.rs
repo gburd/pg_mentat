@@ -248,6 +248,7 @@ pub fn update_attribute_map_from_entid_triples(
                     TypedValue::Ref(entids::DB_TYPE_REF)     => { builder.value_type(ValueType::Ref); },
                     TypedValue::Ref(entids::DB_TYPE_STRING)  => { builder.value_type(ValueType::String); },
                     TypedValue::Ref(entids::DB_TYPE_UUID)    => { builder.value_type(ValueType::Uuid); },
+                    TypedValue::Ref(entids::DB_TYPE_BYTES)   => { builder.value_type(ValueType::Bytes); },
                     _ => bail!(DbErrorKind::BadSchemaAssertion(format!("Expected [... :db/valueType :db.type/*] but got [... :db/valueType {:?}] for entid {} and attribute {}", value, entid, attr)))
                 }
             },

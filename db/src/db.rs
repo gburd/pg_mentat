@@ -22,9 +22,9 @@ use itertools;
 use itertools::Itertools;
 use rusqlite;
 use rusqlite::limits::Limit;
+use rusqlite::params_from_iter;
 use rusqlite::types::{ToSql, ToSqlOutput};
 use rusqlite::TransactionBehavior;
-use rusqlite::{params_from_iter};
 
 use crate::bootstrap;
 use crate::{repeat_values, to_namespaced_keyword};
@@ -434,6 +434,9 @@ impl TypedSQLValue for TypedValue {
                 Ok(TypedValue::Uuid(u))
             }
             (13, rusqlite::types::Value::Text(x)) => to_namespaced_keyword(&x).map(|k| k.into()),
+            (15, rusqlite::types::Value::Blob(x)) => {
+                Ok(TypedValue::Bytes(x.into()))
+            }
             (_, value) => bail!(DbErrorKind::BadSQLValuePair(value, value_type_tag)),
         }
     }
@@ -454,6 +457,7 @@ impl TypedSQLValue for TypedValue {
             Value::Float(ref x) => Some(TypedValue::Double(*x)),
             Value::Text(ref x) => Some(x.clone().into()),
             Value::Keyword(ref x) => Some(x.clone().into()),
+            Value::Bytes(b) => Some(TypedValue::Bytes(b.clone())),
             _ => None,
         }
     }
@@ -470,6 +474,7 @@ impl TypedSQLValue for TypedValue {
             TypedValue::String(ref x) => (x.as_str().into(), 10),
             TypedValue::Uuid(ref u) => (u.as_bytes().to_vec().into(), 11),
             TypedValue::Keyword(ref x) => (x.to_string().into(), 13),
+            TypedValue::Bytes(b) => (b.to_vec().into(), 15),
         }
     }
 
@@ -484,6 +489,7 @@ impl TypedSQLValue for TypedValue {
             TypedValue::String(ref x) => (Value::Text(x.as_ref().clone()), ValueType::String),
             TypedValue::Uuid(ref u) => (Value::Uuid(*u), ValueType::Uuid),
             TypedValue::Keyword(ref x) => (Value::Keyword(x.as_ref().clone()), ValueType::Keyword),
+            TypedValue::Bytes(b) => (Value::Bytes(b.clone()), ValueType::Bytes),
         }
     }
 }

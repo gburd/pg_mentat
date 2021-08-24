@@ -181,6 +181,18 @@ impl QueryBuilder for SQLiteQueryBuilder {
                 let v = Rc::new(rusqlite::types::Value::Text(s.as_ref().to_string()));
                 self.push_static_arg(v);
             }
+            Bytes(b) => {
+                let bytes = b.to_vec();
+                if let Some(arg) = self.byte_args.get(&bytes).cloned() {
+                    // Why, borrow checker, why?!
+                    self.push_named_arg(arg.as_str());
+                } else {
+                    let arg = self.next_argument_name();
+                    self.push_named_arg(arg.as_str());
+                    self.byte_args.insert(bytes, arg);
+                }
+
+            },
         }
         Ok(())
     }

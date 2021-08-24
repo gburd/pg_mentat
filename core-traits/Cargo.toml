@@ -16,6 +16,7 @@ ordered-float = { version = "~2.7", features = ["serde"] }
 uuid = { version = "~0.8", features = ["v4", "serde"] }
 serde = { version = "~1.0", features = ["rc"] }
 serde_derive = "~1.0"
+bytes = { version = "1.0.1", features = ["serde"] }
 
 [dependencies.edn]
 path = "../edn"

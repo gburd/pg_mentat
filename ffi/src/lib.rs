@@ -1499,7 +1499,7 @@ pub unsafe extern "C" fn query_builder_bind_ref_kw(
     let kw = kw_from_string(c_char_to_string(value));
     let query_builder = &mut *query_builder;
     if let Some(err) = query_builder.bind_ref_from_kw(&var, kw).err() {
-        panic!(err);
+        std::panic::panic_any(err);
     }
 }
 

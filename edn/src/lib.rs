@@ -8,7 +8,9 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+extern crate bytes;
 extern crate chrono;
+extern crate hex;
 extern crate itertools;
 extern crate num;
 extern crate ordered_float;
@@ -38,7 +40,9 @@ pub mod value_rc;
 pub use crate::value_rc::{Cloned, FromRc, ValueRc};
 
 // Re-export the types we use.
+use bytes::Bytes;
 pub use chrono::{DateTime, Utc};
+use hex::decode;
 pub use num::BigInt;
 pub use ordered_float::OrderedFloat;
 pub use uuid::Uuid;
@@ -172,6 +176,14 @@ peg::parser!(pub grammar parse() for str {
     pub rule uuid() -> SpannedValue = "#uuid" whitespace()+ u:uuid_string()
         { SpannedValue::Uuid(u) }
 
+    rule byte_buffer() -> Bytes =
+        u:$( hex()+ ) {
+            let b = decode(u).expect("this is a valid hex byte string");
+            Bytes::copy_from_slice(&b)
+        }
+    pub rule bytes() -> SpannedValue = "#bytes" whitespace()+ u:byte_buffer()
+        { SpannedValue::Bytes(u) }
+
     rule namespace_divider() = "."
     rule namespace_separator() = "/"
 
@@ -219,7 +231,7 @@ peg::parser!(pub grammar parse() for str {
 
     // Note: It's important that float comes before integer or the parser assumes that floats are integers and fails to parse.
     pub rule value() -> ValueAndSpan =
-        __ start:position!() v:(nil() / nan() / infinity() / boolean() / number() / inst() / uuid() / text() / keyword() / symbol() / list() / vector() / map() / set()) end:position!() __ {
+        __ start:position!() v:(nil() / nan() / infinity() / boolean() / number() / inst() / uuid() / bytes() / text() / keyword() / symbol() / list() / vector() / map() / set()  ) end:position!() __ {
             ValueAndSpan {
                 inner: v,
                 span: Span::new(start, end)
