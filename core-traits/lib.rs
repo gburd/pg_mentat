@@ -14,9 +14,9 @@ extern crate indexmap;
 extern crate ordered_float;
 #[macro_use]
 extern crate serde_derive;
+extern crate bytes;
 extern crate edn;
 extern crate uuid;
-extern crate bytes;
 #[macro_use]
 extern crate lazy_static;
 

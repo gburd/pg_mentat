@@ -336,11 +336,11 @@ fn test_bytes() {
             1, 2, 3, 5, 4, 3, 2, 42
         )))
     );
-    let data = r#"[ { :test/instant #inst "2018-01-01T11:00:00Z" :test/bytes #bytes 010203050403022a } ]"#;
+    let data =
+        r#"[ { :test/instant #inst "2018-01-01T11:00:00Z" :test/bytes #bytes 010203050403022a } ]"#;
     let result = parse::value(data).unwrap().without_spans().to_string();
     assert_eq!(data, result);
 }
-
 
 #[test]
 fn test_entities() {
@@ -348,7 +348,6 @@ fn test_entities() {
     let r2 = parse::entities(d2);
     assert!(r2.is_ok());
 }
-
 
 #[test]
 fn test_inst() {

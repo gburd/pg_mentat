@@ -434,9 +434,7 @@ impl TypedSQLValue for TypedValue {
                 Ok(TypedValue::Uuid(u))
             }
             (13, rusqlite::types::Value::Text(x)) => to_namespaced_keyword(&x).map(|k| k.into()),
-            (15, rusqlite::types::Value::Blob(x)) => {
-                Ok(TypedValue::Bytes(x.into()))
-            }
+            (15, rusqlite::types::Value::Blob(x)) => Ok(TypedValue::Bytes(x.into())),
             (_, value) => bail!(DbErrorKind::BadSQLValuePair(value, value_type_tag)),
         }
     }

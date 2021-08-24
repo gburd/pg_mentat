@@ -191,8 +191,7 @@ impl QueryBuilder for SQLiteQueryBuilder {
                     self.push_named_arg(arg.as_str());
                     self.byte_args.insert(bytes, arg);
                 }
-
-            },
+            }
         }
         Ok(())
     }
