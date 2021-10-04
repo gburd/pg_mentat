@@ -36,7 +36,7 @@ bytes = { version = "1.0.1", features = ["serde"] }
 hex = "0.4.3"
 
 [dependencies.rusqlite]
-version = "~0.25"
+version = "~0.26"
 features = ["limits", "bundled"]
 
 [dependencies.mentat]

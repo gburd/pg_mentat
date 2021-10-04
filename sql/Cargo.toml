@@ -11,7 +11,7 @@ failure = "~0.1"
 ordered-float = "~2.7"
 
 [dependencies.rusqlite]
-version = "~0.25"
+version = "~0.26"
 features = ["limits", "bundled"]
 
 [dependencies.core_traits]
