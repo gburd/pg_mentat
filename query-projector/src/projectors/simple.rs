@@ -93,7 +93,7 @@ impl TupleProjector {
         // There will be at least as many SQL columns as Datalog columns.
         // gte 'cos we might be querying extra columns for ordering.
         // The templates will take care of ignoring columns.
-        assert!(row.column_count() >= self.len);
+        assert!(row.as_ref().column_count() >= self.len);
         self.templates
             .iter()
             .map(|ti| ti.lookup(&row))
@@ -163,7 +163,7 @@ impl RelProjector {
         // There will be at least as many SQL columns as Datalog columns.
         // gte 'cos we might be querying extra columns for ordering.
         // The templates will take care of ignoring columns.
-        assert!(row.column_count() >= self.len);
+        assert!(row.as_ref().column_count() >= self.len);
         let mut count = 0;
         for binding in self.templates.iter().map(|ti| ti.lookup(&row)) {
             out.push(binding?);

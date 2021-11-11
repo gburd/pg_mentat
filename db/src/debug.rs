@@ -340,7 +340,7 @@ pub fn dump_sql_query(
 
     let r: Result<Vec<_>> = stmt
         .query_and_then(params, |row| {
-            for i in 0..row.column_count() {
+            for i in 0..row.as_ref().column_count() {
                 let value: rusqlite::types::Value = row.get(i)?;
                 write!(&mut tw, "{:?}\t", value).unwrap();
             }
