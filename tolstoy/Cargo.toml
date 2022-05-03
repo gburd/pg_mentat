@@ -22,7 +22,7 @@ serde_json = "~1.0"
 serde_cbor = "~0.11"
 serde_derive = "~1.0"
 lazy_static = "~1.4"
-uuid = { version = "~0.8", features = ["v4", "serde"] }
+uuid = { version = "~1.0", features = ["v4", "serde"] }
 
 [dependencies.rusqlite]
 version = "~0.26"

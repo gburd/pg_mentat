@@ -13,7 +13,7 @@ enum-set = "~0.0.8"
 lazy_static = "~1.4"
 indexmap = "~1.7"
 ordered-float = { version = "~2.8", features = ["serde"] }
-uuid = { version = "~0.8", features = ["v4", "serde"] }
+uuid = { version = "~1.0", features = ["v4", "serde"] }
 serde = { version = "~1.0", features = ["rc"] }
 serde_derive = "~1.0"
 bytes = { version = "1.0.1", features = ["serde"] }
