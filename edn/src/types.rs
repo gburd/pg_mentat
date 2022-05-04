@@ -569,7 +569,7 @@ macro_rules! def_common_value_display {
             }
             // TODO: EDN escaping.
             $t::Text(ref v) => write!($f, "\"{}\"", v),
-            $t::Uuid(ref u) => write!($f, "#uuid \"{}\"", u.to_hyphenated().to_string()),
+            $t::Uuid(ref u) => write!($f, "#uuid \"{}\"", u.hyphenated().to_string()),
             $t::PlainSymbol(ref v) => v.fmt($f),
             $t::NamespacedSymbol(ref v) => v.fmt($f),
             $t::Keyword(ref v) => v.fmt($f),

@@ -50,7 +50,7 @@ failure = "~0.1"
 lazy_static = "~1.4"
 time = "0.3.1"
 log = "~0.4"
-uuid = { version = "~0.8", features = ["v4", "serde"] }
+uuid = { version = "~1.0", features = ["v4", "serde"] }
 
 [dependencies.rusqlite]
 version = "~0.26"
