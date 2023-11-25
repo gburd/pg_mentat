@@ -12,4 +12,5 @@ jobs:
             override: true
       - uses: actions-rs/clippy-check@v1
         with:
+          args:  --all-targets --all-features -- -D warnings
           token: ${{ secrets.GITHUB_TOKEN }}
