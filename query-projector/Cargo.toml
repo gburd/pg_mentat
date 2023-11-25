@@ -11,7 +11,7 @@ failure = "~0.1"
 indexmap = "~1.9"
 
 [dependencies.rusqlite]
-version = "~0.26"
+version = "~0.29"
 features = ["limits", "bundled"]
 
 [dependencies.core_traits]
