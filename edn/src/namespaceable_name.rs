@@ -121,7 +121,7 @@ impl NamespaceableName {
         if name.starts_with('_') {
             Self::new(self.namespace(), &name[1..])
         } else {
-            Self::new(self.namespace(), &format!("_{}", name))
+            Self::new(self.namespace(), format!("_{}", name))
         }
     }
 

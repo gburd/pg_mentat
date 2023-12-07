@@ -668,7 +668,7 @@ pub trait FromMicros {
 
 impl FromMicros for DateTime<Utc> {
     fn from_micros(ts: i64) -> Self {
-        Utc.timestamp(ts / 1_000_000, ((ts % 1_000_000).abs() as u32) * 1_000)
+        Utc.timestamp_opt(ts / 1_000_000, ((ts % 1_000_000).unsigned_abs() as u32) * 1_000).unwrap()
     }
 }
 
@@ -690,7 +690,7 @@ pub trait FromMillis {
 
 impl FromMillis for DateTime<Utc> {
     fn from_millis(ts: i64) -> Self {
-        Utc.timestamp(ts / 1_000, ((ts % 1_000).abs() as u32) * 1_000)
+        Utc.timestamp_opt(ts / 1_000, ((ts % 1_000).unsigned_abs() as u32) * 1_000).unwrap()
     }
 }
 

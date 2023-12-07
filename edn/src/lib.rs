@@ -128,7 +128,7 @@ peg::parser!(pub grammar parse() for str {
     //      result = r#""foo\\bar""#
     // For the typical case, string_normal_chars will match multiple, leading to a single-element vec.
     pub rule raw_text() -> String = "\"" t:((string_special_char() / string_normal_chars())*) "\""
-        {  t.join(&"") }
+        {  t.join("") }
 
     pub rule text() -> SpannedValue
         = v:raw_text() { SpannedValue::Text(v) }
@@ -153,16 +153,16 @@ peg::parser!(pub grammar parse() for str {
         "#instmicros" whitespace()+ d:$( digit()+ ) {
             let micros = d.parse::<i64>().unwrap();
             let seconds: i64 = micros / 1_000_000;
-            let nanos: u32 = ((micros % 1_000_000).abs() as u32) * 1000;
-            Utc.timestamp(seconds, nanos)
+            let nanos: u32 = ((micros % 1_000_000).unsigned_abs() as u32) * 1000;
+            Utc.timestamp_opt(seconds, nanos).unwrap()
         }
 
     rule inst_millis() -> DateTime<Utc> =
         "#instmillis" whitespace()+ d:$( digit()+ ) {
             let millis = d.parse::<i64>().unwrap();
             let seconds: i64 = millis / 1000;
-            let nanos: u32 = ((millis % 1000).abs() as u32) * 1_000_000;
-            Utc.timestamp(seconds, nanos)
+            let nanos: u32 = ((millis % 1000).unsigned_abs() as u32) * 1_000_000;
+            Utc.timestamp_opt(seconds, nanos).unwrap()
         }
 
     rule inst() -> SpannedValue = t:(inst_millis() / inst_micros() / inst_string())
