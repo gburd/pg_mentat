@@ -10,7 +10,6 @@
 
 use std::io::Write;
 
-use failure::Error;
 
 use linefeed::Interface;
 
@@ -18,7 +17,7 @@ use tabwriter::TabWriter;
 
 use termion::{color, style};
 
-use time::{Duration, Instant};
+use std::time::Instant;
 
 use core_traits::StructuredMap;
 
@@ -27,9 +26,9 @@ use mentat::{
     Store, TxReport, TypedValue,
 };
 
-use command_parser::Command;
+use crate::command_parser::Command;
 
-use command_parser::{
+use crate::command_parser::{
     COMMAND_CACHE, COMMAND_EXIT_LONG, COMMAND_EXIT_SHORT, COMMAND_HELP, COMMAND_IMPORT_LONG,
     COMMAND_OPEN, COMMAND_QUERY_EXPLAIN_LONG, COMMAND_QUERY_EXPLAIN_SHORT, COMMAND_QUERY_LONG,
     COMMAND_QUERY_PREPARED_LONG, COMMAND_QUERY_SHORT, COMMAND_SCHEMA, COMMAND_TIMER_LONG,
@@ -41,13 +40,13 @@ use command_parser::{
 // we weren't compiled with sqlcipher), but they're unused, since we
 // omit them from help message (since they wouldn't work).
 #[cfg(feature = "sqlcipher")]
-use command_parser::COMMAND_OPEN_ENCRYPTED;
+use crate::command_parser::COMMAND_OPEN_ENCRYPTED;
 
 #[cfg(feature = "syncable")]
-use command_parser::COMMAND_SYNC;
+use crate::command_parser::COMMAND_SYNC;
 
-use input::InputReader;
-use input::InputResult::{Empty, Eof, MetaCommand, More};
+use crate::input::InputReader;
+use crate::input::InputResult::{Empty, Eof, MetaCommand, More};
 
 lazy_static! {
     static ref HELP_COMMANDS: Vec<(&'static str, &'static str)> = {
@@ -90,7 +89,7 @@ lazy_static! {
 fn eprint_out(s: &str) {
     eprint!(
         "{green}{s}{reset}",
-        green = color::Fg(::GREEN),
+        green = color::Fg(crate::GREEN),
         s = s,
         reset = color::Fg(color::Reset)
     );
@@ -105,8 +104,8 @@ fn parse_namespaced_keyword(input: &str) -> Option<Keyword> {
     }
 }
 
-fn format_time(duration: Duration) {
-    let m_nanos = duration.whole_nanoseconds();
+fn format_time(duration: std::time::Duration) {
+    let m_nanos = duration.as_nanos();
     if let Some(nanos) = Some(m_nanos) {
         if nanos < 1_000 {
             eprintln!(
@@ -119,7 +118,7 @@ fn format_time(duration: Duration) {
         }
     }
 
-    let m_micros = duration.whole_microseconds();
+    let m_micros = duration.as_micros();
     if let Some(micros) = Some(m_micros) {
         if micros < 1_000 {
             eprintln!(
@@ -144,7 +143,7 @@ fn format_time(duration: Duration) {
         }
     }
 
-    let millis = duration.whole_milliseconds();
+    let millis = duration.as_millis();
     let seconds = (millis as f64) / 1000f64;
     eprintln!(
         "{bold}{seconds}{reset}s",
@@ -446,7 +445,7 @@ impl Repl {
         output.flush().unwrap();
     }
 
-    fn print_results(&self, query_output: QueryOutput) -> Result<(), Error> {
+    fn print_results(&self, query_output: QueryOutput) -> Result<(), crate::CliError> {
         let stdout = ::std::io::stdout();
         let mut output = TabWriter::new(stdout.lock());
 

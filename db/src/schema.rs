@@ -507,12 +507,12 @@ mod test {
             },
         );
 
-        let err = validate_attribute_map(&schema.entid_map, &schema.attribute_map)
-            .err()
-            .map(|e| e.kind());
+        let result = validate_attribute_map(&schema.entid_map, &schema.attribute_map);
+        let error_opt = result.err();
+        let err = error_opt.as_ref().map(|e| e.kind());
         assert_eq!(
             err,
-            Some(DbErrorKind::BadSchemaAssertion(
+            Some(&DbErrorKind::BadSchemaAssertion(
                 ":db/unique :db/unique_value without :db/index true for entid: :foo/bar".into()
             ))
         );
@@ -537,12 +537,12 @@ mod test {
             },
         );
 
-        let err = validate_attribute_map(&schema.entid_map, &schema.attribute_map)
-            .err()
-            .map(|e| e.kind());
+        let result = validate_attribute_map(&schema.entid_map, &schema.attribute_map);
+        let error_opt = result.err();
+        let err = error_opt.as_ref().map(|e| e.kind());
         assert_eq!(
             err,
-            Some(DbErrorKind::BadSchemaAssertion(
+            Some(&DbErrorKind::BadSchemaAssertion(
                 ":db/unique :db/unique_identity without :db/index true for entid: :foo/bar".into()
             ))
         );
@@ -567,12 +567,12 @@ mod test {
             },
         );
 
-        let err = validate_attribute_map(&schema.entid_map, &schema.attribute_map)
-            .err()
-            .map(|e| e.kind());
+        let result = validate_attribute_map(&schema.entid_map, &schema.attribute_map);
+        let error_opt = result.err();
+        let err = error_opt.as_ref().map(|e| e.kind());
         assert_eq!(
             err,
-            Some(DbErrorKind::BadSchemaAssertion(
+            Some(&DbErrorKind::BadSchemaAssertion(
                 ":db/isComponent true without :db/valueType :db.type/ref for entid: :foo/bar"
                     .into()
             ))
@@ -598,12 +598,12 @@ mod test {
             },
         );
 
-        let err = validate_attribute_map(&schema.entid_map, &schema.attribute_map)
-            .err()
-            .map(|e| e.kind());
+        let result = validate_attribute_map(&schema.entid_map, &schema.attribute_map);
+        let error_opt = result.err();
+        let err = error_opt.as_ref().map(|e| e.kind());
         assert_eq!(
             err,
-            Some(DbErrorKind::BadSchemaAssertion(
+            Some(&DbErrorKind::BadSchemaAssertion(
                 ":db/fulltext true without :db/index true for entid: :foo/bar".into()
             ))
         );
@@ -627,12 +627,12 @@ mod test {
             },
         );
 
-        let err = validate_attribute_map(&schema.entid_map, &schema.attribute_map)
-            .err()
-            .map(|e| e.kind());
+        let result = validate_attribute_map(&schema.entid_map, &schema.attribute_map);
+        let error_opt = result.err();
+        let err = error_opt.as_ref().map(|e| e.kind());
         assert_eq!(
             err,
-            Some(DbErrorKind::BadSchemaAssertion(
+            Some(&DbErrorKind::BadSchemaAssertion(
                 ":db/fulltext true without :db/valueType :db.type/string for entid: :foo/bar"
                     .into()
             ))

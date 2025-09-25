@@ -12,11 +12,10 @@ use combine::parser::char::{space, spaces, string};
 use combine::parser::combinator::attempt;
 use combine::{any, choice, eof, look_ahead, many1, satisfy, sep_end_by, token, Parser};
 
-use CliError;
+use crate::CliError;
 
 use edn;
 
-use failure::Error;
 
 use combine::error::StringStreamError;
 use mentat::CacheDirection;
@@ -129,7 +128,7 @@ impl Command {
     }
 }
 
-pub fn command(s: &str) -> Result<Command, Error> {
+pub fn command(s: &str) -> Result<Command, crate::CliError> {
     let path = || many1::<String, _, _>(satisfy(|c: char| !c.is_whitespace()));
     let argument = || many1::<String, _, _>(satisfy(|c: char| !c.is_whitespace()));
     let arguments = || {

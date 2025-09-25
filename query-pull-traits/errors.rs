@@ -16,20 +16,16 @@ use core_traits::Entid;
 
 pub type Result<T> = std::result::Result<T, PullError>;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum PullError {
-    #[fail(display = "attribute {:?} has no name", _0)]
+    #[error("attribute {0:?} has no name")]
     UnnamedAttribute(Entid),
 
-    #[fail(display = ":db/id repeated")]
+    #[error(":db/id repeated")]
     RepeatedDbId,
 
-    #[fail(display = "{}", _0)]
-    DbError(#[cause] DbError),
+    #[error(transparent)]
+    DbError(#[from] DbError),
 }
 
-impl From<DbError> for PullError {
-    fn from(error: DbError) -> PullError {
-        PullError::DbError(error)
-    }
-}
+

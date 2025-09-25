@@ -8,7 +8,6 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-extern crate failure;
 
 extern crate edn;
 extern crate mentat_core;
@@ -136,9 +135,9 @@ impl<'s, 'c> Known<'s, 'c> {
 
 #[derive(Debug)]
 pub struct AlgebraicQuery {
-    default_source: SrcVar,
+    pub default_source: SrcVar,
     pub find_spec: Rc<FindSpec>,
-    has_aggregates: bool,
+    pub has_aggregates: bool,
 
     /// The set of variables that the caller wishes to be used for grouping when aggregating.
     /// These are specified in the query input, as `:with`, and are then chewed up during projection.

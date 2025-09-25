@@ -39,79 +39,75 @@ pub enum BindingError {
     },
 }
 
-#[derive(Clone, Debug, Eq, Fail, PartialEq)]
+#[derive(Clone, Debug, Eq, thiserror::Error, PartialEq)]
 pub enum AlgebrizerError {
-    #[fail(display = "{} var {} is duplicated", _0, _1)]
+    #[error("{0} var {1} is duplicated")]
     DuplicateVariableError(PlainSymbol, &'static str),
 
-    #[fail(display = "unexpected FnArg")]
+    #[error("unexpected FnArg")]
     UnsupportedArgument,
 
-    #[fail(
-        display = "value of type {} provided for var {}, expected {}",
-        _0, _1, _2
+    #[error(
+        "value of type {} provided for var {}, expected {}",
+        _0, 1, 2
     )]
     InputTypeDisagreement(PlainSymbol, ValueType, ValueType),
 
-    #[fail(
-        display = "invalid number of arguments to {}: expected {}, got {}.",
-        _0, _1, _2
+    #[error(
+        "invalid number of arguments to {}: expected {}, got {}.",
+        _0, 1, 2
     )]
     InvalidNumberOfArguments(PlainSymbol, usize, usize),
 
-    #[fail(
-        display = "invalid argument to {}: expected {} in position {}.",
-        _0, _1, _2
+    #[error(
+        "invalid argument to {}: expected {} in position {}.",
+        _0, 1, 2
     )]
     InvalidArgument(PlainSymbol, &'static str, usize),
 
-    #[fail(
-        display = "invalid argument to {}: expected one of {:?} in position {}.",
-        _0, _1, _2
+    #[error(
+        "invalid argument to {}: expected one of {:?} in position {}.",
+        _0, 1, 2
     )]
     InvalidArgumentType(PlainSymbol, ValueTypeSet, usize),
 
     // TODO: flesh this out.
-    #[fail(display = "invalid expression in ground constant")]
+    #[error("invalid expression in ground constant")]
     InvalidGroundConstant,
 
-    #[fail(
-        display = "invalid limit {} of type {}: expected natural number.",
-        _0, _1
+    #[error(
+        "invalid limit {} of type {}: expected natural number.",
+        _0, 1
     )]
     InvalidLimit(String, ValueType),
 
-    #[fail(display = "mismatched bindings in ground")]
+    #[error("mismatched bindings in ground")]
     GroundBindingsMismatch,
 
-    #[fail(display = "no entid found for ident: {}", _0)]
+    #[error("no entid found for ident: {0}")]
     UnrecognizedIdent(String),
 
-    #[fail(display = "no function named {}", _0)]
+    #[error("no function named {0}")]
     UnknownFunction(PlainSymbol),
 
-    #[fail(display = ":limit var {} not present in :in", _0)]
+    #[error(":limit var {0} not present in :in")]
     UnknownLimitVar(PlainSymbol),
 
-    #[fail(display = "unbound variable {} in order clause or function call", _0)]
+    #[error("unbound variable {0} in order clause or function call")]
     UnboundVariable(PlainSymbol),
 
     // TODO: flesh out.
-    #[fail(display = "non-matching variables in 'or' clause")]
+    #[error("non-matching variables in 'or' clause")]
     NonMatchingVariablesInOrClause,
 
-    #[fail(display = "non-matching variables in 'not' clause")]
+    #[error("non-matching variables in 'not' clause")]
     NonMatchingVariablesInNotClause,
 
-    #[fail(display = "binding error in {}: {:?}", _0, _1)]
+    #[error("binding error in {0}: {1:?}")]
     InvalidBinding(PlainSymbol, BindingError),
 
-    #[fail(display = "{}", _0)]
-    EdnParseError(#[cause] ParseError),
+    #[error(transparent)]
+    EdnParseError(#[from] ParseError),
 }
 
-impl From<ParseError> for AlgebrizerError {
-    fn from(error: ParseError) -> AlgebrizerError {
-        AlgebrizerError::EdnParseError(error)
-    }
-}
+

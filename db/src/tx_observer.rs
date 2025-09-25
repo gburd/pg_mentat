@@ -118,7 +118,7 @@ impl TxObservationService {
     }
 
     pub fn deregister(&mut self, key: &str) {
-        Arc::make_mut(&mut self.observers).remove(key);
+        Arc::make_mut(&mut self.observers).shift_remove(key);
     }
 
     pub fn has_observers(&self) -> bool {

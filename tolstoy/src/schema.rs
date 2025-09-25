@@ -77,11 +77,11 @@ pub mod tests {
         conn
     }
 
-    pub fn setup_tx_bare(conn: &mut rusqlite::Connection) -> rusqlite::Transaction {
+    pub fn setup_tx_bare(conn: &mut rusqlite::Connection) -> rusqlite::Transaction<'_> {
         conn.transaction().expect("tx")
     }
 
-    pub fn setup_tx(conn: &mut rusqlite::Connection) -> rusqlite::Transaction {
+    pub fn setup_tx(conn: &mut rusqlite::Connection) -> rusqlite::Transaction<'_> {
         let mut tx = conn.transaction().expect("tx");
         ensure_current_version(&mut tx).expect("connection setup");
         tx

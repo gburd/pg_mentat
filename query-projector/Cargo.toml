@@ -1,4 +1,5 @@
 [package]
+edition = "2021"
 name = "mentat_query_projector"
 version = "0.0.2"
 workspace = ".."
@@ -7,11 +8,11 @@ workspace = ".."
 sqlcipher = ["rusqlite/sqlcipher"]
 
 [dependencies]
-failure = "~0.1"
-indexmap = "~1.9"
+thiserror = "2.0"
+indexmap = "2.11"
 
 [dependencies.rusqlite]
-version = "~0.29"
+version = "0.37"
 features = ["limits", "bundled"]
 
 [dependencies.core_traits]

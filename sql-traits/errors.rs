@@ -8,12 +8,12 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum SQLError {
-    #[fail(display = "invalid parameter name: {}", _0)]
+    #[error("invalid parameter name: {0}")]
     InvalidParameterName(String),
 
-    #[fail(display = "parameter name could be generated: '{}'", _0)]
+    #[error("parameter name could be generated: '{0}'")]
     BindParamCouldBeGenerated(String),
 }
 

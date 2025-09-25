@@ -12,7 +12,7 @@ use enum_set::EnumSet;
 
 use crate::ValueType;
 
-trait EnumSetExtensions<T: ::enum_set::CLike + Clone> {
+pub trait EnumSetExtensions<T: ::enum_set::CLike + Clone> {
     /// Return a set containing both `x` and `y`.
     fn of_both(x: T, y: T) -> EnumSet<T>;
 
@@ -177,5 +177,21 @@ impl ::std::iter::Extend<ValueType> for ValueTypeSet {
         for element in iter {
             self.0.insert(element);
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enum_set_extensions() {
+        let set = EnumSet::new();
+        let set_with_long = set.with(ValueType::Long);
+        assert!(set_with_long.contains(&ValueType::Long));
+        assert!(!set.contains(&ValueType::Long)); // Original unchanged
+        
+        let both = EnumSet::of_both(ValueType::Long, ValueType::String);
+        assert!(both.contains(&ValueType::Long));
+        assert!(both.contains(&ValueType::String));
     }
 }

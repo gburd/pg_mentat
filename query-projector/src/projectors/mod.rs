@@ -19,7 +19,7 @@ pub trait Projector {
         sqlite: &'s rusqlite::Connection,
         rows: Rows<'stmt>,
     ) -> Result<QueryOutput>;
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's>;
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's>;
 }
 
 mod constant;

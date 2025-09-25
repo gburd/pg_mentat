@@ -56,7 +56,6 @@
 ///!     (pull ?person [:person/friend])
 ///      [*]))
 ///! ```
-extern crate failure;
 extern crate rusqlite;
 
 extern crate core_traits;

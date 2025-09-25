@@ -90,7 +90,7 @@ impl Projector for ScalarTwoStagePullProjector {
         })
     }
 
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         self.spec.columns()
     }
 }
@@ -191,7 +191,7 @@ impl Projector for TupleTwoStagePullProjector {
         })
     }
 
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         self.spec.columns()
     }
 }
@@ -306,7 +306,7 @@ impl Projector for RelTwoStagePullProjector {
         })
     }
 
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         self.spec.columns()
     }
 }
@@ -364,7 +364,7 @@ impl Projector for CollTwoStagePullProjector {
         })
     }
 
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         self.spec.columns()
     }
 }

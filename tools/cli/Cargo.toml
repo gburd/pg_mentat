@@ -1,4 +1,5 @@
 [package]
+edition = "2021"
 name = "mentat_cli"
 version = "0.0.2"
 
@@ -19,24 +20,24 @@ doc = false
 test = false
 
 [dependencies]
-combine = "~4.6"
-dirs = "~4.0"
-env_logger = "~0.9"
-failure = "~0.1"
-failure_derive = "~0.1"
-getopts = "~0.2"
-lazy_static = "~1.4"
-linefeed = "~0.6"
-log = "~0.4"
-tabwriter = "~1.2"
-tempfile = "~3.5"
-termion = "~1.5"
-time = "~0.3"
+combine = "4.6"
+dirs = "4.0"
+env_logger = "0.11"
+thiserror = "2.0"
+
+getopts = "0.2"
+lazy_static = "1.5"
+linefeed = "0.6"
+log = "0.4"
+tabwriter = "1.4"
+tempfile = "3.23"
+termion = "1.5"
+time = "0.3"
 bytes = { version = "1.0.1", features = ["serde"] }
 hex = "0.4.3"
 
 [dependencies.rusqlite]
-version = "~0.29"
+version = "0.37"
 features = ["limits", "bundled"]
 
 [dependencies.mentat]

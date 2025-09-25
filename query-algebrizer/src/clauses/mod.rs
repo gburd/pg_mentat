@@ -380,7 +380,7 @@ impl ConjoiningClauses {
     }
 
     /// Return an iterator over the variables externally bound to values.
-    pub fn value_bound_variables(&self) -> VariableIterator {
+    pub fn value_bound_variables(&self) -> VariableIterator<'_> {
         VariableIterator(self.value_bindings.keys())
     }
 

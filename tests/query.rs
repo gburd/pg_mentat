@@ -44,7 +44,7 @@ fn test_rel() {
     let db = mentat_db::db::ensure_current_version(&mut c).expect("Couldn't open DB.");
 
     // Rel.
-    let start = time::Instant::now();
+    let start = std::time::Instant::now();
     let results = q_uncached(
         &c,
         &db.schema,
@@ -53,7 +53,7 @@ fn test_rel() {
     )
     .expect("Query failed")
     .results;
-    let end = time::Instant::now();
+    let end = std::time::Instant::now();
 
     // This will need to change each time we add a default ident.
     assert_eq!(40, results.len());
@@ -69,7 +69,7 @@ fn test_rel() {
         panic!("Expected rel.");
     }
 
-    println!("Rel took {}µs", (end - start).whole_microseconds());
+    println!("Rel took {}µs", (end - start).as_micros());
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn test_failing_scalar() {
     let db = mentat_db::db::ensure_current_version(&mut c).expect("Couldn't open DB.");
 
     // Scalar that fails.
-    let start = time::Instant::now();
+    let start = std::time::Instant::now();
     let results = q_uncached(
         &c,
         &db.schema,
@@ -87,7 +87,7 @@ fn test_failing_scalar() {
     )
     .expect("Query failed")
     .results;
-    let end = time::Instant::now();
+    let end = std::time::Instant::now();
 
     assert_eq!(0, results.len());
 
@@ -98,7 +98,7 @@ fn test_failing_scalar() {
 
     println!(
         "Failing scalar took {}µs",
-        (end - start).whole_microseconds()
+        (end - start).as_micros()
     );
 }
 
@@ -108,7 +108,7 @@ fn test_scalar() {
     let db = mentat_db::db::ensure_current_version(&mut c).expect("Couldn't open DB.");
 
     // Scalar that succeeds.
-    let start = time::Instant::now();
+    let start = std::time::Instant::now();
     let results = q_uncached(
         &c,
         &db.schema,
@@ -117,7 +117,7 @@ fn test_scalar() {
     )
     .expect("Query failed")
     .results;
-    let end = time::Instant::now();
+    let end = std::time::Instant::now();
 
     assert_eq!(1, results.len());
 
@@ -130,7 +130,7 @@ fn test_scalar() {
     }
 
     println!("{:?}", results);
-    println!("Scalar took {}µs", (end - start).whole_microseconds());
+    println!("Scalar took {}µs", (end - start).as_micros());
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn test_tuple() {
     let db = mentat_db::db::ensure_current_version(&mut c).expect("Couldn't open DB.");
 
     // Tuple.
-    let start = time::Instant::now();
+    let start = std::time::Instant::now();
     let results = q_uncached(
         &c,
         &db.schema,
@@ -150,7 +150,7 @@ fn test_tuple() {
     )
     .expect("Query failed")
     .results;
-    let end = time::Instant::now();
+    let end = std::time::Instant::now();
 
     assert_eq!(1, results.len());
 
@@ -167,7 +167,7 @@ fn test_tuple() {
     }
 
     println!("{:?}", results);
-    println!("Tuple took {}µs", (end - start).whole_microseconds());
+    println!("Tuple took {}µs", (end - start).as_micros());
 }
 
 #[test]
@@ -176,7 +176,7 @@ fn test_coll() {
     let db = mentat_db::db::ensure_current_version(&mut c).expect("Couldn't open DB.");
 
     // Coll.
-    let start = time::Instant::now();
+    let start = std::time::Instant::now();
     let results = q_uncached(
         &c,
         &db.schema,
@@ -185,7 +185,7 @@ fn test_coll() {
     )
     .expect("Query failed")
     .results;
-    let end = time::Instant::now();
+    let end = std::time::Instant::now();
 
     assert_eq!(40, results.len());
 
@@ -196,7 +196,7 @@ fn test_coll() {
     }
 
     println!("{:?}", results);
-    println!("Coll took {}µs", (end - start).whole_microseconds());
+    println!("Coll took {}µs", (end - start).as_micros());
 }
 
 #[test]
@@ -1967,7 +1967,7 @@ fn test_tx_data() {
     run_tx_data_test(Store::open("").expect("opened"));
 }
 
-#[cfg(feature = "sqlite")]
+#[cfg(feature = "sqlcipher")]
 #[test]
 fn test_encrypted() {
     // We expect this to blow up completely if something is wrong with the encryption,

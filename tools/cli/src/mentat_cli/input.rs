@@ -16,9 +16,8 @@ use termion::color;
 
 use self::InputResult::*;
 
-use command_parser::{command, Command};
+use crate::command_parser::{command, Command};
 
-use failure::Error;
 
 /// Starting prompt
 const DEFAULT_PROMPT: &str = "mentat=> ";
@@ -64,7 +63,7 @@ impl InputReader {
     pub fn new(interface: Option<Interface<DefaultTerminal>>) -> InputReader {
         if let Some(ref interface) = interface {
             // It's fine to fail to load history.
-            let p = ::history_file_path();
+            let p = crate::history_file_path();
             let loaded = interface.load_history(&p);
             debug!("history read from {}: {}", p.display(), loaded.is_ok());
 
@@ -89,7 +88,7 @@ impl InputReader {
     /// Reads a single command, item, or statement from `stdin`.
     /// Returns `More` if further input is required for a complete result.
     /// In this case, the input received so far is buffered internally.
-    pub fn read_input(&mut self) -> Result<InputResult, Error> {
+    pub fn read_input(&mut self) -> Result<InputResult, crate::CliError> {
         let prompt = if self.in_process_cmd.is_some() {
             MORE_PROMPT
         } else {
@@ -97,7 +96,7 @@ impl InputReader {
         };
         let prompt = format!(
             "{blue}{prompt}{reset}",
-            blue = color::Fg(::BLUE),
+            blue = color::Fg(crate::BLUE),
             prompt = prompt,
             reset = color::Fg(color::Reset)
         );
@@ -218,7 +217,7 @@ impl InputReader {
 
     pub fn save_history(&self) {
         if let Some(ref interface) = self.interface {
-            let p = ::history_file_path();
+            let p = crate::history_file_path();
             // It's okay to fail to save history.
             let saved = interface.save_history(&p);
             debug!("history saved to {}: {}", p.display(), saved.is_ok());

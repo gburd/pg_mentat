@@ -677,7 +677,7 @@ impl FindSpec {
         !self.is_unit_limited()
     }
 
-    pub fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    pub fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         use self::FindSpec::*;
         match self {
             FindScalar(ref e) => Box::new(std::iter::once(e)),

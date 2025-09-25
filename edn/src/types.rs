@@ -261,20 +261,13 @@ macro_rules! def_into {
 /// # Examples
 ///
 /// ```
-/// # use edn::types::to_symbol;
 /// # use edn::types::Value;
 /// # use edn::symbols;
-/// let value = to_symbol!("foo", "bar", Value);
+/// let value = Value::from_symbol("foo", "bar");
 /// assert_eq!(value, Value::NamespacedSymbol(symbols::NamespacedSymbol::namespaced("foo", "bar")));
 ///
-/// let value = to_symbol!(None, "baz", Value);
+/// let value = Value::from_symbol(None, "baz");
 /// assert_eq!(value, Value::PlainSymbol(symbols::PlainSymbol::plain("baz")));
-///
-/// let value = to_symbol!("foo", "bar", SpannedValue);
-/// assert_eq!(value.into(), to_symbol!("foo", "bar", Value));
-///
-/// let value = to_symbol!(None, "baz", SpannedValue);
-/// assert_eq!(value.into(), to_symbol!(None, "baz", Value));
 /// ```
 macro_rules! to_symbol {
     ( $namespace:expr, $name:expr, $t:tt ) => {
@@ -291,20 +284,13 @@ macro_rules! to_symbol {
 /// # Examples
 ///
 /// ```
-/// # use edn::types::to_keyword;
 /// # use edn::types::Value;
 /// # use edn::symbols;
-/// let value = to_keyword!("foo", "bar", Value);
+/// let value = Value::from_keyword("foo", "bar");
 /// assert_eq!(value, Value::Keyword(symbols::Keyword::namespaced("foo", "bar")));
 ///
-/// let value = to_keyword!(None, "baz", Value);
+/// let value = Value::from_keyword(None, "baz");
 /// assert_eq!(value, Value::Keyword(symbols::Keyword::plain("baz")));
-///
-/// let value = to_keyword!("foo", "bar", SpannedValue);
-/// assert_eq!(value.into(), to_keyword!("foo", "bar", Value));
-///
-/// let value = to_keyword!(None, "baz", SpannedValue);
-/// assert_eq!(value.into(), to_keyword!(None, "baz", Value));
 /// ```
 macro_rules! to_keyword {
     ( $namespace:expr, $name:expr, $t:tt ) => {

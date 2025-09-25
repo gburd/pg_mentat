@@ -17,64 +17,52 @@ use uuid;
 
 use db_traits::errors::DbError;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum TolstoyError {
-    #[fail(display = "Received bad response from the remote: {}", _0)]
+    #[error("Received bad response from the remote: {0}")]
     BadRemoteResponse(String),
 
     // TODO expand this into concrete error types
-    #[fail(display = "Received bad remote state: {}", _0)]
+    #[error("Received bad remote state: {0}")]
     BadRemoteState(String),
 
-    #[fail(display = "encountered more than one metadata value for key: {}", _0)]
+    #[error("encountered more than one metadata value for key: {0}")]
     DuplicateMetadata(String),
 
-    #[fail(display = "transaction processor didn't say it was done")]
+    #[error("transaction processor didn't say it was done")]
     TxProcessorUnfinished,
 
-    #[fail(display = "expected one, found {} uuid mappings for tx", _0)]
+    #[error("expected one, found {0} uuid mappings for tx")]
     TxIncorrectlyMapped(usize),
 
-    #[fail(display = "encountered unexpected state: {}", _0)]
+    #[error("encountered unexpected state: {0}")]
     UnexpectedState(String),
 
-    #[fail(display = "not yet implemented: {}", _0)]
+    #[error("not yet implemented: {0}")]
     NotYetImplemented(String),
 
-    #[fail(display = "{}", _0)]
-    DbError(#[cause] DbError),
+    #[error(transparent)]
+    DbError(#[from] DbError),
 
-    #[fail(display = "{}", _0)]
-    SerializationError(#[cause] serde_json::Error),
+    #[error(transparent)]
+    SerializationError(#[from] serde_json::Error),
 
     // It would be better to capture the underlying `rusqlite::Error`, but that type doesn't
     // implement many useful traits, including `Clone`, `Eq`, and `PartialEq`.
-    #[fail(display = "SQL error: {}, cause: {}", _0, _1)]
+    #[error("SQL error: {0}, cause: {1}")]
     RusqliteError(String, String),
 
-    #[fail(display = "{}", _0)]
-    IoError(#[cause] std::io::Error),
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
 
-    #[fail(display = "{}", _0)]
-    UuidError(#[cause] uuid::Error),
+    #[error(transparent)]
+    UuidError(#[from] uuid::Error),
 
-    #[fail(display = "{}", _0)]
-    NetworkError(#[cause] hyper::Error),
+    #[error(transparent)]
+    NetworkError(#[from] hyper::Error),
 
-    #[fail(display = "{}", _0)]
-    UriError(#[cause] http::uri::InvalidUri),
-}
-
-impl From<DbError> for TolstoyError {
-    fn from(error: DbError) -> Self {
-        TolstoyError::DbError(error)
-    }
-}
-
-impl From<serde_json::Error> for TolstoyError {
-    fn from(error: serde_json::Error) -> Self {
-        TolstoyError::SerializationError(error)
-    }
+    #[error(transparent)]
+    UriError(#[from] http::uri::InvalidUri),
 }
 
 impl From<rusqlite::Error> for TolstoyError {
@@ -84,29 +72,5 @@ impl From<rusqlite::Error> for TolstoyError {
             None => "".to_string(),
         };
         TolstoyError::RusqliteError(error.to_string(), cause)
-    }
-}
-
-impl From<std::io::Error> for TolstoyError {
-    fn from(error: std::io::Error) -> Self {
-        TolstoyError::IoError(error)
-    }
-}
-
-impl From<uuid::Error> for TolstoyError {
-    fn from(error: uuid::Error) -> Self {
-        TolstoyError::UuidError(error)
-    }
-}
-
-impl From<hyper::Error> for TolstoyError {
-    fn from(error: hyper::Error) -> Self {
-        TolstoyError::NetworkError(error)
-    }
-}
-
-impl From<http::uri::InvalidUri> for TolstoyError {
-    fn from(error: http::uri::InvalidUri) -> Self {
-        TolstoyError::UriError(error)
     }
 }

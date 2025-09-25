@@ -39,111 +39,105 @@ use serde_json;
 
 pub type Result<T> = std::result::Result<T, MentatError>;
 
-#[derive(Debug, Fail)]
+#[derive(Debug, thiserror::Error)]
 pub enum MentatError {
-    #[fail(display = "bad uuid {}", _0)]
+    #[error("bad uuid {0}")]
     BadUuid(String),
 
-    #[fail(display = "path {} already exists", _0)]
+    #[error("path {0} already exists")]
     PathAlreadyExists(String),
 
-    #[fail(display = "variables {:?} unbound at query execution time", _0)]
+    #[error("variables {:?} unbound at query execution time", 0)]
     UnboundVariables(BTreeSet<String>),
 
-    #[fail(display = "invalid argument name: '{}'", _0)]
+    #[error("invalid argument name: '{0}'")]
     InvalidArgumentName(String),
 
-    #[fail(display = "unknown attribute: '{}'", _0)]
+    #[error("unknown attribute: '{0}'")]
     UnknownAttribute(String),
 
-    #[fail(display = "invalid vocabulary version")]
+    #[error("invalid vocabulary version")]
     InvalidVocabularyVersion,
 
-    #[fail(
-        display = "vocabulary {}/version {} already has attribute {}, and the requested definition differs",
-        _0, _1, _2
+    #[error(
+        "vocabulary {}/version {} already has attribute {}, and the requested definition differs",
+        _0, 1, 2
     )]
     ConflictingAttributeDefinitions(String, u32, String, Attribute, Attribute),
 
-    #[fail(
-        display = "existing vocabulary {} too new: wanted version {}, got version {}",
-        _0, _1, _2
+    #[error(
+        "existing vocabulary {} too new: wanted version {}, got version {}",
+        _0, 1, 2
     )]
     ExistingVocabularyTooNew(String, u32, u32),
 
-    #[fail(display = "core schema: wanted version {}, got version {:?}", _0, _1)]
+    #[error("core schema: wanted version {0}, got version {1:?}")]
     UnexpectedCoreSchema(u32, Option<u32>),
 
-    #[fail(display = "Lost the transact() race!")]
+    #[error("Lost the transact() race!")]
     UnexpectedLostTransactRace,
 
-    #[fail(display = "missing core attribute {}", _0)]
+    #[error("missing core attribute {0}")]
     MissingCoreVocabulary(edn::query::Keyword),
 
-    #[fail(display = "schema changed since query was prepared")]
+    #[error("schema changed since query was prepared")]
     PreparedQuerySchemaMismatch,
 
-    #[fail(
-        display = "provided value of type {} doesn't match attribute value type {}",
-        _0, _1
+    #[error(
+        "provided value of type {} doesn't match attribute value type {}",
+        _0, 1
     )]
     ValueTypeMismatch(ValueType, ValueType),
 
-    #[fail(display = "{}", _0)]
-    IoError(#[cause] std::io::Error),
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
 
     /// We're just not done yet.  Message that the feature is recognized but not yet
     /// implemented.
-    #[fail(display = "not yet implemented: {}", _0)]
+    #[error("not yet implemented: {0}")]
     NotYetImplemented(String),
 
     // It would be better to capture the underlying `rusqlite::Error`, but that type doesn't
     // implement many useful traits, including `Clone`, `Eq`, and `PartialEq`.
-    #[fail(display = "SQL error: {}, cause: {}", _0, _1)]
+    #[error("SQL error: {0}, cause: {1}")]
     RusqliteError(String, String),
 
-    #[fail(display = "{}", _0)]
-    EdnParseError(#[cause] edn::ParseError),
+    #[error(transparent)]
+    EdnParseError(#[from] edn::ParseError),
 
-    #[fail(display = "{}", _0)]
-    DbError(#[cause] DbError),
+    #[error(transparent)]
+    DbError(#[from] DbError),
 
-    #[fail(display = "{}", _0)]
-    AlgebrizerError(#[cause] AlgebrizerError),
+    #[error(transparent)]
+    AlgebrizerError(#[from] AlgebrizerError),
 
-    #[fail(display = "{}", _0)]
-    ProjectorError(#[cause] ProjectorError),
+    #[error(transparent)]
+    ProjectorError(#[from] ProjectorError),
 
-    #[fail(display = "{}", _0)]
-    PullError(#[cause] PullError),
+    #[error(transparent)]
+    PullError(#[from] PullError),
 
-    #[fail(display = "{}", _0)]
-    SQLError(#[cause] SQLError),
+    #[error(transparent)]
+    SQLError(#[from] SQLError),
 
-    #[fail(display = "{}", _0)]
-    UuidError(#[cause] uuid::Error),
-
-    #[cfg(feature = "syncable")]
-    #[fail(display = "{}", _0)]
-    TolstoyError(#[cause] TolstoyError),
+    #[error(transparent)]
+    UuidError(#[from] uuid::Error),
 
     #[cfg(feature = "syncable")]
-    #[fail(display = "{}", _0)]
-    NetworkError(#[cause] hyper::Error),
+    #[error(transparent)]
+    TolstoyError(#[from] TolstoyError),
 
     #[cfg(feature = "syncable")]
-    #[fail(display = "{}", _0)]
-    UriError(#[cause] http::uri::InvalidUri),
+    #[error(transparent)]
+    NetworkError(#[from] hyper::Error),
 
     #[cfg(feature = "syncable")]
-    #[fail(display = "{}", _0)]
-    SerializationError(#[cause] serde_json::Error),
-}
+    #[error(transparent)]
+    UriError(#[from] http::uri::InvalidUri),
 
-impl From<std::io::Error> for MentatError {
-    fn from(error: std::io::Error) -> Self {
-        MentatError::IoError(error)
-    }
+    #[cfg(feature = "syncable")]
+    #[error(transparent)]
+    SerializationError(#[from] serde_json::Error),
 }
 
 impl From<rusqlite::Error> for MentatError {
@@ -153,75 +147,5 @@ impl From<rusqlite::Error> for MentatError {
             None => "".to_string(),
         };
         MentatError::RusqliteError(error.to_string(), cause)
-    }
-}
-
-impl From<uuid::Error> for MentatError {
-    fn from(error: uuid::Error) -> Self {
-        MentatError::UuidError(error)
-    }
-}
-
-impl From<edn::ParseError> for MentatError {
-    fn from(error: edn::ParseError) -> Self {
-        MentatError::EdnParseError(error)
-    }
-}
-
-impl From<DbError> for MentatError {
-    fn from(error: DbError) -> Self {
-        MentatError::DbError(error)
-    }
-}
-
-impl From<AlgebrizerError> for MentatError {
-    fn from(error: AlgebrizerError) -> Self {
-        MentatError::AlgebrizerError(error)
-    }
-}
-
-impl From<ProjectorError> for MentatError {
-    fn from(error: ProjectorError) -> Self {
-        MentatError::ProjectorError(error)
-    }
-}
-
-impl From<PullError> for MentatError {
-    fn from(error: PullError) -> Self {
-        MentatError::PullError(error)
-    }
-}
-
-impl From<SQLError> for MentatError {
-    fn from(error: SQLError) -> Self {
-        MentatError::SQLError(error)
-    }
-}
-
-#[cfg(feature = "syncable")]
-impl From<TolstoyError> for MentatError {
-    fn from(error: TolstoyError) -> Self {
-        MentatError::TolstoyError(error)
-    }
-}
-
-#[cfg(feature = "syncable")]
-impl From<serde_json::Error> for MentatError {
-    fn from(error: serde_json::Error) -> Self {
-        MentatError::SerializationError(error)
-    }
-}
-
-#[cfg(feature = "syncable")]
-impl From<hyper::Error> for MentatError {
-    fn from(error: hyper::Error) -> Self {
-        MentatError::NetworkError(error)
-    }
-}
-
-#[cfg(feature = "syncable")]
-impl From<http::uri::InvalidUri> for MentatError {
-    fn from(error: http::uri::InvalidUri) -> Self {
-        MentatError::UriError(error)
     }
 }

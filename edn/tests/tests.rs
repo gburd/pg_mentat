@@ -355,7 +355,7 @@ fn test_inst() {
     assert!(parse::value("#inst \"2016-01-01T11:00:00.000\"").is_err()); // No timezone.
     assert!(parse::value("#inst \"2016-01-01T11:00:00.000z\"").is_err()); // Lowercase timezone.
 
-    let expected = Utc.timestamp(1493410985, 187000000);
+    let expected = Utc.timestamp_opt(1493410985, 187000000).unwrap();
     let s = "#inst \"2017-04-28T20:23:05.187Z\"";
     let actual = parse::value(s).expect("parse success").into();
     let value = self::Value::Instant(expected);
@@ -607,15 +607,15 @@ fn test_value() {
     );
     assert_eq!(
         value("#instmillis 1493410985187").unwrap(),
-        Instant(Utc.timestamp(1493410985, 187000000))
+        Instant(Utc.timestamp_opt(1493410985, 187000000).unwrap())
     );
     assert_eq!(
         value("#instmicros 1493410985187123").unwrap(),
-        Instant(Utc.timestamp(1493410985, 187123000))
+        Instant(Utc.timestamp_opt(1493410985, 187123000).unwrap())
     );
     assert_eq!(
         value("#inst \"2017-04-28T20:23:05.187Z\"").unwrap(),
-        Instant(Utc.timestamp(1493410985, 187000000))
+        Instant(Utc.timestamp_opt(1493410985, 187000000).unwrap())
     );
     assert_eq!(
         value("#bytes 010203050403022a").unwrap(),
@@ -1536,7 +1536,7 @@ macro_rules! def_test_into_type {
 }
 
 #[test]
-#[cfg_attr(feature = "cargo-clippy", allow(clippy::float_cmp, clippy::unit_cmp))]
+#[allow(clippy::float_cmp, clippy::unit_cmp)]
 fn test_is_and_as_type_helper_functions() {
     let max_i64 = i64::max_value().to_bigint().unwrap();
     let bigger = &max_i64 * &max_i64;

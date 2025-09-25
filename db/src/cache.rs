@@ -58,7 +58,6 @@ use std::sync::Arc;
 
 use std::iter::Peekable;
 
-use failure::ResultExt;
 
 use rusqlite;
 use rusqlite::params_from_iter;
@@ -231,11 +230,11 @@ pub trait AttributeCache {
     fn binding_for_e(&self, e: Entid) -> Option<Binding>;
 }
 
-trait RemoveFromCache {
+pub trait RemoveFromCache {
     fn remove(&mut self, e: Entid, v: &TypedValue);
 }
 
-trait ClearCache {
+pub trait ClearCache {
     fn clear(&mut self);
 }
 
@@ -244,7 +243,7 @@ trait CardinalityOneCache: RemoveFromCache + ClearCache {
     fn get(&self, e: Entid) -> Option<&TypedValue>;
 }
 
-trait CardinalityManyCache: RemoveFromCache + ClearCache {
+pub trait CardinalityManyCache: RemoveFromCache + ClearCache {
     fn acc(&mut self, e: Entid, v: TypedValue);
     fn set(&mut self, e: Entid, vs: Vec<TypedValue>);
     fn get(&self, e: Entid) -> Option<&Vec<TypedValue>>;
@@ -1059,7 +1058,7 @@ impl AttributeCaches {
         let args: Vec<&dyn rusqlite::types::ToSql> = vec![&attribute];
         let mut stmt = sqlite
             .prepare(&sql)
-            .context(DbErrorKind::CacheUpdateFailed)?;
+            .map_err(|_| DbError(DbErrorKind::CacheUpdateFailed))?;
         let replacing = true;
         self.repopulate_from_aevt(schema, &mut stmt, args, replacing)
     }
@@ -2011,7 +2010,7 @@ impl<'a> TransactWatcher for InProgressCacheTransactWatcher<'a> {
 }
 
 impl InProgressSQLiteAttributeCache {
-    pub fn transact_watcher(&mut self) -> InProgressCacheTransactWatcher {
+    pub fn transact_watcher(&mut self) -> InProgressCacheTransactWatcher<'_> {
         InProgressCacheTransactWatcher::new(self)
     }
 }

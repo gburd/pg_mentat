@@ -401,7 +401,7 @@ mod tests {
         match conn.transact(&mut sqlite, t.as_str()) {
             Err(MentatError::DbError(e)) => {
                 assert_eq!(
-                    e.kind(),
+                    *e.kind(),
                     ::db_traits::errors::DbErrorKind::UnallocatedEntid(next + 1)
                 );
             }
@@ -432,7 +432,7 @@ mod tests {
             Err(MentatError::DbError(e)) => {
                 // All this, despite this being the ID we were about to allocate!
                 assert_eq!(
-                    e.kind(),
+                    *e.kind(),
                     ::db_traits::errors::DbErrorKind::UnallocatedEntid(next)
                 );
             }
@@ -826,12 +826,12 @@ mod tests {
                 Some(TypedValue::typed_ns_keyword("db.type", "string").into())
             );
 
-            let start = time::Instant::now();
+            let start = std::time::Instant::now();
             ip.q_once(query.as_str(), None)
                 .into_scalar_result()
                 .expect("query");
-            let end = time::Instant::now();
-            println!("Uncached took {}µs", (end - start).whole_microseconds());
+            let end = std::time::Instant::now();
+            println!("Uncached took {}µs", (end - start).as_micros());
 
             ip.cache(
                 &kw!(:db/ident),
@@ -857,12 +857,12 @@ mod tests {
                 Some(TypedValue::typed_ns_keyword("db.type", "string").into())
             );
 
-            let start = time::Instant::now();
+            let start = std::time::Instant::now();
             ip.q_once(query.as_str(), None)
                 .into_scalar_result()
                 .expect("query");
-            let end = time::Instant::now();
-            println!("Cached took {}µs", (end - start).whole_microseconds());
+            let end = std::time::Instant::now();
+            println!("Cached took {}µs", (end - start).as_micros());
 
             // If we roll back the change, our caching operations are also rolled back.
             ip.rollback().expect("rolled back");

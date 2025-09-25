@@ -8,10 +8,6 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-extern crate failure;
-#[macro_use]
-extern crate failure_derive;
-
 extern crate core_traits;
 extern crate db_traits;
 

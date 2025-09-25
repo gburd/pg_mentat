@@ -53,7 +53,7 @@ impl Projector for ConstantProjector {
         self.project_without_rows()
     }
 
-    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &Element> + 's> {
+    fn columns<'s>(&'s self) -> Box<dyn Iterator<Item = &'s Element> + 's> {
         self.spec.columns()
     }
 }

@@ -10,7 +10,6 @@
 
 extern crate chrono;
 extern crate enum_set;
-extern crate failure;
 extern crate indexmap;
 extern crate ordered_float;
 extern crate uuid;

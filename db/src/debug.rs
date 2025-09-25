@@ -295,7 +295,7 @@ pub fn transactions_after<S: Borrow<Schema>>(
     // Group by tx.
     let r: Vec<Datoms> = r?
         .into_iter()
-        .group_by(|x| x.tx)
+        .chunk_by(|x| x.tx)
         .into_iter()
         .map(|(_key, group)| Datoms(group.collect()))
         .collect();

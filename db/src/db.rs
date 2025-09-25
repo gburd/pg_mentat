@@ -10,13 +10,14 @@
 
 #![allow(dead_code)]
 
-use failure::ResultExt;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::{once, repeat};
 use std::ops::Range;
 use std::path::Path;
+
+use db_traits::errors::{DbError, DbErrorKind};
 
 use itertools;
 use itertools::Itertools;
@@ -37,7 +38,7 @@ use core_traits::{attribute, Attribute, AttributeBitFlags, Entid, TypedValue, Va
 
 use mentat_core::{AttributeMap, FromMicros, IdentMap, Schema, ToMicros, ValueRc};
 
-use db_traits::errors::{DbErrorKind, Result};
+use db_traits::errors::Result;
 
 use crate::metadata;
 use crate::schema::SchemaBuilding;
@@ -261,7 +262,7 @@ fn set_user_version(conn: &rusqlite::Connection, version: i32) -> Result<()> {
         &format!("PRAGMA user_version = {}", version),
         rusqlite::params![],
     )
-    .context(DbErrorKind::CouldNotSetVersionPragma)?;
+    .map_err(|_| DbError(DbErrorKind::CouldNotSetVersionPragma))?;
     Ok(())
 }
 
@@ -272,14 +273,14 @@ fn set_user_version(conn: &rusqlite::Connection, version: i32) -> Result<()> {
 fn get_user_version(conn: &rusqlite::Connection) -> Result<i32> {
     let v = conn
         .query_row("PRAGMA user_version", rusqlite::params![], |row| row.get(0))
-        .context(DbErrorKind::CouldNotGetVersionPragma)?;
+        .map_err(|_| DbError(DbErrorKind::CouldNotGetVersionPragma))?;
     Ok(v)
 }
 
 /// Do just enough work that either `create_current_version` or sync can populate the DB.
 pub fn create_empty_current_version(
     conn: &mut rusqlite::Connection,
-) -> Result<(rusqlite::Transaction, DB)> {
+) -> Result<(rusqlite::Transaction<'_>, DB)> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Exclusive)?;
 
     for statement in (&V1_STATEMENTS).iter() {
@@ -397,7 +398,7 @@ pub trait TypedSQLValue {
         value: rusqlite::types::Value,
         value_type_tag: i32,
     ) -> Result<TypedValue>;
-    fn to_sql_value_pair(&self) -> (ToSqlOutput, i32);
+    fn to_sql_value_pair(&self) -> (ToSqlOutput<'_>, i32);
     fn from_edn_value(value: &Value) -> Option<TypedValue>;
     fn to_edn_value_pair(&self) -> (Value, ValueType);
 }
@@ -461,7 +462,7 @@ impl TypedSQLValue for TypedValue {
     }
 
     /// Return the corresponding SQLite `value` and `value_type_tag` pair.
-    fn to_sql_value_pair(&self) -> (ToSqlOutput, i32) {
+    fn to_sql_value_pair(&self) -> (ToSqlOutput<'_>, i32) {
         match self {
             TypedValue::Ref(x) => ((*x).into(), 0),
             TypedValue::Boolean(x) => ((if *x { 1 } else { 0 }).into(), 1),
@@ -670,7 +671,7 @@ fn search(conn: &rusqlite::Connection) -> Result<()> {
 
     let mut stmt = conn.prepare_cached(s)?;
     stmt.execute(rusqlite::params![])
-        .context(DbErrorKind::CouldNotSearch)?;
+        .map_err(|_| DbError(DbErrorKind::CouldNotSearch))?;
     Ok(())
 }
 
@@ -694,7 +695,7 @@ fn insert_transaction(conn: &rusqlite::Connection, tx: Entid) -> Result<()> {
 
     let mut stmt = conn.prepare_cached(s)?;
     stmt.execute(&[&tx])
-        .context(DbErrorKind::TxInsertFailedToAddMissingDatoms)?;
+        .map_err(|_| DbError(DbErrorKind::TxInsertFailedToAddMissingDatoms))?;
 
     let s = r#"
       INSERT INTO timelined_transactions (e, a, v, tx, added, value_type_tag)
@@ -706,7 +707,7 @@ fn insert_transaction(conn: &rusqlite::Connection, tx: Entid) -> Result<()> {
 
     let mut stmt = conn.prepare_cached(s)?;
     stmt.execute(&[&tx])
-        .context(DbErrorKind::TxInsertFailedToRetractDatoms)?;
+        .map_err(|_| DbError(DbErrorKind::TxInsertFailedToRetractDatoms))?;
 
     Ok(())
 }
@@ -729,7 +730,7 @@ fn update_datoms(conn: &rusqlite::Connection, tx: Entid) -> Result<()> {
 
     let mut stmt = conn.prepare_cached(s)?;
     stmt.execute(rusqlite::params![])
-        .context(DbErrorKind::DatomsUpdateFailedToRetract)?;
+        .map_err(|_| DbError(DbErrorKind::DatomsUpdateFailedToRetract))?;
 
     // Insert datoms that were added and not already present. We also must expand our bitfield into
     // flags.  Since Mentat follows Datomic and treats its input as a set, it is okay to transact
@@ -755,7 +756,7 @@ fn update_datoms(conn: &rusqlite::Connection, tx: Entid) -> Result<()> {
 
     let mut stmt = conn.prepare_cached(&s)?;
     stmt.execute(&[&tx])
-        .context(DbErrorKind::DatomsUpdateFailedToAdd)?;
+        .map_err(|_| DbError(DbErrorKind::DatomsUpdateFailedToAdd))?;
     Ok(())
 }
 
@@ -769,7 +770,7 @@ impl MentatStoring for rusqlite::Connection {
         // produce the map [a v] -> e.
         //
         // TODO: `collect` into a HashSet so that any (a, v) is resolved at most once.
-        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)? as usize;
         let chunks: itertools::IntoChunks<_> = avs.iter().enumerate().chunks(max_vars / 4);
 
         // We'd like to `flat_map` here, but it's not obvious how to `flat_map` across `Result`.
@@ -885,7 +886,7 @@ impl MentatStoring for rusqlite::Connection {
         for statement in &statements {
             let mut stmt = self.prepare_cached(statement)?;
             stmt.execute(rusqlite::params![])
-                .context(DbErrorKind::FailedToCreateTempTables)?;
+                .map_err(|_| DbError(DbErrorKind::FailedToCreateTempTables))?;
         }
 
         Ok(())
@@ -902,7 +903,7 @@ impl MentatStoring for rusqlite::Connection {
     ) -> Result<()> {
         let bindings_per_statement = 6;
 
-        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)? as usize;
         let chunks: itertools::IntoChunks<_> =
             entities.iter().chunks(max_vars / bindings_per_statement);
 
@@ -954,7 +955,7 @@ impl MentatStoring for rusqlite::Connection {
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(s.as_str())?;
             stmt.execute(params_from_iter(&params))
-                .context(DbErrorKind::NonFtsInsertionIntoTempSearchTableFailed)
+                .map_err(|_| DbError(DbErrorKind::NonFtsInsertionIntoTempSearchTableFailed))
                 .map_err(|e| e.into())
                 .map(|_c| ())
         }).collect::<Result<Vec<()>>>();
@@ -971,7 +972,7 @@ impl MentatStoring for rusqlite::Connection {
         entities: &'a [ReducedEntity<'a>],
         search_type: SearchType,
     ) -> Result<()> {
-        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER) as usize;
+        let max_vars = self.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)? as usize;
         let bindings_per_statement = 6;
 
         let mut outer_searchid = 2000;
@@ -1047,7 +1048,7 @@ impl MentatStoring for rusqlite::Connection {
 
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(fts_s.as_str())?;
-            stmt.execute(params_from_iter(&fts_params)).context(DbErrorKind::FtsInsertionFailed)?;
+            stmt.execute(params_from_iter(&fts_params)).map_err(|_| DbError(DbErrorKind::FtsInsertionFailed))?;
 
             // Second, insert searches.
             // `params` reference computed values in `block`.
@@ -1075,7 +1076,7 @@ impl MentatStoring for rusqlite::Connection {
 
             // TODO: consider ensuring we inserted the expected number of rows.
             let mut stmt = self.prepare_cached(s.as_str())?;
-            stmt.execute(params_from_iter(&params)).context(DbErrorKind::FtsInsertionIntoTempSearchTableFailed)
+            stmt.execute(params_from_iter(&params)).map_err(|_| DbError(DbErrorKind::FtsInsertionIntoTempSearchTableFailed))
                 .map_err(|e| e.into())
                 .map(|_c| ())
         }).collect::<Result<Vec<()>>>();
@@ -1085,7 +1086,7 @@ impl MentatStoring for rusqlite::Connection {
             "UPDATE fulltext_values SET searchid = NULL WHERE searchid IS NOT NULL",
         )?;
         stmt.execute(rusqlite::params![])
-            .context(DbErrorKind::FtsFailedToDropSearchIds)?;
+            .map_err(|_| DbError(DbErrorKind::FtsFailedToDropSearchIds))?;
         results.map(|_| ())
     }
 
@@ -1869,13 +1870,13 @@ mod tests {
     #[test]
     fn test_sqlite_limit() {
         let conn = new_connection("").expect("Couldn't open in-memory db");
-        let initial = conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER);
+        let initial = conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER).expect("Failed to get limit");
         // Sanity check.
         assert!(initial > 500);
 
         // Make sure setting works.
-        conn.set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 222);
-        assert_eq!(222, conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER));
+        let _ = conn.set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 222);
+        assert_eq!(222, conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER).expect("Failed to get limit"));
     }
 
     #[test]
@@ -3257,7 +3258,7 @@ mod tests {
 
         let report = conn.transact_simple_terms(terms, InternSet::new());
 
-        match report.err().map(|e| e.kind()) {
+        match report.err().as_ref().map(|e| e.kind()) {
             Some(DbErrorKind::SchemaConstraintViolation(
                 errors::SchemaConstraintViolation::TypeDisagreements {
                     ref conflicting_datoms,

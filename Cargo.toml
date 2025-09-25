@@ -32,10 +32,10 @@ members = [
   ]
 
 [build-dependencies]
-rustc_version = "~0.4"
+rustc_version = "0.4"
 
 [dev-dependencies]
-assert_approx_eq = "~1.1"
+assert_approx_eq = "1.1"
 
 #[dev-dependencies.cargo-husky]
 #version = "1"
@@ -45,15 +45,15 @@ assert_approx_eq = "~1.1"
 #cargo outdated
 
 [dependencies]
-chrono = "~0.4"
-failure = "~0.1"
-lazy_static = "~1.4"
-time = "0.3.1"
-log = "~0.4"
-uuid = { version = "~1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+lazy_static = "1.5"
+time = { version = "0.3", features = ["serde"] }
+log = "0.4"
+uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [dependencies.rusqlite]
-version = "~0.29"
+version = "0.37"
 features = ["limits", "bundled"]
 
 [dependencies.edn]

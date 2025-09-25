@@ -8,7 +8,6 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-extern crate failure;
 extern crate rusqlite;
 
 extern crate edn;
@@ -110,7 +109,7 @@ pub trait Queryable {
     fn q_once<T>(&self, query: &str, inputs: T) -> Result<QueryOutput>
     where
         T: Into<Option<QueryInputs>>;
-    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult
+    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult<'_>
     where
         T: Into<Option<QueryInputs>>;
     fn lookup_values_for_attribute<E>(
@@ -349,7 +348,7 @@ impl<'a, 'c> Queryable for InProgressRead<'a, 'c> {
         self.in_progress.q_once(query, inputs)
     }
 
-    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult
+    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult<'_>
     where
         T: Into<Option<QueryInputs>>,
     {
@@ -424,7 +423,7 @@ impl<'a, 'c> Queryable for InProgress<'a, 'c> {
         }
     }
 
-    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult
+    fn q_prepare<T>(&self, query: &str, inputs: T) -> PreparedResult<'_>
     where
         T: Into<Option<QueryInputs>>,
     {

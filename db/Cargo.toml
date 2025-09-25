@@ -1,4 +1,5 @@
 [package]
+edition = "2021"
 name = "mentat_db"
 version = "0.0.2"
 workspace = ".."
@@ -9,20 +10,20 @@ sqlcipher = ["rusqlite/sqlcipher"]
 syncable = ["serde", "serde_json", "serde_derive"]
 
 [dependencies]
-failure = "~0.1"
-indexmap = "~1.9"
-itertools = "~0.10"
-lazy_static = "~1.4"
-log = "~0.4"
-ordered-float = "~2.8"
-time = "~0.3"
-petgraph = "~0.6"
-serde = { version = "~1.0", optional = true }
-serde_json = { version = "~1.0", optional = true }
-serde_derive = { version = "~1.0", optional = true }
+thiserror = "2.0"
+indexmap = "2.11"
+itertools = "0.14"
+lazy_static = "1.5"
+log = "0.4"
+ordered-float = "5.0"
+time = "0.3"
+petgraph = "0.8"
+serde = { version = "1.0", optional = true }
+serde_json = { version = "1.0", optional = true }
+serde_derive = { version = "1.0", optional = true }
 
 [dependencies.rusqlite]
-version = "~0.29"
+version = "0.37"
 features = ["limits", "bundled"]
 
 [dependencies.edn]
@@ -42,8 +43,8 @@ path = "../sql"
 
 # TODO: This should be in dev-dependencies.
 [dependencies.tabwriter]
-version = "~1.2"
+version = "1.4"
 
 [dev-dependencies]
-env_logger = "0.9"
+env_logger = "0.11"
 #tabwriter = { version = "1.2.1" }

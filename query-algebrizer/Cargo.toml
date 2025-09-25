@@ -1,10 +1,11 @@
 [package]
+edition = "2021"
 name = "mentat_query_algebrizer"
 version = "0.0.2"
 workspace = ".."
 
 [dependencies]
-failure = "~0.1"
+thiserror = "2.0"
 
 [dependencies.edn]
 path = "../edn"
@@ -19,4 +20,4 @@ path = "../core-traits"
 path = "../query-algebrizer-traits"
 
 [dev-dependencies]
-itertools = "~0.10"
+itertools = "0.14"

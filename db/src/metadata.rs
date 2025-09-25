@@ -24,14 +24,13 @@
 //!
 //! This module recognizes, validates, applies, and reports on these mutations.
 
-use failure::ResultExt;
 
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::add_retract_alter_set::AddRetractAlterSet;
 use crate::entids;
-use db_traits::errors::{DbErrorKind, Result};
+use db_traits::errors::{DbError, DbErrorKind, Result};
 use edn::symbols;
 
 use core_traits::{attribute, Entid, TypedValue, ValueType};
@@ -312,10 +311,10 @@ pub fn update_attribute_map_from_entid_triples(
                 // Validate once…
                 builder
                     .validate_install_attribute()
-                    .context(DbErrorKind::BadSchemaAssertion(format!(
+                    .map_err(|_| DbError(DbErrorKind::BadSchemaAssertion(format!(
                         "Schema alteration for new attribute with entid {} is not valid",
                         entid
-                    )))?;
+                    ))))?;
 
                 // … and twice, now we have the Attribute.
                 let a = builder.build();
@@ -327,10 +326,10 @@ pub fn update_attribute_map_from_entid_triples(
             Entry::Occupied(mut entry) => {
                 builder
                     .validate_alter_attribute()
-                    .context(DbErrorKind::BadSchemaAssertion(format!(
+                    .map_err(|_| DbError(DbErrorKind::BadSchemaAssertion(format!(
                         "Schema alteration for existing attribute with entid {} is not valid",
                         entid
-                    )))?;
+                    ))))?;
                 let mutations = builder.mutate(entry.get_mut());
                 attributes_altered.insert(entid, mutations);
             }

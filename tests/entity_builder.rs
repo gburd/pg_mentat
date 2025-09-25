@@ -63,7 +63,7 @@ fn test_entity_builder_bogus_entids() {
     {
         MentatError::DbError(e) => {
             assert_eq!(
-                e.kind(),
+                *e.kind(),
                 db_traits::errors::DbErrorKind::UnrecognizedEntid(999)
             );
         }
