@@ -1,0 +1,12 @@
+{
+  "id": "12",
+  "subject": "Implement WASM runtime with wasmer integration",
+  "description": "**Phase 3: WASM Integration**\n\nCreate `/wasm/` crate for WASM module management with wasmer:\n\n**Components:**\n- WASM module loader with validation\n- Function registry mapping names to exports\n- Security sandbox configuration (gas/memory limits)\n- Integration with mentat query engine\n- Transaction function support\n\n**Structure:**\n```\n/wasm/\n├── Cargo.toml (add wasmer ~4.x)\n├── src/\n│   ├── lib.rs\n│   ├── loader.rs      # Module loading and caching\n│   ├── registry.rs    # Function registry\n│   ├── security.rs    # Sandbox configuration\n│   └── integration.rs # Query engine integration\n└── tests/\n```\n\n**Security:**\n- Gas limits (configurable, default 100M)\n- Memory limits\n- WASI capability restrictions\n- Deterministic execution\n\n**Blocked by:** Task 6 (WASM research), Task 4 (test suite passing)\n\n**Acceptance Criteria:**\n- wasmer integrated and working\n- Modules load and validate correctly\n- Security sandbox enforced\n- Functions callable from queries\n- Example WASM modules (Rust → WASM)\n- Comprehensive tests and documentation",
+  "activeForm": "Implementing WASM runtime",
+  "status": "pending",
+  "blocks": [],
+  "blockedBy": [
+    "6",
+    "4"
+  ]
+}

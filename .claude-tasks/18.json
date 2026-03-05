@@ -1,0 +1,15 @@
+{
+  "id": "18",
+  "subject": "Implement mentatd server with Datomic protocol support",
+  "description": "**Phase 9: mentatd Frontend Server**\n\nCreate `/mentatd/` crate implementing Datomic-compatible frontend:\n\n**Architecture:**\n```\nDatomic Client → [Datomic Wire Protocol] → mentatd → [SQL] → pg_mentat\n```\n\n**Components:**\n- Protocol handler (based on Task 7 reverse engineering)\n- Query translator (Datomic queries → SQL)\n- Transaction translator (Datomic txns → mentat_transact())\n- Connection pool (tokio-postgres)\n- Session manager (client state, snapshots)\n- Configuration (TOML-based)\n\n**Project structure:**\n```\n/mentatd/\n├── Cargo.toml (tokio, tokio-postgres, serde)\n├── mentatd.toml.example\n└── src/\n    ├── main.rs\n    ├── protocol/\n    │   ├── parser.rs     # Decode Datomic messages\n    │   └── serializer.rs # Encode responses\n    ├── translator/\n    │   ├── query.rs      # Query translation\n    │   └── tx.rs         # Transaction translation\n    ├── pool.rs           # Connection pooling\n    ├── session.rs        # Session management\n    └── config.rs         # TOML configuration\n```\n\n**Configuration:**\n- PostgreSQL connection string\n- Listen address/port\n- Connection pool size\n- TLS/SSL settings\n- Resource limits\n\n**Blocked by:** Task 7 (Datomic protocol research), Task 16 (SQL API complete)\n\n**Acceptance Criteria:**\n- Server accepts Datomic client connections\n- Basic queries work through real Datomic client\n- Transactions execute correctly\n- Connection pooling functional\n- Configuration working\n- Integration tests with Datomic client JAR pass",
+  "activeForm": "Implementing mentatd server",
+  "owner": "mentatd-impl",
+  "status": "completed",
+  "blocks": [
+    "19"
+  ],
+  "blockedBy": [
+    "7",
+    "16"
+  ]
+}

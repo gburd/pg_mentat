@@ -1,0 +1,12 @@
+{
+  "id": "8",
+  "subject": "Implement aggregate functions (count, sum, min, max, avg)",
+  "description": "**Phase 2.1: Aggregate Functions**\n\nAdd aggregate function support to the query algebrizer and execution engine:\n\n**Implementation areas:**\n- `/query-algebrizer/src/` - Add aggregate clause parsing\n- `/query-projector/src/` - Add aggregate result handling\n- `/query-translator/src/` - SQL aggregate translation\n- Add tests in query test suites\n\n**Aggregate functions to implement:**\n- `(count ?var)` - Count results\n- `(sum ?var)` - Sum numeric values\n- `(min ?var)` - Minimum value\n- `(max ?var)` - Maximum value\n- `(avg ?var)` - Average of numeric values\n\n**Example query:**\n```clojure\n[:find (count ?e) (sum ?price)\n :where [?e :product/price ?price]]\n```\n\n**Blocked by:** Task 4 (test suite must pass first)\n\n**Acceptance Criteria:**\n- All 5 aggregate functions working\n- Comprehensive test coverage\n- SQL translation correct\n- Edge cases handled (empty results, null values)\n- Documentation updated",
+  "activeForm": "Implementing aggregate functions",
+  "owner": "aggregate-impl",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": [
+    "4"
+  ]
+}

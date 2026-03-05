@@ -1,0 +1,10 @@
+{
+  "id": "2",
+  "subject": "Migrate CI workflows from actions-rs to modern alternatives",
+  "description": "**Phase 1.1: CI/CD Modernization**\n\nReplace deprecated actions-rs workflows in .github/workflows/:\n- Replace actions-rs/toolchain with dtolnay/rust-toolchain\n- Replace actions-rs/cargo with direct cargo commands\n- Update all workflow files to use modern actions\n- Add cargo-deny for supply chain security\n- Pin actions to SHA with version comments per CLAUDE.md\n\n**Files to update:**\n- .github/workflows/*.yml (all workflow files)\n\n**Acceptance Criteria:**\n- No actions-rs references remain\n- All workflows use SHA-pinned actions\n- cargo-deny integrated\n- Workflows pass on test run",
+  "activeForm": "Migrating CI workflows",
+  "owner": "ci-modernizer",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": []
+}

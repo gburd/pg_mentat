@@ -1,0 +1,11 @@
+{
+  "id": "27",
+  "subject": "test-fixer",
+  "description": "You are working on the mentat-migration team.\n\nYour task: Run full test suite and fix all failures (",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": [],
+  "metadata": {
+    "_internal": true
+  }
+}

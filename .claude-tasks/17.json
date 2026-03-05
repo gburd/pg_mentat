@@ -1,0 +1,12 @@
+{
+  "id": "17",
+  "subject": "Implement query planner hook for PostgreSQL optimization",
+  "description": "**Phase 7: Query Planner Integration**\n\nImplement PostgreSQL planner hook for mentat-specific optimizations:\n\n**Implementation:**\n- Register planner_hook in _PG_init\n- Provide index hints for EAVT/AEVT/AVET/VAET\n- Cost estimates based on attribute cardinality\n- Statistics collection for mentat operations\n\n**GUC settings:**\n- `mentat.enable_planner_hints` (default: true)\n- `mentat.cost_multiplier` (default: 1.0)\n\n**Location:** `/pg_mentat/src/planner/hooks.rs`\n\n**Key challenges:**\n- Understand PostgreSQL cost model\n- Attribute cardinality statistics\n- Index selection hints without breaking PostgreSQL optimizer\n\n**Blocked by:** Task 16 (SQL function API complete)\n\n**Acceptance Criteria:**\n- Planner hook registered and working\n- Index hints improve query performance\n- Cost estimates guide optimizer correctly\n- Performance benchmarks show improvement\n- No regression on standard PostgreSQL queries",
+  "activeForm": "Implementing planner hook",
+  "owner": "planner-optimizer",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": [
+    "16"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "7",
+  "subject": "Reverse engineer Datomic wire protocol from client JAR",
+  "description": "**Phase 8: Datomic Protocol Research (CRITICAL PATH)**\n\nReverse engineer the Datomic client protocol to enable mentatd compatibility:\n\n**Tools:**\n- cfr or procyon (Java decompiler)\n- Wireshark with custom dissectors\n- mitmproxy for HTTP/HTTPS inspection\n- Datomic free/dev for reference testing\n\n**Tasks:**\n1. Obtain and decompile Datomic client JAR\n2. Identify key classes: connection, query, transaction, result handling\n3. Set up Datomic free locally for protocol capture\n4. Capture and analyze network traffic\n5. Document message formats, serialization (Transit/EDN/Fressian)\n6. Create protocol specification document\n7. Build test corpus of known queries/transactions\n8. Implement Rust protocol parser prototype\n\n**Deliverables:**\n- docs/architecture/datomic_protocol.md - Complete protocol spec\n- Protocol parser prototype in Rust\n- Test corpus of reference messages\n- Compatibility matrix (what operations are supported)\n\n**Acceptance Criteria:**\n- Protocol documented with message examples\n- Rust parser can decode/encode basic messages\n- Test corpus covers all major operations\n- Known limitations documented\n\n**Risk:** HIGH - Protocol may be complex or obfuscated. Budget extra time.",
+  "activeForm": "Reverse engineering Datomic protocol",
+  "owner": "protocol-researcher",
+  "status": "completed",
+  "blocks": [
+    "18"
+  ],
+  "blockedBy": []
+}

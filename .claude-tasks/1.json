@@ -1,0 +1,13 @@
+{
+  "id": "1",
+  "subject": "Update all Cargo.toml dependencies to latest stable versions",
+  "description": "**Phase 1.1: Dependency Updates**\n\nUpdate all dependencies in root and workspace member Cargo.toml files:\n- rusqlite to latest stable\n- chrono, uuid to latest\n- tokio, hyper ecosystem to latest\n- Update MSRV to Rust 1.88+ in Cargo.toml\n- Replace deprecated actions-rs dependencies if present\n- Document any breaking changes in CHANGES.md\n\n**Acceptance Criteria:**\n- All Cargo.toml files updated\n- cargo check passes (warnings OK at this stage)\n- No deprecated dependency versions remain\n- MSRV updated to stable-2",
+  "activeForm": "Updating Cargo dependencies",
+  "owner": "deps-updater",
+  "status": "completed",
+  "blocks": [
+    "3",
+    "4"
+  ],
+  "blockedBy": []
+}

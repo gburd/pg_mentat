@@ -1,0 +1,15 @@
+{
+  "id": "13",
+  "subject": "Create pg_mentat extension with pgrx and EDN custom type",
+  "description": "**Phase 4: pgrx Extension Foundation**\n\nCreate new `/pg_mentat/` crate with pgrx:\n\n**Setup:**\n- Initialize pgrx project: `cargo pgrx init`\n- Add pgrx dependency (latest stable)\n- Create EdnValue custom PostgreSQL type\n- Binary encoding with MessagePack (rmp-serde)\n- Type input/output functions\n- Extension control files\n\n**EdnValue implementation:**\n- `#[derive(PostgresType)]` with `#[pgvarlena_inoutfuncs]`\n- Binary encoding for storage efficiency\n- Text parsing for EDN input\n- Type operators for EDN manipulation\n\n**Project structure:**\n```\n/pg_mentat/\n├── Cargo.toml\n├── pg_mentat.control\n├── sql/\n│   └── bootstrap.sql\n└── src/\n    ├── lib.rs (_PG_init)\n    └── types/\n        └── edn.rs (EdnValue type)\n```\n\n**Blocked by:** Task 5 (pgrx research), Task 4 (test suite passing)\n\n**Acceptance Criteria:**\n- Extension compiles and installs\n- EdnValue type works in PostgreSQL\n- Round-trip tests pass (text → binary → text)\n- Type operators functional\n- pgrx test harness working",
+  "activeForm": "Creating pg_mentat extension",
+  "owner": "extension-builder",
+  "status": "completed",
+  "blocks": [
+    "14"
+  ],
+  "blockedBy": [
+    "5",
+    "4"
+  ]
+}

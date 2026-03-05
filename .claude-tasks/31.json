@@ -1,0 +1,11 @@
+{
+  "id": "31",
+  "subject": "operators-impl",
+  "description": "You are working on the mentat-migration team.\n\nYour task: Implement query operators (limit, offset, ",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": [],
+  "metadata": {
+    "_internal": true
+  }
+}

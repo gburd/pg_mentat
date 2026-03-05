@@ -1,0 +1,11 @@
+{
+  "id": "22",
+  "subject": "ci-modernizer",
+  "description": "You are working on the mentat-migration team.\n\nYour task: Migrate CI workflows from actions-rs to mo",
+  "status": "in_progress",
+  "blocks": [],
+  "blockedBy": [],
+  "metadata": {
+    "_internal": true
+  }
+}

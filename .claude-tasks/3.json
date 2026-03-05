@@ -1,0 +1,12 @@
+{
+  "id": "3",
+  "subject": "Enable strict clippy lints and fix all warnings",
+  "description": "**Phase 1.2: Build System Fixes**\n\nAdd strict clippy lints to root Cargo.toml per CLAUDE.md standards:\n- Add [lints.clippy] section with pedantic warnings\n- Enable panic prevention lints (unwrap_used, expect_used, panic)\n- Enable code hygiene lints (dbg_macro, todo, print_stdout)\n- Run cargo clippy --all-targets --all-features -- -D warnings\n- Fix all clippy warnings across the codebase\n- Document any allow attributes with justification\n\n**Blocked by:** Task 1 (dependency updates must complete first)\n\n**Acceptance Criteria:**\n- Strict lints configured in Cargo.toml\n- Zero clippy warnings with -D warnings flag\n- All allow attributes have justification comments\n- Clean cargo check output",
+  "activeForm": "Fixing clippy warnings",
+  "owner": "clippy-enforcer",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": [
+    "1"
+  ]
+}

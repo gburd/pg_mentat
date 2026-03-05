@@ -1,0 +1,12 @@
+{
+  "id": "20",
+  "subject": "Create comprehensive documentation for pg_mentat and mentatd",
+  "description": "**Phase 10: Documentation**\n\nCreate complete user and developer documentation:\n\n**Documentation structure:**\n```\ndocs/\n├── installation/\n│   ├── pg_mentat.md          # Extension installation\n│   ├── mentatd.md            # Frontend setup\n│   └── migration.md          # SQLite → PostgreSQL migration\n├── api/\n│   ├── sql_functions.md      # Complete SQL API reference\n│   ├── datomic_compat.md     # Datomic compatibility matrix\n│   └── wasm.md               # WASM function development\n├── configuration/\n│   ├── pg_mentat_config.md   # Extension GUCs\n│   └── mentatd_config.md     # Frontend TOML config\n├── architecture/\n│   ├── overview.md           # System architecture\n│   ├── protocol.md           # Datomic wire protocol details\n│   └── storage.md            # PostgreSQL storage design\n└── guides/\n    ├── quickstart.md         # 5-minute getting started\n    ├── migration_guide.md    # Datomic → Mentat migration\n    └── performance.md        # Tuning and optimization\n```\n\n**Key documentation:**\n1. Installation guide (step-by-step)\n2. SQL function reference (with examples)\n3. Datomic compatibility matrix\n4. mentatd configuration guide\n5. Migration guide from Datomic\n6. WASM development tutorial\n7. Performance tuning guide\n\n**Blocked by:** Task 19 (tests passing)\n\n**Acceptance Criteria:**\n- All documentation sections complete\n- Examples tested and working\n- Installation guides validated\n- API reference complete\n- Migration paths documented\n- Performance recommendations clear",
+  "activeForm": "Creating comprehensive documentation",
+  "owner": "docs-writer",
+  "status": "completed",
+  "blocks": [],
+  "blockedBy": [
+    "19"
+  ]
+}
