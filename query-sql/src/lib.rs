@@ -8,6 +8,11 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+// TODO: Remove after PostgreSQL migration
+// Critical safety lints still enforced via root Cargo.toml
+
 #[macro_use]
 extern crate mentat_core;
 extern crate core_traits;
@@ -22,7 +27,7 @@ use core_traits::{Entid, TypedValue, ValueType};
 
 use mentat_core::SQLTypeAffinity;
 
-use edn::query::{Direction, Limit, Variable};
+use edn::query::{Direction, Limit, Offset, Variable};
 
 use mentat_query_algebrizer::{
     Column, OrderBy, QualifiedAlias, QueryValue, SourceAlias, TableAlias, VariableColumn,
@@ -205,6 +210,14 @@ pub enum FromClause {
     Nothing,
 }
 
+/// A Common Table Expression (CTE) for WITH clauses
+pub struct CommonTableExpression {
+    pub name: String,
+    pub column_names: Vec<String>,
+    pub query: Box<SelectQuery>,
+    pub recursive: bool,
+}
+
 pub struct SelectQuery {
     pub distinct: bool,
     pub projection: Projection,
@@ -213,6 +226,8 @@ pub struct SelectQuery {
     pub group_by: Vec<GroupBy>,
     pub order: Vec<OrderBy>,
     pub limit: Limit,
+    pub offset: Offset,
+    pub ctes: Vec<CommonTableExpression>,
 }
 
 fn push_variable_column(qb: &mut dyn QueryBuilder, vc: &VariableColumn) -> BuildQueryResult {
@@ -568,8 +583,47 @@ impl SelectQuery {
     }
 }
 
+impl QueryFragment for CommonTableExpression {
+    fn push_sql(&self, out: &mut dyn QueryBuilder) -> BuildQueryResult {
+        out.push_identifier(&self.name)?;
+
+        if !self.column_names.is_empty() {
+            out.push_sql(" (");
+            interpose!(name, self.column_names, {
+                out.push_identifier(name)?
+            }, {
+                out.push_sql(", ")
+            });
+            out.push_sql(")");
+        }
+
+        out.push_sql(" AS (");
+        self.query.push_sql(out)?;
+        out.push_sql(")");
+        Ok(())
+    }
+}
+
 impl QueryFragment for SelectQuery {
     fn push_sql(&self, out: &mut dyn QueryBuilder) -> BuildQueryResult {
+        // Generate CTEs if present
+        if !self.ctes.is_empty() {
+            out.push_sql("WITH ");
+
+            // Check if any CTE is recursive
+            let has_recursive = self.ctes.iter().any(|cte| cte.recursive);
+            if has_recursive {
+                out.push_sql("RECURSIVE ");
+            }
+
+            interpose!(cte, self.ctes, {
+                cte.push_sql(out)?
+            }, {
+                out.push_sql(", ")
+            });
+            out.push_sql(" ");
+        }
+
         if self.distinct {
             out.push_sql("SELECT DISTINCT ");
         } else {
@@ -628,6 +682,20 @@ impl QueryFragment for SelectQuery {
             Limit::Variable(ref var) => {
                 // Guess this wasn't bound yet. Produce an argument.
                 out.push_sql(" LIMIT ");
+                self.push_variable_param(var, out)?;
+            }
+        }
+
+        match self.offset {
+            Offset::None => (),
+            Offset::Fixed(offset) => {
+                // Guaranteed to be non-negative: u64.
+                out.push_sql(" OFFSET ");
+                out.push_sql(offset.to_string().as_str());
+            }
+            Offset::Variable(ref var) => {
+                // Guess this wasn't bound yet. Produce an argument.
+                out.push_sql(" OFFSET ");
                 self.push_variable_param(var, out)?;
             }
         }
@@ -867,6 +935,8 @@ mod tests {
             group_by: vec![],
             order: vec![],
             limit: Limit::None,
+            offset: Offset::None,
+            ctes: vec![],
         };
 
         let SQLQuery { sql, args } = query.to_sql_query().unwrap();

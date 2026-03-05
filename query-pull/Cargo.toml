@@ -8,13 +8,13 @@ workspace = ".."
 sqlcipher = ["rusqlite/sqlcipher"]
 
 [dependencies]
-thiserror = "2.0"
+thiserror = "2.0.18"
 
 [dependencies.query_pull_traits]
 path = "../query-pull-traits"
 
 [dependencies.rusqlite]
-version = "0.37"
+version = "0.38.0"
 features = ["limits", "bundled"]
 
 [dependencies.edn]

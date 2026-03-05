@@ -8,11 +8,11 @@ workspace = ".."
 sqlcipher = ["rusqlite/sqlcipher"]
 
 [dependencies]
-thiserror = "2.0"
-indexmap = "2.11"
+thiserror = "2.0.18"
+indexmap = "2.13.0"
 
 [dependencies.rusqlite]
-version = "0.37"
+version = "0.38.0"
 features = ["limits", "bundled"]
 
 [dependencies.core_traits]

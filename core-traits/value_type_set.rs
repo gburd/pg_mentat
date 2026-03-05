@@ -17,6 +17,7 @@ pub trait EnumSetExtensions<T: ::enum_set::CLike + Clone> {
     fn of_both(x: T, y: T) -> EnumSet<T>;
 
     /// Return a clone of `self` with `y` added.
+    #[allow(dead_code)]
     fn with(&self, y: T) -> EnumSet<T>;
 }
 

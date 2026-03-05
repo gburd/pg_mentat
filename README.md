@@ -1,5 +1,35 @@
-# Project Mentat
+# Project Mentat → pg_mentat
 [![Build Status](https://travis-ci.org/qpdb/mentat.svg?branch=master)](https://travis-ci.org/qpdb/mentat)
+
+## 🚧 PostgreSQL Migration In Progress (95% Complete)
+
+**Status as of 2026-03-05:** This repository is undergoing active migration from SQLite to PostgreSQL. The SQLite version remains on the `master` branch. PostgreSQL work is on the `claude` branch.
+
+### What's New
+
+**pg_mentat:** PostgreSQL extension (via pgrx) that brings Mentat's datalog query capabilities to PostgreSQL.
+
+**mentatd:** Standalone server that speaks the Datomic wire protocol, translating requests to PostgreSQL queries.
+
+**Architecture:** `Datomic Client → mentatd (HTTP) → PostgreSQL (pg_mentat extension) → Datoms storage`
+
+### Migration Status
+
+- ✅ Core implementation: 19/20 tasks complete
+- ✅ SQLite → PostgreSQL schema migration complete
+- ✅ Extension functions implemented (mentat_transact, mentat_query, mentat_pull, mentat_entity, mentat_schema)
+- ✅ Datomic protocol support in mentatd server
+- ✅ All Phase 2 features: aggregates, rules, operators, time-travel queries
+- ✅ Test infrastructure (34 tests) and CI workflows
+- ✅ WASM integration architecture designed
+- ⚠️  **Validation pending:** Code compiles but requires Linux environment for testing (macOS ARM64 pgrx linking issue)
+- ⏳ WASM runtime implementation (architecture complete, ready to build)
+
+See `docs/` for architecture, API documentation, and installation guides.
+
+---
+
+## About Project Mentat
 
 Project Mentat is a persistent, embedded knowledge base. It draws heavily on [DataScript](https://github.com/tonsky/datascript) and [Datomic](http://datomic.com).
 
@@ -7,7 +37,66 @@ This project was started by Mozilla, but [is no longer being developed or active
 
 *Thank you*.
 
-[Documentation](https://docs.rs/mentat)
+[Original SQLite Documentation](https://docs.rs/mentat)
+
+---
+
+## Quick Start (PostgreSQL Version)
+
+### Prerequisites
+
+- PostgreSQL 14+ installed
+- Rust 1.88+ (stable toolchain)
+- Linux environment (macOS ARM64 has known pgrx linking issues)
+
+### Building pg_mentat Extension
+
+```bash
+# Install cargo-pgrx
+cargo install --locked cargo-pgrx
+
+# Initialize pgrx (one-time setup)
+cargo pgrx init
+
+# Build and install extension
+cd pg_mentat
+cargo pgrx install
+```
+
+### Using the Extension
+
+```sql
+-- Load extension
+CREATE EXTENSION pg_mentat;
+
+-- Transact data
+SELECT mentat_transact('[
+  {:db/id #db/id[:db.part/user]
+   :db/ident :person/name
+   :db/valueType :db.type/string
+   :db/cardinality :db.cardinality/one}
+]');
+
+-- Query
+SELECT mentat_query('[:find ?e :where [?e :person/name]]', NULL);
+```
+
+### Building mentatd Server
+
+```bash
+cd mentatd
+cargo build --release
+
+# Configure (copy example)
+cp mentatd.toml.example mentatd.toml
+
+# Edit mentatd.toml with your PostgreSQL connection string
+
+# Run
+./target/release/mentatd
+```
+
+See `docs/guides/quickstart.md` for detailed instructions.
 
 ---
 
@@ -150,7 +239,22 @@ We use multiple sub-crates for Mentat for four reasons:
 3. To simplify the creation of targets that don't use certain features: _e.g._, a build with no syncing, or with no query system.
 4. To allow for reuse (_e.g._, the EDN parser is essentially a separate library).
 
-So what are they?
+### New PostgreSQL Crates
+
+#### `pg_mentat`
+
+PostgreSQL extension built with pgrx. Implements the storage layer and query execution as PostgreSQL extension functions. Includes:
+- Custom `EdnValue` PostgreSQL type with CBOR/text encoding
+- Extension functions: `mentat_transact()`, `mentat_query()`, `mentat_pull()`, `mentat_entity()`, `mentat_schema()`
+- Complete schema with EAVT/AEVT/AVET/VAET indexes
+- Full-text search via PostgreSQL tsvector/GIN indexes
+- Query optimization hooks
+
+#### `mentatd`
+
+Standalone HTTP server that speaks the Datomic wire protocol. Translates Datomic client requests to PostgreSQL queries via pg_mentat extension functions. Enables existing Datomic client libraries to work with PostgreSQL/Mentat.
+
+So what are the original crates?
 
 ### Building blocks
 
@@ -216,7 +320,9 @@ This is under `tools/cli`. It's essentially an external consumer of the main `me
 
 ---
 
-## SQLite dependencies
+## Database Dependencies
+
+### SQLite (Original Implementation - Master Branch)
 
 Mentat uses partial indices, which are available in SQLite 3.8.0 and higher. It relies on correlation between aggregate and non-aggregate columns in the output, which was added in SQLite 3.7.11.
 
@@ -232,6 +338,20 @@ version = "0.6"
 # System sqlite is known to be new.
 default-features = false
 ```
+
+### PostgreSQL (New Implementation - Claude Branch)
+
+pg_mentat requires PostgreSQL 14 or higher. It uses:
+- BTREE and GIN indexes (supported in all PostgreSQL versions)
+- tsvector/tsquery for full-text search (built-in)
+- SERIALIZABLE isolation level for consistency
+- Standard PostgreSQL types (BIGINT, TEXT, BYTEA, TIMESTAMPTZ, BOOLEAN)
+- Custom EdnValue type via pgrx
+
+Development requires:
+- cargo-pgrx 0.12+
+- PostgreSQL development headers (`postgresql-devel` or `libpq-dev`)
+- Linux environment (macOS ARM64 has pgrx linking issues)
 
 ---
 

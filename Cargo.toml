@@ -1,5 +1,6 @@
 [package]
 edition = "2021"
+rust-version = "1.88"
 authors = [
   "Richard Newman <rnewman@twinql.com>",
   "Nicholas Alexander <nalexander@mozilla.com>",
@@ -28,7 +29,8 @@ members = [
   "tools/cli",
   "ffi", "core", "core-traits","db", "db-traits", "edn", "public-traits", "query-algebrizer",
   "query-algebrizer-traits", "query-projector", "query-projector-traits","query-pull",
-  "query-sql", "sql", "sql-traits", "tolstoy-traits", "tolstoy", "transaction"
+  "query-sql", "sql", "sql-traits", "tolstoy-traits", "tolstoy", "transaction",
+  "pg_mentat", "mentatd"
   ]
 
 [build-dependencies]
@@ -46,14 +48,14 @@ assert_approx_eq = "1.1"
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2.0"
-lazy_static = "1.5"
-time = { version = "0.3", features = ["serde"] }
-log = "0.4"
-uuid = { version = "1.18", features = ["v4", "serde"] }
+thiserror = "2.0.18"
+lazy_static = "1.5.0"
+time = { version = "0.3.47", features = ["serde"] }
+log = "0.4.29"
+uuid = { version = "1.21.0", features = ["v4", "serde"] }
 
 [dependencies.rusqlite]
-version = "0.37"
+version = "0.38.0"
 features = ["limits", "bundled"]
 
 [dependencies.edn]
@@ -111,6 +113,35 @@ optional = true
 [dependencies.tolstoy_traits]
 path = "tolstoy-traits"
 optional = true
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Panic prevention
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+panic_in_result_fn = "deny"
+unimplemented = "deny"
+# No cheating
+allow_attributes = "deny"
+# Code hygiene
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Safety
+await_holding_lock = "deny"
+large_futures = "deny"
+exit = "deny"
+mem_forget = "deny"
+# Pedantic relaxations (too noisy)
+module_name_repetitions = "allow"
+similar_names = "allow"
+# Note: Test code (#[cfg(test)] and tests/) has additional relaxed lints for:
+# - unwrap_used, expect_used, panic (normal in tests)
+# - print_stdout (test output)
+# - too_many_lines, uninlined_format_args (test readability)
+# These are configured via #![cfg_attr(test, allow(...))] in test modules
 
 [profile.release]
 opt-level = 3

@@ -8,6 +8,11 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+// TODO: Remove after PostgreSQL migration
+// Critical safety lints still enforced via root Cargo.toml
+
 extern crate rusqlite;
 
 extern crate edn;

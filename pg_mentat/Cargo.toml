@@ -1,0 +1,68 @@
+[package]
+name = "pg_mentat"
+version = "0.1.0"
+edition = "2021"
+authors = ["Greg Burd <greg@burd.me>"]
+license = "Apache-2.0"
+repository = "https://github.com/mozilla/mentat"
+description = "Mentat Datalog database for PostgreSQL"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["pg16"]
+pg13 = ["pgrx/pg13"]
+pg14 = ["pgrx/pg14"]
+pg15 = ["pgrx/pg15"]
+pg16 = ["pgrx/pg16"]
+pg17 = ["pgrx/pg17"]
+pg18 = ["pgrx/pg18"]
+pg_test = []
+
+[dependencies]
+pgrx = "0.17.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ciborium = "0.2"
+hex = "0.4"
+tracing = "0.1"
+
+# Mentat dependencies
+edn = { path = "../edn", features = ["serde_support"] }
+core_traits = { path = "../core-traits" }
+mentat_core = { path = "../core" }
+db_traits = { path = "../db-traits" }
+mentat_db = { path = "../db" }
+
+[dev-dependencies]
+pgrx-tests = "0.17.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Panic prevention
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+panic_in_result_fn = "deny"
+unimplemented = "deny"
+# No cheating
+allow_attributes = "deny"
+# Code hygiene
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Safety
+await_holding_lock = "deny"
+large_futures = "deny"
+exit = "deny"
+mem_forget = "deny"
+# Pedantic relaxations (too noisy)
+module_name_repetitions = "allow"
+similar_names = "allow"

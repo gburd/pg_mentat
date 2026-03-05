@@ -82,7 +82,7 @@ impl ::std::fmt::Display for SchemaConstraintViolation {
                 ref conflicting_datoms,
             } => {
                 writeln!(f, "type disagreements:")?;
-                for (ref datom, expected_type) in conflicting_datoms {
+                for (datom, expected_type) in conflicting_datoms {
                     writeln!(
                         f,
                         "  expected value of type {} but got datom [{} {} {:?}]",

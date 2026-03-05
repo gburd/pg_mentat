@@ -118,10 +118,10 @@ impl NamespaceableName {
     pub fn to_reversed(&self) -> NamespaceableName {
         let name = self.name();
 
-        if name.starts_with('_') {
-            Self::new(self.namespace(), &name[1..])
+        if let Some(stripped) = name.strip_prefix('_') {
+            Self::new(self.namespace(), stripped)
         } else {
-            Self::new(self.namespace(), format!("_{}", name))
+            Self::new(self.namespace(), format!("_{name}"))
         }
     }
 
@@ -160,15 +160,7 @@ impl NamespaceableName {
 // Non-namespaced values always sort before.
 impl PartialOrd for NamespaceableName {
     fn partial_cmp(&self, other: &NamespaceableName) -> Option<Ordering> {
-        match (self.boundary, other.boundary) {
-            (0, 0) => self.components.partial_cmp(&other.components),
-            (0, _) => Some(Ordering::Less),
-            (_, 0) => Some(Ordering::Greater),
-            (_, _) => {
-                // Just use a lexicographic ordering.
-                self.components().partial_cmp(&other.components())
-            }
-        }
+        Some(self.cmp(other))
     }
 }
 

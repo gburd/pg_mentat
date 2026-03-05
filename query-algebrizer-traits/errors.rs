@@ -81,6 +81,12 @@ pub enum AlgebrizerError {
     )]
     InvalidLimit(String, ValueType),
 
+    #[error(
+        "invalid offset {} of type {}: expected non-negative number.",
+        _0, 1
+    )]
+    InvalidOffset(String, ValueType),
+
     #[error("mismatched bindings in ground")]
     GroundBindingsMismatch,
 
@@ -105,6 +111,18 @@ pub enum AlgebrizerError {
 
     #[error("binding error in {0}: {1:?}")]
     InvalidBinding(PlainSymbol, BindingError),
+
+    #[error("unknown rule: {0}")]
+    UnknownRule(String),
+
+    #[error("invalid rule head: {0}")]
+    InvalidRuleHead(String),
+
+    #[error("invalid rule invocation: {0}")]
+    InvalidRuleInvocation(String),
+
+    #[error("not yet implemented: {0}")]
+    NotYetImplemented(String),
 
     #[error(transparent)]
     EdnParseError(#[from] ParseError),

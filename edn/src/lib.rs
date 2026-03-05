@@ -55,7 +55,6 @@ pub use crate::types::{
 pub use crate::symbols::{Keyword, NamespacedSymbol, PlainSymbol};
 
 use std::collections::{BTreeMap, BTreeSet, LinkedList};
-use std::f64::{INFINITY, NAN, NEG_INFINITY};
 use std::iter::FromIterator;
 
 use chrono::TimeZone;
@@ -77,10 +76,10 @@ pub type ParseError = peg::error::ParseError<peg::str::LineCol>;
 peg::parser!(pub grammar parse() for str {
 
     pub rule nil() -> SpannedValue = "nil" { SpannedValue::Nil }
-    pub rule nan() -> SpannedValue = "#f" whitespace()+ "NaN" { SpannedValue::Float(OrderedFloat(NAN)) }
+    pub rule nan() -> SpannedValue = "#f" whitespace()+ "NaN" { SpannedValue::Float(OrderedFloat(f64::NAN)) }
 
     pub rule infinity() -> SpannedValue = "#f" whitespace()+ s:$(sign()) "Infinity"
-        { SpannedValue::Float(OrderedFloat(if s == "+" { INFINITY } else { NEG_INFINITY })) }
+        { SpannedValue::Float(OrderedFloat(if s == "+" { f64::INFINITY } else { f64::NEG_INFINITY })) }
 
     pub rule boolean() -> SpannedValue
         = "true"  { SpannedValue::Boolean(true) }
@@ -379,6 +378,16 @@ peg::parser!(pub grammar parse() for str {
             }
         }
 
+    rule offset() -> query::Offset
+        = __ v:variable() __ { query::Offset::Variable(v) }
+        / __ n:(raw_octalinteger() / raw_hexinteger() / raw_basedinteger() / raw_integer()) __ {?
+            if n >= 0 {
+                Ok(query::Offset::Fixed(n as u64))
+            } else {
+                Err("expected non-negative integer")
+            }
+        }
+
     rule order() -> query::Order
         = __ "(" __ "asc" v:variable() ")" __ { query::Order(query::Direction::Ascending, v) }
         / __ "(" __ "desc" v:variable() ")" __ { query::Order(query::Direction::Descending, v) }
@@ -511,9 +520,11 @@ peg::parser!(pub grammar parse() for str {
         = __ ":find" fs:find_spec() { query::QueryPart::FindSpec(fs) }
         / __ ":in" in_vars:variable()+ { query::QueryPart::InVars(in_vars) }
         / __ ":limit" l:limit() { query::QueryPart::Limit(l) }
+        / __ ":offset" o:offset() { query::QueryPart::Offset(o) }
         / __ ":order" os:order()+ { query::QueryPart::Order(os) }
         / __ ":where" ws:where_clause()+ { query::QueryPart::WhereClauses(ws) }
         / __ ":with" with_vars:variable()+ { query::QueryPart::WithVars(with_vars) }
+        / __ ":distinct" { query::QueryPart::Distinct }
 
     pub rule parse_query() -> query::ParsedQuery
         = __ "[" qps:query_part()+ "]" __ {? query::ParsedQuery::from_parts(qps) }

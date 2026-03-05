@@ -14,22 +14,22 @@ sqlcipher = ["rusqlite/sqlcipher"]
 syncable = ["tolstoy_traits", "hyper", "serde_json"]
 
 [dependencies]
-thiserror = "2.0"
+thiserror = "2.0.18"
 
-http = "1.3"
-tokio = { version = "1.8.0", features = ["full"] }
-uuid = "1.0"
+http = "1.4.0"
+tokio = { version = "1.50.0", features = ["full"] }
+uuid = "1.21.0"
 
 [dependencies.rusqlite]
-version = "0.37"
+version = "0.38.0"
 features = ["limits", "bundled"]
 
 [dependencies.hyper]
-version = "1.7"
+version = "1.8.1"
 optional = true
 
 [dependencies.serde_json]
-version = "1.0"
+version = "1.0.149"
 optional = true
 
 [dependencies.edn]

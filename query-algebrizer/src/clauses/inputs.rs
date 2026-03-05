@@ -22,18 +22,10 @@ use query_algebrizer_traits::errors::{AlgebrizerError, Result};
 /// the bindings that will be used at execution time.
 /// When built correctly, `types` is guaranteed to contain the types of `values` -- use
 /// `QueryInputs::new` or `QueryInputs::with_values` to construct an instance.
+#[derive(Default)]
 pub struct QueryInputs {
     pub(crate) types: BTreeMap<Variable, ValueType>,
     pub(crate) values: BTreeMap<Variable, TypedValue>,
-}
-
-impl Default for QueryInputs {
-    fn default() -> Self {
-        QueryInputs {
-            types: BTreeMap::default(),
-            values: BTreeMap::default(),
-        }
-    }
 }
 
 impl QueryInputs {

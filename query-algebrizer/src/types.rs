@@ -15,7 +15,7 @@ use core_traits::{Entid, TypedValue, ValueType, ValueTypeSet};
 
 use mentat_core::ValueRc;
 
-use edn::query::{Direction, FindSpec, Keyword, Limit, Order, SrcVar, Variable, WhereClause};
+use edn::query::{Direction, FindSpec, Keyword, Limit, Offset, Order, SrcVar, Variable, WhereClause};
 
 /// This enum models the fixed set of default tables we have -- two
 /// tables and two views -- and computed tables defined in the enclosing CC.
@@ -695,8 +695,10 @@ pub struct FindQuery {
     pub in_vars: BTreeSet<Variable>,
     pub in_sources: BTreeSet<SrcVar>,
     pub limit: Limit,
+    pub offset: Offset,
     pub where_clauses: Vec<WhereClause>,
     pub order: Option<Vec<Order>>,
+    pub distinct: bool,
 }
 
 // Intermediate data structures for resolving patterns.

@@ -126,7 +126,7 @@ impl Schema {
     /// Returns an symbolic representation of the schema suitable for applying across Mentat stores.
     pub fn to_edn_value(&self) -> edn::Value {
         edn::Value::Vector(
-            (&self.attribute_map)
+            self.attribute_map
                 .iter()
                 .map(|(entid, attribute)| attribute.to_edn_value(self.get_ident(*entid).cloned()))
                 .collect(),
@@ -174,7 +174,7 @@ impl HasSchema for Schema {
     }
 
     fn attribute_for_ident(&self, ident: &Keyword) -> Option<(&Attribute, KnownEntid)> {
-        self.get_raw_entid(&ident).and_then(|entid| {
+        self.get_raw_entid(ident).and_then(|entid| {
             self.attribute_for_entid(entid)
                 .map(|a| (a, KnownEntid(entid)))
         })

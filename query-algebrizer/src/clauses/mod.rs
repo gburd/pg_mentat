@@ -39,6 +39,7 @@ mod or;
 mod pattern;
 mod predicate;
 mod resolve;
+pub mod rules;
 
 mod fulltext;
 mod ground;
@@ -48,6 +49,7 @@ mod where_fn;
 use crate::validate::{validate_not_join, validate_or_join};
 
 pub use self::inputs::QueryInputs;
+pub use self::rules::RuleEnvironment;
 
 use crate::Known;
 
@@ -1206,7 +1208,13 @@ impl ConjoiningClauses {
                 self.apply_not_join(known, n)
             }
             WhereClause::TypeAnnotation(anno) => self.apply_type_anno(&anno),
-            _ => unimplemented!(),
+            WhereClause::RuleExpr(_invocation) => {
+                // Rules require a rule environment to be passed in
+                // For now, return an error
+                Err(AlgebrizerError::NotYetImplemented(
+                    "Rules require a RuleEnvironment to be provided".to_string(),
+                ))
+            }
         }
     }
 }

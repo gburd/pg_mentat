@@ -41,8 +41,8 @@ pub(crate) trait ValueTypes {
 impl ValueTypes for FnArg {
     fn potential_types(&self, schema: &Schema) -> Result<ValueTypeSet> {
         Ok(match self {
-            &FnArg::EntidOrInteger(x) => {
-                if ValueType::Ref.accommodates_integer(x) {
+            FnArg::EntidOrInteger(x) => {
+                if ValueType::Ref.accommodates_integer(*x) {
                     // TODO: also see if it's a valid entid?
                     ValueTypeSet::of_longs()
                 } else {
@@ -50,7 +50,7 @@ impl ValueTypes for FnArg {
                 }
             }
 
-            &FnArg::IdentOrKeyword(ref x) => {
+            FnArg::IdentOrKeyword(x) => {
                 if schema.get_entid(x).is_some() {
                     ValueTypeSet::of_keywords()
                 } else {
@@ -58,28 +58,28 @@ impl ValueTypes for FnArg {
                 }
             }
 
-            &FnArg::Variable(_) => ValueTypeSet::any(),
+            FnArg::Variable(_) => ValueTypeSet::any(),
 
-            &FnArg::Constant(NonIntegerConstant::BigInteger(_)) => {
+            FnArg::Constant(NonIntegerConstant::BigInteger(_)) => {
                 // Not yet implemented.
                 bail!(AlgebrizerError::UnsupportedArgument)
             }
 
             // These don't make sense here. TODO: split FnArg into scalar and non-scalar…
-            &FnArg::Vector(_) | &FnArg::SrcVar(_) => bail!(AlgebrizerError::UnsupportedArgument),
+            FnArg::Vector(_) | FnArg::SrcVar(_) => bail!(AlgebrizerError::UnsupportedArgument),
 
             // These are all straightforward.
-            &FnArg::Constant(NonIntegerConstant::Boolean(_)) => {
+            FnArg::Constant(NonIntegerConstant::Boolean(_)) => {
                 ValueTypeSet::of_one(ValueType::Boolean)
             }
-            &FnArg::Constant(NonIntegerConstant::Instant(_)) => {
+            FnArg::Constant(NonIntegerConstant::Instant(_)) => {
                 ValueTypeSet::of_one(ValueType::Instant)
             }
-            &FnArg::Constant(NonIntegerConstant::Uuid(_)) => ValueTypeSet::of_one(ValueType::Uuid),
-            &FnArg::Constant(NonIntegerConstant::Float(_)) => {
+            FnArg::Constant(NonIntegerConstant::Uuid(_)) => ValueTypeSet::of_one(ValueType::Uuid),
+            FnArg::Constant(NonIntegerConstant::Float(_)) => {
                 ValueTypeSet::of_one(ValueType::Double)
             }
-            &FnArg::Constant(NonIntegerConstant::Text(_)) => {
+            FnArg::Constant(NonIntegerConstant::Text(_)) => {
                 ValueTypeSet::of_one(ValueType::String)
             }
         })
@@ -97,9 +97,9 @@ impl ConjoiningClauses {
     /// The conversion depends on, and can fail because of:
     /// - Existing known types of a variable to which this arg will be bound.
     /// - Existing bindings of a variable `FnArg`.
-    pub(crate) fn typed_value_from_arg<'s>(
+    pub(crate) fn typed_value_from_arg(
         &self,
-        schema: &'s Schema,
+        schema: &Schema,
         var: &Variable,
         arg: FnArg,
         known_types: ValueTypeSet,

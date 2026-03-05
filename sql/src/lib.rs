@@ -59,7 +59,7 @@ impl QueryFragment for Box<dyn QueryFragment> {
     }
 }
 
-impl<'a> QueryFragment for &'a dyn QueryFragment {
+impl QueryFragment for &dyn QueryFragment {
     fn push_sql(&self, out: &mut dyn QueryBuilder) -> BuildQueryResult {
         QueryFragment::push_sql(&**self, out)
     }
@@ -241,7 +241,7 @@ impl QueryBuilder for SQLiteQueryBuilder {
         args.extend(byte_args);
 
         // Get the args in the right order -- $v0, $v1…
-        args.sort_by(|&(ref k1, _), &(ref k2, _)| k1.cmp(k2));
+        args.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
         SQLQuery {
             sql: self.sql,
             args,

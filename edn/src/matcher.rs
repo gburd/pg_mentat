@@ -96,20 +96,20 @@ impl<'a> Matcher<'a> {
             value == *placeholders.entry(symbol).or_insert(value)
         } else {
             match (value, pattern) {
-                (&Vector(ref v), &Vector(ref p)) => {
+                (Vector(v), Vector(p)) => {
                     diff_with(v, p, |a, b| self.match_internal::<T>(a, b)).is_none()
                 }
-                (&List(ref v), &List(ref p)) => {
+                (List(v), List(p)) => {
                     diff_with(v, p, |a, b| self.match_internal::<T>(a, b)).is_none()
                 }
-                (&Set(ref v), &Set(ref p)) => {
+                (Set(v), Set(p)) => {
                     v.len() == p.len()
                         && v.iter()
                             .all(|a| p.iter().any(|b| self.match_internal::<T>(a, b)))
                         && p.iter()
                             .all(|b| v.iter().any(|a| self.match_internal::<T>(a, b)))
                 }
-                (&Map(ref v), &Map(ref p)) => {
+                (Map(v), Map(p)) => {
                     v.len() == p.len()
                         && v.iter().all(|a| {
                             p.iter().any(|b| {

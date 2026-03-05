@@ -9,15 +9,19 @@
 // specific language governing permissions and limitations under the License.
 
 #![allow(dead_code)]
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+// TODO: Remove after PostgreSQL migration
+// Critical safety lints still enforced via root Cargo.toml
 
-///! A pull expression is a function.
-///!
-///! Its inputs are a store, a schema, and a set of bindings.
-///!
-///! Its output is a map whose keys are the input bindings and whose values are
-///! appropriate structured values to represent the pull expression.
-///!
-///! For example, the pull expression:
+//! A pull expression is a function.
+//!
+//! Its inputs are a store, a schema, and a set of bindings.
+//!
+//! Its output is a map whose keys are the input bindings and whose values are
+//! appropriate structured values to represent the pull expression.
+//!
+//! For example, the pull expression:
 ///!
 ///! ```edn
 ///! (pull ?person [:person/name

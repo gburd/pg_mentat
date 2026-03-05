@@ -1,0 +1,26 @@
+# mentatd Configuration Example
+# Copy to mentatd.toml and edit for your environment
+
+[server]
+# HTTP server bind address
+host = "127.0.0.1"
+port = 8080
+
+# Request timeout in seconds
+timeout = 30
+
+[database]
+# PostgreSQL connection string
+# Format: postgresql://[user[:password]@][host][:port][/dbname][?param1=value1&...]
+connection_string = "postgresql://postgres:postgres@localhost:5432/mentat"
+
+# Connection pool settings
+pool_size = 10
+max_lifetime_secs = 1800
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: compact, pretty, json
+format = "compact"

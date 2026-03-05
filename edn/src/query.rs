@@ -8,27 +8,27 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-///! This module defines some core types that support find expressions: sources,
-///! variables, expressions, etc.
-///! These are produced as 'fuel' by the query parser, consumed by the query
-///! translator and executor.
-///!
-///! Many of these types are defined as simple structs that are little more than
-///! a richer type alias: a variable, for example, is really just a fancy kind
-///! of string.
-///!
-///! At some point in the future, we might consider reducing copying and memory
-///! usage by recasting all of these string-holding structs and enums in terms
-///! of string references, with those references being slices of some parsed
-///! input query string, and valid for the lifetime of that string.
-///!
-///! For now, for the sake of simplicity, all of these strings are heap-allocated.
-///!
-///! Furthermore, we might cut out some of the chaff here: each time a 'tagged'
-///! type is used within an enum, we have an opportunity to simplify and use the
-///! inner type directly in conjunction with matching on the enum. Before diving
-///! deeply into this it's worth recognizing that this loss of 'sovereignty' is
-///! a tradeoff against well-typed function signatures and other such boundaries.
+//! This module defines some core types that support find expressions: sources,
+//! variables, expressions, etc.
+//! These are produced as 'fuel' by the query parser, consumed by the query
+//! translator and executor.
+//!
+//! Many of these types are defined as simple structs that are little more than
+//! a richer type alias: a variable, for example, is really just a fancy kind
+//! of string.
+//!
+//! At some point in the future, we might consider reducing copying and memory
+//! usage by recasting all of these string-holding structs and enums in terms
+//! of string references, with those references being slices of some parsed
+//! input query string, and valid for the lifetime of that string.
+//!
+//! For now, for the sake of simplicity, all of these strings are heap-allocated.
+//!
+//! Furthermore, we might cut out some of the chaff here: each time a 'tagged'
+//! type is used within an enum, we have an opportunity to simplify and use the
+//! inner type directly in conjunction with matching on the enum. Before diving
+//! deeply into this it's worth recognizing that this loss of 'sovereignty' is
+//! a tradeoff against well-typed function signatures and other such boundaries.
 use std::collections::{BTreeSet, HashSet};
 
 use std;
@@ -328,10 +328,8 @@ impl FromValue<PatternNonValuePlace> for PatternNonValuePlace {
             crate::SpannedValue::PlainSymbol(ref x) => {
                 if x.0.as_str() == "_" {
                     Some(PatternNonValuePlace::Placeholder)
-                } else if let Some(v) = Variable::from_symbol(x) {
-                    Some(PatternNonValuePlace::Variable(v))
                 } else {
-                    None
+                    Variable::from_symbol(x).map(PatternNonValuePlace::Variable)
                 }
             }
             crate::SpannedValue::Keyword(ref x) => Some(x.clone().into()),
@@ -588,6 +586,13 @@ impl std::fmt::Display for Element {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Limit {
+    None,
+    Fixed(u64),
+    Variable(Variable),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Offset {
     None,
     Fixed(u64),
     Variable(Variable),
@@ -933,6 +938,30 @@ pub struct TypeAnnotation {
     pub variable: Variable,
 }
 
+/// A rule invocation in a query, e.g., `(ancestor ?person ?ancestor)`
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuleInvocation {
+    pub name: PlainSymbol,
+    pub args: Vec<FnArg>,
+}
+
+/// A single rule clause: head + body
+/// Example: `[(ancestor ?p ?a) [?p :parent ?a]]`
+/// Or recursive: `[(ancestor ?p ?a) [?p :parent ?x] (ancestor ?x ?a)]`
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuleClause {
+    pub head: RuleInvocation,
+    pub body: Vec<WhereClause>,
+}
+
+/// A named rule with one or more clauses
+/// Rules with multiple clauses represent alternatives (like OR)
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rule {
+    pub name: PlainSymbol,
+    pub clauses: Vec<RuleClause>,
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WhereClause {
@@ -940,7 +969,7 @@ pub enum WhereClause {
     OrJoin(OrJoin),
     Pred(Predicate),
     WhereFn(WhereFn),
-    RuleExpr,
+    RuleExpr(RuleInvocation),
     Pattern(Pattern),
     TypeAnnotation(TypeAnnotation),
 }
@@ -954,8 +983,10 @@ pub struct ParsedQuery {
     pub in_vars: Vec<Variable>,
     pub in_sources: BTreeSet<SrcVar>,
     pub limit: Limit,
+    pub offset: Offset,
     pub where_clauses: Vec<WhereClause>,
     pub order: Option<Vec<Order>>,
+    pub distinct: bool,
 }
 
 pub(crate) enum QueryPart {
@@ -963,8 +994,10 @@ pub(crate) enum QueryPart {
     WithVars(Vec<Variable>),
     InVars(Vec<Variable>),
     Limit(Limit),
+    Offset(Offset),
     WhereClauses(Vec<WhereClause>),
     Order(Vec<Order>),
+    Distinct,
 }
 
 /// A `ParsedQuery` represents a parsed but potentially invalid query to the query algebrizer.
@@ -981,8 +1014,10 @@ impl ParsedQuery {
         let mut with: Option<Vec<Variable>> = None;
         let mut in_vars: Option<Vec<Variable>> = None;
         let mut limit: Option<Limit> = None;
+        let mut offset: Option<Offset> = None;
         let mut where_clauses: Option<Vec<WhereClause>> = None;
         let mut order: Option<Vec<Order>> = None;
+        let mut distinct = false;
 
         for part in parts.into_iter() {
             match part {
@@ -1010,6 +1045,12 @@ impl ParsedQuery {
                     }
                     limit = Some(x)
                 }
+                QueryPart::Offset(x) => {
+                    if offset.is_some() {
+                        return Err("find query has repeated :offset");
+                    }
+                    offset = Some(x)
+                }
                 QueryPart::WhereClauses(x) => {
                     if where_clauses.is_some() {
                         return Err("find query has repeated :where");
@@ -1022,6 +1063,9 @@ impl ParsedQuery {
                     }
                     order = Some(x)
                 }
+                QueryPart::Distinct => {
+                    distinct = true;
+                }
             }
         }
 
@@ -1032,8 +1076,10 @@ impl ParsedQuery {
             in_vars: in_vars.unwrap_or_default(),
             in_sources: BTreeSet::default(),
             limit: limit.unwrap_or(Limit::None),
+            offset: offset.unwrap_or(Offset::None),
             where_clauses: where_clauses.ok_or("expected :where")?,
             order,
+            distinct,
         })
     }
 }
@@ -1087,7 +1133,13 @@ impl ContainsVariables for WhereClause {
             NotJoin(ref n) => n.accumulate_mentioned_variables(acc),
             WhereFn(ref f) => f.accumulate_mentioned_variables(acc),
             TypeAnnotation(ref a) => a.accumulate_mentioned_variables(acc),
-            RuleExpr => (),
+            RuleExpr(ref invocation) => {
+                for arg in &invocation.args {
+                    if let FnArg::Variable(ref var) = arg {
+                        acc.insert(var.clone());
+                    }
+                }
+            }
         }
     }
 }
@@ -1123,7 +1175,7 @@ impl OrJoin {
         (self.clauses, self.unify_vars, vars)
     }
 
-    pub fn mentioned_variables<'a>(&'a mut self) -> &'a BTreeSet<Variable> {
+    pub fn mentioned_variables(&mut self) -> &BTreeSet<Variable> {
         if self.mentioned_vars.is_none() {
             let m = self.collect_mentioned_variables();
             self.mentioned_vars = Some(m);

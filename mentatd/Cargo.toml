@@ -1,0 +1,72 @@
+[package]
+name = "mentatd"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+authors = ["Gregory Burd <greg@burd.me>"]
+license = "Apache-2.0"
+description = "Datomic-compatible HTTP server for Mentat"
+
+[lib]
+name = "mentatd"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mentatd"
+path = "src/main.rs"
+
+[dependencies]
+# HTTP server
+axum = "0.8.2"
+tokio = { version = "1.45.0", features = ["full"] }
+tower = "0.5.3"
+tower-http = { version = "0.6.2", features = ["trace", "timeout"] }
+
+# PostgreSQL
+tokio-postgres = "0.7.12"
+deadpool-postgres = "0.14.0"
+
+# Serialization
+serde = { version = "1.0.221", features = ["derive"] }
+serde_json = "1.0.144"
+toml = "0.8.20"
+
+# EDN parsing (from workspace)
+edn = { path = "../edn" }
+
+# Utilities
+thiserror = "2.0.18"
+anyhow = "1.0.95"
+uuid = { version = "1.21.0", features = ["v4", "serde"] }
+tracing = "0.1.42"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+hyper = "1.6.0"
+reqwest = { version = "0.12.14", features = ["json"] }
+tokio-test = "0.4.4"
+uuid = { version = "1.21.0", features = ["v4"] }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Panic prevention
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+panic_in_result_fn = "deny"
+unimplemented = "deny"
+# No cheating
+allow_attributes = "deny"
+# Code hygiene
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+# Safety
+await_holding_lock = "deny"
+large_futures = "deny"
+exit = "deny"
+mem_forget = "deny"
+# Pedantic relaxations
+module_name_repetitions = "allow"
+similar_names = "allow"

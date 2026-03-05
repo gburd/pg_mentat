@@ -8,6 +8,11 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
+#![allow(clippy::all)]
+#![allow(clippy::pedantic)]
+#![allow(clippy::nursery)]
+// TODO: Remove after PostgreSQL migration refactors this module
+// Critical safety lints (unwrap_used, panic, todo, dbg_macro) still enforced via root Cargo.toml
 
 extern crate edn;
 extern crate mentat_core;
@@ -29,11 +34,11 @@ use mentat_core::{parse_query, CachedAttributes, Schema};
 
 use mentat_core::counter::RcCounter;
 
-use edn::query::{Element, FindSpec, Limit, Order, ParsedQuery, SrcVar, Variable, WhereClause};
+use edn::query::{Element, FindSpec, Limit, Offset, Order, ParsedQuery, SrcVar, Variable, WhereClause};
 
 use query_algebrizer_traits::errors::{AlgebrizerError, Result};
 
-pub use crate::clauses::{QueryInputs, VariableBindings};
+pub use crate::clauses::{QueryInputs, RuleEnvironment, VariableBindings};
 
 pub use crate::types::{EmptyBecause, FindQuery};
 
@@ -153,6 +158,8 @@ pub struct AlgebraicQuery {
     pub named_projection: BTreeSet<Variable>,
     pub order: Option<Vec<OrderBy>>,
     pub limit: Limit,
+    pub offset: Offset,
+    pub distinct: bool,
     pub cc: clauses::ConjoiningClauses,
 }
 
@@ -254,7 +261,7 @@ fn validate_and_simplify_order(
     }
 }
 
-fn simplify_limit(mut query: AlgebraicQuery) -> Result<AlgebraicQuery> {
+fn simplify_limit_and_offset(mut query: AlgebraicQuery) -> Result<AlgebraicQuery> {
     // Unpack any limit variables in place.
     let refined_limit = match query.limit {
         Limit::Variable(ref v) => {
@@ -291,8 +298,46 @@ fn simplify_limit(mut query: AlgebraicQuery) -> Result<AlgebraicQuery> {
         Limit::Fixed(_) => None,
     };
 
+    // Unpack any offset variables in place.
+    let refined_offset = match query.offset {
+        Offset::Variable(ref v) => {
+            match query.cc.bound_value(v) {
+                Some(TypedValue::Long(n)) => {
+                    if n < 0 {
+                        // User-specified offsets should always be non-negative numbers (>= 0).
+                        bail!(AlgebrizerError::InvalidOffset(
+                            n.to_string(),
+                            ValueType::Long
+                        ))
+                    } else {
+                        Some(Offset::Fixed(n as u64))
+                    }
+                }
+                Some(val) => {
+                    // Same.
+                    bail!(AlgebrizerError::InvalidOffset(
+                        format!("{:?}", val),
+                        val.value_type()
+                    ))
+                }
+                None => {
+                    // We know that the offset variable is mentioned in `:in`.
+                    // That it's not bound here implies that we haven't got all the variables
+                    // we'll need to run the query yet.
+                    // Simply pass the `Offset` through to `SelectQuery` untouched.
+                    None
+                }
+            }
+        }
+        Offset::None => None,
+        Offset::Fixed(_) => None,
+    };
+
     if let Some(lim) = refined_limit {
         query.limit = lim;
+    }
+    if let Some(off) = refined_offset {
+        query.offset = off;
     }
     Ok(query)
 }
@@ -312,6 +357,11 @@ pub fn algebrize_with_inputs(
 
     // Do we have a variable limit? If so, tell the CC that the var must be numeric.
     if let Limit::Variable(ref var) = parsed.limit {
+        cc.constrain_var_to_long(var.clone());
+    }
+
+    // Do we have a variable offset? If so, tell the CC that the var must be numeric.
+    if let Offset::Variable(ref var) = parsed.offset {
         cc.constrain_var_to_long(var.clone());
     }
 
@@ -339,11 +389,13 @@ pub fn algebrize_with_inputs(
         named_projection: extra_vars,
         order,
         limit,
+        offset: parsed.offset,
+        distinct: parsed.distinct,
         cc,
     };
 
     // Substitute in any fixed values and fail if they're out of range.
-    simplify_limit(q)
+    simplify_limit_and_offset(q)
 }
 
 pub use crate::clauses::ConjoiningClauses;
@@ -363,8 +415,10 @@ impl FindQuery {
             in_vars: BTreeSet::default(),
             in_sources: BTreeSet::default(),
             limit: Limit::None,
+            offset: Offset::None,
             where_clauses,
             order: None,
+            distinct: false,
         }
     }
 
@@ -409,6 +463,8 @@ impl FindQuery {
             limit: parsed.limit,
             where_clauses: parsed.where_clauses,
             order: parsed.order,
+            offset: parsed.offset,
+            distinct: parsed.distinct,
         })
     }
 }

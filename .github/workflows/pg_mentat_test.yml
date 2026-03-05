@@ -1,0 +1,60 @@
+on: [push, pull_request]
+
+name: pg_mentat Tests
+
+jobs:
+  test:
+    name: Test pg_mentat
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pg-version: [14, 15, 16]
+        rust-version: [stable, '1.92']
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9  # master
+        with:
+          toolchain: ${{ matrix.rust-version }}
+
+      - name: Install PostgreSQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-${{ matrix.pg-version }} postgresql-server-dev-${{ matrix.pg-version }}
+
+      - name: Install cargo-pgrx
+        run: cargo install cargo-pgrx --locked
+
+      - name: Initialize pgrx
+        run: cargo pgrx init --pg${{ matrix.pg-version }}=/usr/lib/postgresql/${{ matrix.pg-version }}/bin/pg_config
+
+      - name: Run cargo pgrx test
+        working-directory: pg_mentat
+        run: cargo pgrx test --pg${{ matrix.pg-version }}
+
+  lint:
+    name: Lint pg_mentat
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9  # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Run cargo fmt
+        working-directory: pg_mentat
+        run: cargo fmt --all -- --check
+
+      - name: Run cargo clippy
+        working-directory: pg_mentat
+        run: cargo clippy --all-targets --all-features -- -D warnings

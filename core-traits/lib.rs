@@ -81,21 +81,21 @@ impl From<KnownEntid> for Entid {
     }
 }
 
-impl<V: TransactableValueMarker> Into<EntityPlace<V>> for KnownEntid {
-    fn into(self) -> EntityPlace<V> {
-        EntityPlace::Entid(EntidOrIdent::Entid(self.0))
+impl<V: TransactableValueMarker> From<KnownEntid> for EntityPlace<V> {
+    fn from(value: KnownEntid) -> Self {
+        Self::Entid(EntidOrIdent::Entid(value.0))
     }
 }
 
-impl Into<AttributePlace> for KnownEntid {
-    fn into(self) -> AttributePlace {
-        AttributePlace::Entid(EntidOrIdent::Entid(self.0))
+impl From<KnownEntid> for AttributePlace {
+    fn from(value: KnownEntid) -> Self {
+        Self::Entid(EntidOrIdent::Entid(value.0))
     }
 }
 
-impl<V: TransactableValueMarker> Into<ValuePlace<V>> for KnownEntid {
-    fn into(self) -> ValuePlace<V> {
-        ValuePlace::Entid(EntidOrIdent::Entid(self.0))
+impl<V: TransactableValueMarker> From<KnownEntid> for ValuePlace<V> {
+    fn from(value: KnownEntid) -> Self {
+        Self::Entid(EntidOrIdent::Entid(value.0))
     }
 }
 
@@ -437,7 +437,7 @@ impl TypedValue {
     /// provided type is `None`.
     #[inline]
     pub fn is_congruent_with<T: Into<Option<ValueType>>>(&self, t: T) -> bool {
-        t.into().map_or(true, |x| self.matches_type(x))
+        t.into().is_none_or(|x| self.matches_type(x))
     }
 
     #[inline]
@@ -718,11 +718,12 @@ trait MicrosecondPrecision {
 impl MicrosecondPrecision for DateTime<Utc> {
     fn microsecond_precision(self) -> DateTime<Utc> {
         let nanoseconds = self.nanosecond();
-        if nanoseconds % 1000 == 0 {
+        if nanoseconds.is_multiple_of(1000) {
             return self;
         }
         let microseconds = nanoseconds / 1000;
         let truncated = microseconds * 1000;
+        #[expect(clippy::expect_used, reason = "timestamp truncation to microseconds should always produce valid values")]
         self.with_nanosecond(truncated).expect("valid timestamp")
     }
 }
@@ -867,7 +868,7 @@ impl Binding {
     /// provided type is `None`.
     #[inline]
     pub fn is_congruent_with<T: Into<Option<ValueType>>>(&self, t: T) -> bool {
-        t.into().map_or(true, |x| self.matches_type(x))
+        t.into().is_none_or(|x| self.matches_type(x))
     }
 
     #[inline]

@@ -4,13 +4,11 @@ jobs:
   clippy_check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
-            toolchain: nightly
-            components: clippy
-            override: true
-      - uses: actions-rs/clippy-check@v1
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9  # master
         with:
-          args:  --all-targets --all-features -- -D warnings
-          token: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: nightly
+          components: clippy
+      - run: cargo clippy --all-targets --all-features -- -D warnings

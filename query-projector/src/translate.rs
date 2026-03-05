@@ -14,7 +14,7 @@ use mentat_core::{SQLTypeAffinity, SQLValueType, SQLValueTypeSet, Schema, ValueT
 
 use mentat_core::util::Either;
 
-use edn::query::Limit;
+use edn::query::{Limit, Offset};
 
 use mentat_query_algebrizer::{
     AlgebraicQuery, ColumnAlternation, ColumnConstraint, ColumnConstraintOrAlternation,
@@ -311,7 +311,7 @@ fn table_for_computed(computed: ComputedTable, alias: TableAlias) -> TableOrSubq
                         // Each arm simply turns into a subquery.
                         // The SQL translation will stuff "UNION" between each arm.
                         let projection = Projection::Columns(columns);
-                        cc_to_select_query(projection, cc, false, vec![], None, Limit::None)
+                        cc_to_select_query(projection, cc, false, vec![], None, Limit::None, Offset::None)
                   }).collect(),
                 alias)
         }
@@ -334,6 +334,8 @@ fn empty_query() -> SelectQuery {
         constraints: vec![],
         order: vec![],
         limit: Limit::None,
+        offset: Offset::None,
+        ctes: vec![],
     }
 }
 
@@ -347,6 +349,7 @@ fn cc_to_select_query(
     group_by: Vec<GroupBy>,
     order: Option<Vec<OrderBy>>,
     limit: Limit,
+    offset: Offset,
 ) -> SelectQuery {
     let from = if cc.from.is_empty() {
         FromClause::Nothing
@@ -376,6 +379,11 @@ fn cc_to_select_query(
     } else {
         limit
     };
+    let offset = if cc.empty_because.is_some() {
+        Offset::None
+    } else {
+        offset
+    };
     SelectQuery {
         distinct,
         projection,
@@ -384,6 +392,8 @@ fn cc_to_select_query(
         constraints: cc.wheres.into_iter().map(|c| c.to_constraint()).collect(),
         order,
         limit,
+        offset,
+        ctes: vec![],
     }
 }
 
@@ -394,7 +404,7 @@ pub fn cc_to_exists(cc: ConjoiningClauses) -> SelectQuery {
         // In this case we can produce a very simple query that returns no results.
         empty_query()
     } else {
-        cc_to_select_query(Projection::One, cc, false, vec![], None, Limit::None)
+        cc_to_select_query(Projection::One, cc, false, vec![], None, Limit::None, Offset::None)
     }
 }
 
@@ -410,6 +420,8 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
     inner.order = vec![];
     let limit = inner.limit;
     inner.limit = Limit::None;
+    let offset = inner.offset;
+    inner.offset = Offset::None;
 
     use self::Projection::*;
 
@@ -440,6 +452,8 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
             group_by,
             order: order_by,
             limit,
+            offset,
+            ctes: vec![],
         };
     }
 
@@ -459,6 +473,8 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
             &Limit::Fixed(_) | &Limit::Variable(_) => order_by.clone(),
         },
         limit,
+        offset,
+        ctes: vec![],
     };
 
     SelectQuery {
@@ -471,6 +487,8 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
         group_by: vec![],
         order: order_by,
         limit: Limit::None, // Any limiting comes from the internal query.
+        offset: Offset::None, // Any offset comes from the internal query.
+        ctes: vec![],
     }
 }
 
@@ -485,9 +503,11 @@ pub fn query_to_select(schema: &Schema, query: AlgebraicQuery) -> Result<Project
             sql_projection,
             pre_aggregate_projection,
             datalog_projector,
-            distinct,
+            distinct: auto_distinct,
             group_by_cols,
         }) => {
+            // If the user explicitly requested `:distinct`, use that; otherwise use the automatic determination.
+            let distinct = if query.distinct { true } else { auto_distinct };
             ProjectedSelect::Query {
                 query: match pre_aggregate_projection {
                     // If we know we need a nested query for aggregation, build that first.
@@ -499,6 +519,7 @@ pub fn query_to_select(schema: &Schema, query: AlgebraicQuery) -> Result<Project
                             group_by_cols,
                             query.order,
                             query.limit,
+                            query.offset,
                         );
                         Box::new(re_project(inner, sql_projection)) // outer
                     }
@@ -509,6 +530,7 @@ pub fn query_to_select(schema: &Schema, query: AlgebraicQuery) -> Result<Project
                         group_by_cols,
                         query.order,
                         query.limit,
+                        query.offset,
                     )),
                 },
                 projector: datalog_projector,
