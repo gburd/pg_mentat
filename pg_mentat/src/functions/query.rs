@@ -1401,13 +1401,14 @@ fn build_rule_ctes(
         ));
 
         // Bind invocation arguments to CTE columns
-        // The invocation (ancestor ?anc ?desc) binds ?anc -> rule_name.col0, ?desc -> rule_name.col1
+        // The invocation (ancestor ?anc ?desc) binds ?anc -> ancestor.col0, ?desc -> ancestor.col1
+        static CTE_COLS: [&str; 8] = ["col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7"];
         for (i, arg) in invocation.args.iter().enumerate() {
             if let FnArg::Variable(v) = arg {
-                let var_name = format!("{}", v);
-                let alias = rule_name.to_string();
-                let col_name = format!("col{}", i);
-                var_to_col.insert(var_name, (alias.clone(), Box::leak(col_name.into_boxed_str())));
+                if i < CTE_COLS.len() {
+                    let var_name = format!("{}", v);
+                    var_to_col.insert(var_name, (rule_name.to_string(), CTE_COLS[i]));
+                }
             }
         }
 
@@ -1432,7 +1433,7 @@ fn build_rule_ctes(
 /// recursive rule invocations).
 fn build_rule_clause_sql(
     clause: &edn::query::RuleClause,
-    cte_cols: &[String],
+    _cte_cols: &[String],
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     rule_name: &str,
