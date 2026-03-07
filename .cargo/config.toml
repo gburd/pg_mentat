@@ -1,3 +1,0 @@
-[alias]
-cli = ["run", "--release", "-p", "mentat_cli"]
-debugcli = ["run", "-p", "mentat_cli"]

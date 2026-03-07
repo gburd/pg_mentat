@@ -94,3 +94,13 @@ build.xcarchive
 docs/_site
 docs/.sass-cache
 docs/.jekyll-metadata
+
+# Nix
+result
+result-*
+.direnv/
+.envrc.cache
+
+# pg_mentat development
+.cargo/
+.postgres-data/
