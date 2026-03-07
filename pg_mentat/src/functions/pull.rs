@@ -17,7 +17,7 @@ use serde_json::json;
 ///
 /// The special pattern `[*]` pulls all attributes for the entity.
 #[pg_extern]
-fn mentat_pull(
+pub fn mentat_pull(
     pattern: &str,
     entity_id: i64,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {

@@ -97,7 +97,7 @@ fn parse_temporal_options(inputs: &serde_json::Value) -> TemporalOption {
 /// - `{"since": <tx_id>}` - return datoms since transaction tx_id
 /// - `{"history": true}` - return all datom versions including retractions
 #[pg_extern]
-fn mentat_query(
+pub fn mentat_query(
     query: &str,
     inputs: JsonB,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {

@@ -92,7 +92,7 @@ fn keyword_to_unique(kw: &edn::symbols::Keyword) -> Option<&'static str> {
 ///   Install: Write new schema to mentat.schema and mentat.idents
 ///   Pass 2: Parse all assertions using the now-resolvable idents, insert datoms
 #[pg_extern]
-fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Parse EDN transaction
     let value_and_span = parse::value(edn_tx)?;
     let value = value_and_span.without_spans();

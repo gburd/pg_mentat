@@ -21,7 +21,7 @@ use serde_json::json;
 /// }
 /// ```
 #[pg_extern]
-fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+pub fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let mut schema_map = serde_json::Map::new();
 
     Spi::connect(|client| {

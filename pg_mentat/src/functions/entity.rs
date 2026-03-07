@@ -14,7 +14,7 @@ use serde_json::json;
 /// }
 /// ```
 #[pg_extern]
-fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let mut entity_map = serde_json::Map::new();
 
     // Always include the entity ID
