@@ -20,7 +20,10 @@ async fn main() -> anyhow::Result<()> {
     info!("Starting mentatd server");
     info!("Configuration:");
     info!("  Server: {}:{}", config.server.host, config.server.port);
-    info!("  Database: {}", mask_connection_string(&config.database.connection_string));
+    info!(
+        "  Database: {}",
+        mask_connection_string(&config.database.connection_string)
+    );
     info!("  Pool size: {}", config.database.pool_size);
 
     let pool = create_pool(
@@ -47,7 +50,10 @@ async fn main() -> anyhow::Result<()> {
         })?
         .get(0);
 
-    info!("Connected to PostgreSQL: {}", version.lines().next().unwrap_or("unknown"));
+    info!(
+        "Connected to PostgreSQL: {}",
+        version.lines().next().unwrap_or("unknown")
+    );
 
     let state = AppState::new(pool, config.clone());
     let app = create_router(state);
@@ -82,8 +88,7 @@ fn load_config() -> anyhow::Result<Config> {
 }
 
 fn init_logging(level: &str, format: &str) {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter(filter)

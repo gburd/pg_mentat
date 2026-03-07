@@ -77,7 +77,8 @@ impl TestClient {
 
     pub async fn get(&self, path: &str) -> TestResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .send()
             .await
@@ -100,7 +101,8 @@ impl TestClient {
 
     pub async fn post(&self, path: &str, body: &str) -> TestResponse {
         let url = format!("{}{}", self.base_url, path);
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Content-Type", "application/edn")
             .body(body.to_string())

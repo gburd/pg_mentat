@@ -49,7 +49,10 @@ pub fn parse_request(input: &str) -> Result<Request, ParseError> {
     Ok(Request { op })
 }
 
-fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>) -> Result<Operation, ParseError> {
+fn parse_operation(
+    op_value: &ValueAndSpan,
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+) -> Result<Operation, ParseError> {
     let op_keyword = match &op_value.inner {
         SpannedValue::Keyword(k) => k,
         _ => return Err(ParseError::InvalidType("op must be a keyword".to_string())),
@@ -75,10 +78,12 @@ fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<Val
 
         "db" => {
             let conn_id = extract_string_arg(map, "connection-id")?;
-            let uuid = conn_id
-                .parse()
-                .map_err(|_| ParseError::InvalidType("connection-id must be valid UUID".to_string()))?;
-            Ok(Operation::Db { connection_id: uuid })
+            let uuid = conn_id.parse().map_err(|_| {
+                ParseError::InvalidType("connection-id must be valid UUID".to_string())
+            })?;
+            Ok(Operation::Db {
+                connection_id: uuid,
+            })
         }
 
         "q" => {
@@ -101,7 +106,9 @@ fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<Val
 
             let args = match args_map.get(&args_key) {
                 Some(v) => match &v.inner {
-                    SpannedValue::Vector(vec) => vec.iter().map(|arg| format!("{:?}", arg.inner)).collect(),
+                    SpannedValue::Vector(vec) => {
+                        vec.iter().map(|arg| format!("{:?}", arg.inner)).collect()
+                    }
                     _ => Vec::new(),
                 },
                 _ => Vec::new(),
@@ -111,7 +118,13 @@ fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<Val
             let limit = extract_optional_int(&args_map, "limit").map(|i| i as usize);
             let offset = extract_optional_int(&args_map, "offset").map(|i| i as usize);
 
-            Ok(Operation::Query { query, args, timeout, limit, offset })
+            Ok(Operation::Query {
+                query,
+                args,
+                timeout,
+                limit,
+                offset,
+            })
         }
 
         "transact" => {
@@ -140,7 +153,10 @@ fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<Val
                 None => return Err(ParseError::MissingField("tx-data".to_string())),
             };
 
-            Ok(Operation::Transact { connection_id, tx_data })
+            Ok(Operation::Transact {
+                connection_id,
+                tx_data,
+            })
         }
 
         "health" => Ok(Operation::Health),
@@ -149,7 +165,9 @@ fn parse_operation(op_value: &ValueAndSpan, map: &std::collections::BTreeMap<Val
     }
 }
 
-fn extract_args_map(map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>) -> Result<std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, ParseError> {
+fn extract_args_map(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+) -> Result<std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, ParseError> {
     let args_key = ValueAndSpan {
         inner: SpannedValue::Keyword(Keyword::plain("args")),
         span: edn::types::Span::new(0, 0),
@@ -163,7 +181,10 @@ fn extract_args_map(map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>
     }
 }
 
-fn extract_string_arg(map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, key: &str) -> Result<String, ParseError> {
+fn extract_string_arg(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Result<String, ParseError> {
     let args_map = extract_args_map(map)?;
     let key_value = ValueAndSpan {
         inner: SpannedValue::Keyword(Keyword::plain(key)),
@@ -178,16 +199,18 @@ fn extract_string_arg(map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpa
     }
 }
 
-fn extract_optional_int(map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, key: &str) -> Option<i64> {
+fn extract_optional_int(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Option<i64> {
     let key_value = ValueAndSpan {
         inner: SpannedValue::Keyword(Keyword::plain(key)),
         span: edn::types::Span::new(0, 0),
     };
-    map.get(&key_value)
-        .and_then(|v| match &v.inner {
-            SpannedValue::Integer(i) => Some(*i),
-            _ => None,
-        })
+    map.get(&key_value).and_then(|v| match &v.inner {
+        SpannedValue::Integer(i) => Some(*i),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -200,7 +223,7 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Health => {},
+            Operation::Health => {}
             _ => panic!("Expected Health operation"),
         }
     }
@@ -211,7 +234,7 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::ListDatabases => {},
+            Operation::ListDatabases => {}
             _ => panic!("Expected ListDatabases operation"),
         }
     }

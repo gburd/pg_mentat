@@ -28,9 +28,9 @@ pub fn create_pool(connection_string: &str, max_size: usize) -> Result<DbPool, P
     });
     pool_config.port = config.get_ports().first().copied();
     pool_config.user = config.get_user().map(String::from);
-    pool_config.password = config.get_password().map(|p| {
-        String::from_utf8(p.to_vec()).unwrap_or_default()
-    });
+    pool_config.password = config
+        .get_password()
+        .map(|p| String::from_utf8(p.to_vec()).unwrap_or_default());
 
     let mut manager_config = tokio_postgres::Config::new();
     if let Some(dbname) = &pool_config.dbname {

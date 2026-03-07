@@ -55,13 +55,15 @@ fn serialize_anomaly(anomaly: &Anomaly) -> String {
         output,
         ":cognitect.anomalies/category {} ",
         anomaly.category.as_keyword()
-    ).ok();
+    )
+    .ok();
 
     write!(
         output,
         r#":cognitect.anomalies/message "{}""#,
         escape_string(&anomaly.message)
-    ).ok();
+    )
+    .ok();
 
     if let Some(db_error) = &anomaly.db_error {
         write!(output, " :db/error :{}", db_error).ok();
@@ -106,10 +108,7 @@ mod tests {
     #[test]
     fn test_serialize_list() {
         let response = Response::Success {
-            result: ResponseValue::List(vec![
-                "db1".to_string(),
-                "db2".to_string(),
-            ]),
+            result: ResponseValue::List(vec!["db1".to_string(), "db2".to_string()]),
         };
         let output = serialize_response(&response);
         assert_eq!(output, r#"{:result ["db1" "db2"]}"#);

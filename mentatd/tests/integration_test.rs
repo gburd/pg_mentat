@@ -215,7 +215,10 @@ async fn test_connect_nonexistent_database() {
 async fn test_create_and_delete_database() {
     let server = TestServer::start().await;
 
-    let db_name = format!("test_db_{}", uuid::Uuid::new_v4().to_string().replace('-', "_"));
+    let db_name = format!(
+        "test_db_{}",
+        uuid::Uuid::new_v4().to_string().replace('-', "_")
+    );
 
     // Create database
     let create_request = format!(r#"{{:op :create-db :args {{:db-name "{}"}}}}"#, db_name);
