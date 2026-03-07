@@ -516,6 +516,7 @@ fn build_sql_from_datalog(
                 &parsed.find_spec,
                 &mut arm_builder,
                 temporal,
+                &rule_cte_info,
             )?;
 
             let offset = builder.params.len();
@@ -775,7 +776,7 @@ fn remap_param_indices(sql: &str, offset: usize) -> String {
 // Extended pattern query builder (supports NOT, predicates, aggregates, FTS, temporal)
 // ============================================================================
 
-/// Build a SQL query from patterns plus NOT, predicates, FTS, aggregates, and temporal.
+/// Build a SQL query from patterns plus NOT, predicates, FTS, aggregates, temporal, and rules.
 fn build_extended_pattern_query(
     patterns: &[&edn::query::Pattern],
     not_joins: &[&edn::query::NotJoin],
@@ -786,11 +787,20 @@ fn build_extended_pattern_query(
     find_spec: &FindSpec,
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
+    rule_cte_info: &Option<RuleCteInfo>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Track variable bindings to datom table aliases
     let mut var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
     let mut joins = Vec::new();
     let mut where_clauses = Vec::new();
+
+    // Pre-populate var_to_alias with rule CTE bindings
+    if let Some(ref cte_info) = rule_cte_info {
+        joins.push(cte_info.from_fragment.clone());
+        for (var_name, (alias, col)) in &cte_info.var_to_col {
+            var_to_alias.insert(var_name.clone(), (alias.clone(), col));
+        }
+    }
 
     for (idx, pattern) in patterns.iter().enumerate() {
         let alias = format!("datoms{}", idx);
@@ -1325,20 +1335,28 @@ fn pred_arg_to_sql(
 // Rule CTE builder
 // ============================================================================
 
+/// Information about a rule CTE needed to join it into the main query.
+struct RuleCteInfo {
+    /// FROM fragment, e.g., "ancestor"
+    from_fragment: String,
+    /// Map of variable name to (alias, column_name) for var_to_alias
+    var_to_col: HashMap<String, (String, &'static str)>,
+}
+
 /// Build WITH RECURSIVE CTE(s) from rule definitions and invocations.
 ///
 /// Returns:
 /// - The CTE prefix string (e.g., "WITH RECURSIVE rule_name(col1, col2) AS (...)")
-/// - A map of variable names to SQL expressions for binding rule results
-///   into the main query's find variables.
+/// - A RuleCteInfo for joining the CTE into the main query
 fn build_rule_ctes(
     rules: &[Rule],
     invocations: &[&RuleInvocation],
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
-) -> Result<(String, HashMap<String, String>), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, RuleCteInfo), Box<dyn std::error::Error + Send + Sync>> {
     let mut cte_parts = Vec::new();
-    let mut var_bindings: HashMap<String, String> = HashMap::new();
+    let mut var_to_col: HashMap<String, (String, &'static str)> = HashMap::new();
+    let mut cte_table_name = String::new();
 
     for invocation in invocations {
         let rule_name = invocation.name.0.as_str();
@@ -1387,16 +1405,25 @@ fn build_rule_ctes(
         for (i, arg) in invocation.args.iter().enumerate() {
             if let FnArg::Variable(v) = arg {
                 let var_name = format!("{}", v);
-                let col_name = format!("{}.col{}::TEXT", rule_name, i);
-                var_bindings.insert(var_name, col_name);
+                let alias = rule_name.to_string();
+                let col_name = format!("col{}", i);
+                var_to_col.insert(var_name, (alias.clone(), Box::leak(col_name.into_boxed_str())));
             }
         }
+
+        // Store the CTE table name for the FROM fragment
+        cte_table_name = rule_name.to_string();
     }
 
     // Join all CTEs (in practice we only support one CTE for now)
     let cte_sql = cte_parts.join(", ");
 
-    Ok((cte_sql, var_bindings))
+    let cte_info = RuleCteInfo {
+        from_fragment: cte_table_name,
+        var_to_col,
+    };
+
+    Ok((cte_sql, cte_info))
 }
 
 /// Build SQL for a single rule clause body.
