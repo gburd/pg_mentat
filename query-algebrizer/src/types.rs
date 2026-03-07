@@ -15,7 +15,9 @@ use core_traits::{Entid, TypedValue, ValueType, ValueTypeSet};
 
 use mentat_core::ValueRc;
 
-use edn::query::{Direction, FindSpec, Keyword, Limit, Offset, Order, SrcVar, Variable, WhereClause};
+use edn::query::{
+    Direction, FindSpec, Keyword, Limit, Offset, Order, SrcVar, Variable, WhereClause,
+};
 
 /// This enum models the fixed set of default tables we have -- two
 /// tables and two views -- and computed tables defined in the enclosing CC.

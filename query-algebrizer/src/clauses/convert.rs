@@ -79,9 +79,7 @@ impl ValueTypes for FnArg {
             FnArg::Constant(NonIntegerConstant::Float(_)) => {
                 ValueTypeSet::of_one(ValueType::Double)
             }
-            FnArg::Constant(NonIntegerConstant::Text(_)) => {
-                ValueTypeSet::of_one(ValueType::String)
-            }
+            FnArg::Constant(NonIntegerConstant::Text(_)) => ValueTypeSet::of_one(ValueType::String),
         })
     }
 }

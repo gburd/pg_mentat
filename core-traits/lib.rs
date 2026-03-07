@@ -723,7 +723,10 @@ impl MicrosecondPrecision for DateTime<Utc> {
         }
         let microseconds = nanoseconds / 1000;
         let truncated = microseconds * 1000;
-        #[expect(clippy::expect_used, reason = "timestamp truncation to microseconds should always produce valid values")]
+        #[expect(
+            clippy::expect_used,
+            reason = "timestamp truncation to microseconds should always produce valid values"
+        )]
         self.with_nanosecond(truncated).expect("valid timestamp")
     }
 }

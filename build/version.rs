@@ -21,12 +21,21 @@ static MIN_VERSION: &str = "1.69.0";
 fn main() {
     // Build scripts legitimately panic on critical errors during build-time checks.
     // There's no reasonable recovery path when rustc version is missing or invalid.
-    #[expect(clippy::expect_used, reason = "build script fails fast on invalid environment")]
+    #[expect(
+        clippy::expect_used,
+        reason = "build script fails fast on invalid environment"
+    )]
     let ver = version().expect("Failed to get rustc version");
-    #[expect(clippy::expect_used, reason = "MIN_VERSION is a static string, should never fail")]
+    #[expect(
+        clippy::expect_used,
+        reason = "MIN_VERSION is a static string, should never fail"
+    )]
     let min = Version::parse(MIN_VERSION).expect("Failed to parse MIN_VERSION");
     if ver < min {
-        #[expect(clippy::expect_used, reason = "if stderr write fails during build, panic is appropriate")]
+        #[expect(
+            clippy::expect_used,
+            reason = "if stderr write fails during build, panic is appropriate"
+        )]
         writeln!(
             &mut io::stderr(),
             "Mentat requires rustc {MIN_VERSION} or higher, you were using version {ver}."

@@ -58,7 +58,6 @@ use std::sync::Arc;
 
 use std::iter::Peekable;
 
-
 use rusqlite;
 use rusqlite::params_from_iter;
 

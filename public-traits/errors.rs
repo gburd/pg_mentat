@@ -61,13 +61,17 @@ pub enum MentatError {
 
     #[error(
         "vocabulary {}/version {} already has attribute {}, and the requested definition differs",
-        _0, 1, 2
+        _0,
+        1,
+        2
     )]
     ConflictingAttributeDefinitions(String, u32, String, Attribute, Attribute),
 
     #[error(
         "existing vocabulary {} too new: wanted version {}, got version {}",
-        _0, 1, 2
+        _0,
+        1,
+        2
     )]
     ExistingVocabularyTooNew(String, u32, u32),
 
@@ -85,7 +89,8 @@ pub enum MentatError {
 
     #[error(
         "provided value of type {} doesn't match attribute value type {}",
-        _0, 1
+        _0,
+        1
     )]
     ValueTypeMismatch(ValueType, ValueType),
 

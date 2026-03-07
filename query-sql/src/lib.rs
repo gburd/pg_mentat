@@ -589,9 +589,7 @@ impl QueryFragment for CommonTableExpression {
 
         if !self.column_names.is_empty() {
             out.push_sql(" (");
-            interpose!(name, self.column_names, {
-                out.push_identifier(name)?
-            }, {
+            interpose!(name, self.column_names, { out.push_identifier(name)? }, {
                 out.push_sql(", ")
             });
             out.push_sql(")");
@@ -616,9 +614,7 @@ impl QueryFragment for SelectQuery {
                 out.push_sql("RECURSIVE ");
             }
 
-            interpose!(cte, self.ctes, {
-                cte.push_sql(out)?
-            }, {
+            interpose!(cte, self.ctes, { cte.push_sql(out)? }, {
                 out.push_sql(", ")
             });
             out.push_sql(" ");

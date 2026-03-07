@@ -31,10 +31,7 @@ pub enum ProjectorError {
     #[error("no possible types for value provided to {:?}", 0)]
     CannotProjectImpossibleBinding(SimpleAggregationOp),
 
-    #[error(
-        "cannot apply projection operation {:?} to types {:?}",
-        _0, 1
-    )]
+    #[error("cannot apply projection operation {:?} to types {:?}", _0, 1)]
     CannotApplyAggregateOperationToTypes(SimpleAggregationOp, ValueTypeSet),
 
     #[error("invalid projection: {0}")]
@@ -49,10 +46,7 @@ pub enum ProjectorError {
     #[error("expected {0}, got {1}")]
     UnexpectedResultsType(&'static str, &'static str),
 
-    #[error(
-        "expected tuple of length {}, got tuple of length {}",
-        _0, 1
-    )]
+    #[error("expected tuple of length {}, got tuple of length {}", _0, 1)]
     UnexpectedResultsTupleLength(usize, usize),
 
     #[error("min/max expressions: {0} (max 1), corresponding: {1}")]
@@ -75,5 +69,3 @@ impl From<rusqlite::Error> for ProjectorError {
         ProjectorError::RusqliteError(error.to_string())
     }
 }
-
-

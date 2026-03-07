@@ -404,7 +404,15 @@ pub fn cc_to_exists(cc: ConjoiningClauses) -> SelectQuery {
         // In this case we can produce a very simple query that returns no results.
         empty_query()
     } else {
-        cc_to_select_query(Projection::One, cc, false, vec![], None, Limit::None, Offset::None)
+        cc_to_select_query(
+            Projection::One,
+            cc,
+            false,
+            vec![],
+            None,
+            Limit::None,
+            Offset::None,
+        )
     }
 }
 
@@ -486,7 +494,7 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
         constraints: nullable,
         group_by: vec![],
         order: order_by,
-        limit: Limit::None, // Any limiting comes from the internal query.
+        limit: Limit::None,   // Any limiting comes from the internal query.
         offset: Offset::None, // Any offset comes from the internal query.
         ctes: vec![],
     }

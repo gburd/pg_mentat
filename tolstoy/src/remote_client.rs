@@ -10,11 +10,11 @@
 
 #![allow(dead_code)]
 
-use hyper::{header, Method, Request, StatusCode};
-use hyper_util::client::legacy::Client;
-use hyper_tls::HttpsConnector;
-use http_body_util::{BodyExt, Full};
 use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::{header, Method, Request, StatusCode};
+use hyper_tls::HttpsConnector;
+use hyper_util::client::legacy::Client;
 // TODO: https://github.com/mozilla/mentat/issues/570
 // use serde_cbor;
 use futures::executor::block_on;
@@ -75,7 +75,8 @@ impl RemoteClient {
     // or somesuch. But for now, we get code duplication.
     fn get_uuid(&self, uri: String) -> Result<Uuid> {
         let https = HttpsConnector::new();
-        let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
+        let client =
+            Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
 
         d(&"client".to_string());
 
@@ -99,7 +100,8 @@ impl RemoteClient {
 
     fn put(&self, uri: String, payload: String, expected: StatusCode) -> Result<()> {
         let https = HttpsConnector::new();
-        let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
+        let client =
+            Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
 
         d(&format!("PUT {:?}", uri));
 
@@ -124,7 +126,8 @@ impl RemoteClient {
 
     fn get_transactions(&self, parent_uuid: &Uuid) -> Result<Vec<Uuid>> {
         let https = HttpsConnector::new();
-        let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
+        let client =
+            Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
 
         d(&"client".to_string());
 
@@ -154,7 +157,8 @@ impl RemoteClient {
 
     fn get_chunks(&self, transaction_uuid: &Uuid) -> Result<Vec<Uuid>> {
         let https = HttpsConnector::new();
-        let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
+        let client =
+            Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
 
         d(&"client".to_string());
 
@@ -185,7 +189,8 @@ impl RemoteClient {
 
     fn get_chunk(&self, chunk_uuid: &Uuid) -> Result<TxPart> {
         let https = HttpsConnector::new();
-        let client = Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
+        let client =
+            Client::builder(hyper_util::rt::TokioExecutor::new()).build::<_, Full<Bytes>>(https);
 
         d(&"client".to_string());
 

@@ -18,7 +18,6 @@ use self::InputResult::*;
 
 use crate::command_parser::{command, Command};
 
-
 /// Starting prompt
 const DEFAULT_PROMPT: &str = "mentat=> ";
 /// Prompt when further input is being read

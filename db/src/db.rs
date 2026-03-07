@@ -10,7 +10,6 @@
 
 #![allow(dead_code)]
 
-
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::iter::{once, repeat};
@@ -1870,13 +1869,19 @@ mod tests {
     #[test]
     fn test_sqlite_limit() {
         let conn = new_connection("").expect("Couldn't open in-memory db");
-        let initial = conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER).expect("Failed to get limit");
+        let initial = conn
+            .limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)
+            .expect("Failed to get limit");
         // Sanity check.
         assert!(initial > 500);
 
         // Make sure setting works.
         let _ = conn.set_limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER, 222);
-        assert_eq!(222, conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER).expect("Failed to get limit"));
+        assert_eq!(
+            222,
+            conn.limit(Limit::SQLITE_LIMIT_VARIABLE_NUMBER)
+                .expect("Failed to get limit")
+        );
     }
 
     #[test]

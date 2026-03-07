@@ -96,10 +96,7 @@ fn test_failing_scalar() {
         panic!("Expected failed scalar.");
     }
 
-    println!(
-        "Failing scalar took {}µs",
-        (end - start).as_micros()
-    );
+    println!("Failing scalar took {}µs", (end - start).as_micros());
 }
 
 #[test]

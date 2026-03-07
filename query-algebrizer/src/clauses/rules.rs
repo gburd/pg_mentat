@@ -123,7 +123,14 @@ pub fn expand_rule_invocation(
     // Multiple clauses are treated as OR
     if clauses.len() == 1 {
         // Single clause - expand inline
-        expand_rule_clause(known, cc, &clauses[0], invocation, rule_env, expansion_stack)?;
+        expand_rule_clause(
+            known,
+            cc,
+            &clauses[0],
+            invocation,
+            rule_env,
+            expansion_stack,
+        )?;
     } else {
         // Multiple clauses - create an OR join
         expand_rule_clauses_as_or(known, cc, clauses, invocation, rule_env, expansion_stack)?;
@@ -209,9 +216,9 @@ fn substitute_variables(
                 .args
                 .iter()
                 .map(|arg| match arg {
-                    edn::query::FnArg::Variable(v) => edn::query::FnArg::Variable(
-                        substitutions.get(v).unwrap_or(v).clone(),
-                    ),
+                    edn::query::FnArg::Variable(v) => {
+                        edn::query::FnArg::Variable(substitutions.get(v).unwrap_or(v).clone())
+                    }
                     other => other.clone(),
                 })
                 .collect();
@@ -315,7 +322,10 @@ fn expand_recursive_rule(
     cc: &mut ConjoiningClauses,
     invocation: &RuleInvocation,
     rule_env: &RuleEnvironment,
-    #[expect(clippy::ptr_arg, reason = "needs Vec for compatibility with called functions")]
+    #[expect(
+        clippy::ptr_arg,
+        reason = "needs Vec for compatibility with called functions"
+    )]
     expansion_stack: &mut Vec<PlainSymbol>,
 ) -> Result<()> {
     // For recursive rules, we need to generate a WITH RECURSIVE CTE
@@ -355,11 +365,25 @@ fn expand_recursive_rule(
     // Expand base cases normally
     if base_clauses.len() == 1 {
         let mut temp_stack: Vec<PlainSymbol> = expansion_stack.to_vec();
-        expand_rule_clause(known, cc, &base_clauses[0], invocation, rule_env, &mut temp_stack)?;
+        expand_rule_clause(
+            known,
+            cc,
+            &base_clauses[0],
+            invocation,
+            rule_env,
+            &mut temp_stack,
+        )?;
     } else {
         // Multiple base cases - treat as OR
         let mut temp_stack: Vec<PlainSymbol> = expansion_stack.to_vec();
-        expand_rule_clauses_as_or(known, cc, &base_clauses, invocation, rule_env, &mut temp_stack)?;
+        expand_rule_clauses_as_or(
+            known,
+            cc,
+            &base_clauses,
+            invocation,
+            rule_env,
+            &mut temp_stack,
+        )?;
     }
 
     // For recursive cases, we would ideally generate a CTE

@@ -16,7 +16,6 @@ use crate::CliError;
 
 use edn;
 
-
 use combine::error::StringStreamError;
 use mentat::CacheDirection;
 

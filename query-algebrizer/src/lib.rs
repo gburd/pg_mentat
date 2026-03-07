@@ -34,7 +34,9 @@ use mentat_core::{parse_query, CachedAttributes, Schema};
 
 use mentat_core::counter::RcCounter;
 
-use edn::query::{Element, FindSpec, Limit, Offset, Order, ParsedQuery, SrcVar, Variable, WhereClause};
+use edn::query::{
+    Element, FindSpec, Limit, Offset, Order, ParsedQuery, SrcVar, Variable, WhereClause,
+};
 
 use query_algebrizer_traits::errors::{AlgebrizerError, Result};
 

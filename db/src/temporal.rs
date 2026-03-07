@@ -150,11 +150,11 @@ pub fn query_temporal_datoms(
     let mut stmt = conn.prepare(&query)?;
     let rows = stmt.query_map(rusqlite::params![], |row| {
         Ok((
-            row.get(0)?, // e
-            row.get(1)?, // a
-            row.get(2)?, // v
-            row.get(3)?, // value_type_tag
-            row.get(4)?, // tx
+            row.get(0)?,               // e
+            row.get(1)?,               // a
+            row.get(2)?,               // v
+            row.get(3)?,               // value_type_tag
+            row.get(4)?,               // tx
             row.get::<_, i8>(5)? != 0, // added (convert TINYINT to bool)
         ))
     })?;

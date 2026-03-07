@@ -27,5 +27,3 @@ pub enum PullError {
     #[error(transparent)]
     DbError(#[from] DbError),
 }
-
-

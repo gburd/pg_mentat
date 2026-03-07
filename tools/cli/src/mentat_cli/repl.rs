@@ -10,7 +10,6 @@
 
 use std::io::Write;
 
-
 use linefeed::Interface;
 
 use tabwriter::TabWriter;

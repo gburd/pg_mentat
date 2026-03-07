@@ -190,7 +190,7 @@ mod tests {
         let set_with_long = set.with(ValueType::Long);
         assert!(set_with_long.contains(&ValueType::Long));
         assert!(!set.contains(&ValueType::Long)); // Original unchanged
-        
+
         let both = EnumSet::of_both(ValueType::Long, ValueType::String);
         assert!(both.contains(&ValueType::Long));
         assert!(both.contains(&ValueType::String));

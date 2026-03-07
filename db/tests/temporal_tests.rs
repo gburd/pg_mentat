@@ -19,7 +19,7 @@ extern crate log;
 use std::borrow::Borrow;
 
 use mentat_db::debug::TestConn;
-use mentat_db::temporal::{TemporalDB, TemporalFilter, materialize_as_of, query_temporal_datoms};
+use mentat_db::temporal::{materialize_as_of, query_temporal_datoms, TemporalDB, TemporalFilter};
 use mentat_db::types::DB;
 
 #[test]
@@ -36,10 +36,7 @@ fn test_as_of_single_transaction() {
     let tx1 = report1.tx_id;
 
     // Verify current state
-    assert_matches!(
-        conn.datoms(),
-        r#"[[37 :db/doc "initial doc"]]"#
-    );
+    assert_matches!(conn.datoms(), r#"[[37 :db/doc "initial doc"]]"#);
 
     // Now update the value
     let t2 = r#"
@@ -50,10 +47,7 @@ fn test_as_of_single_transaction() {
     let tx2 = report2.tx_id;
 
     // Verify updated state
-    assert_matches!(
-        conn.datoms(),
-        r#"[[37 :db/doc "updated doc"]]"#
-    );
+    assert_matches!(conn.datoms(), r#"[[37 :db/doc "updated doc"]]"#);
 
     // Query as-of tx1 should show initial value
     let db = DB::new(conn.partition_map.clone(), conn.schema.clone());
@@ -61,15 +55,15 @@ fn test_as_of_single_transaction() {
     let datoms = materialize_as_of(&conn.sqlite, tx1).expect("as-of query failed");
 
     // Should have the initial value
-    assert!(datoms.iter().any(|(e, a, v, _, tx)| {
-        *e == 37 && *tx <= tx1
-    }));
+    assert!(datoms
+        .iter()
+        .any(|(e, a, v, _, tx)| { *e == 37 && *tx <= tx1 }));
 
     // Query as-of tx2 should show updated value
     let datoms_tx2 = materialize_as_of(&conn.sqlite, tx2).expect("as-of query failed");
-    assert!(datoms_tx2.iter().any(|(e, a, v, _, tx)| {
-        *e == 37 && *tx <= tx2
-    }));
+    assert!(datoms_tx2
+        .iter()
+        .any(|(e, a, v, _, tx)| { *e == 37 && *tx <= tx2 }));
 }
 
 #[test]
@@ -102,7 +96,10 @@ fn test_since_shows_only_recent_changes() {
     let has_alice = datoms.iter().any(|(_, _, _, _, tx, _)| *tx == tx1);
 
     assert!(has_bob, "Should include Bob from tx2");
-    assert!(!has_alice, "Should NOT include Alice from tx1 (since is exclusive)");
+    assert!(
+        !has_alice,
+        "Should NOT include Alice from tx1 (since is exclusive)"
+    );
 }
 
 #[test]
@@ -170,7 +167,10 @@ fn test_as_of_with_retractions() {
     // Count current tags (should be 2)
     let current_datoms = conn.datoms();
     let tag_count_initial = current_datoms.0.len() - 3; // Subtract schema attributes
-    assert!(tag_count_initial >= 2, "Should have at least 2 tags initially");
+    assert!(
+        tag_count_initial >= 2,
+        "Should have at least 2 tags initially"
+    );
 
     // Retract one tag using entity ID 65537 (the first user entity)
     assert_transact!(conn, r#"[[:db/retract 65537 :item/tag "rust"]]"#);
@@ -179,17 +179,23 @@ fn test_as_of_with_retractions() {
     // Current state should have fewer tags
     let current_datoms_after = conn.datoms();
     let tag_count_after = current_datoms_after.0.len() - 3; // Subtract schema attributes
-    assert_eq!(tag_count_after, tag_count_initial - 1, "Should have 1 less tag after retraction");
+    assert_eq!(
+        tag_count_after,
+        tag_count_initial - 1,
+        "Should have 1 less tag after retraction"
+    );
 
     // Query as-of tx1 - should have both tag values
     let datoms_tx1 = materialize_as_of(&conn.sqlite, tx1).expect("as-of query failed");
-    let tags_tx1: Vec<_> = datoms_tx1.iter()
+    let tags_tx1: Vec<_> = datoms_tx1
+        .iter()
         .filter(|(e, _, _, _, _)| *e == 65537)
         .collect();
 
     // Query as-of tx2 - should have only one tag value
     let datoms_tx2 = materialize_as_of(&conn.sqlite, tx2).expect("as-of query failed");
-    let tags_tx2: Vec<_> = datoms_tx2.iter()
+    let tags_tx2: Vec<_> = datoms_tx2
+        .iter()
         .filter(|(e, _, _, _, _)| *e == 65537)
         .collect();
 
@@ -200,12 +206,12 @@ fn test_as_of_with_retractions() {
     assert_eq!(tags_tx2.len(), 1, "Should have 1 tag at tx2");
 
     // Verify the retracted tag is not present at tx2
-    let has_rust_tx1 = tags_tx1.iter().any(|(_, _, v, _, _)| {
-        matches!(v, rusqlite::types::Value::Text(ref s) if s == "rust")
-    });
-    let has_rust_tx2 = tags_tx2.iter().any(|(_, _, v, _, _)| {
-        matches!(v, rusqlite::types::Value::Text(ref s) if s == "rust")
-    });
+    let has_rust_tx1 = tags_tx1
+        .iter()
+        .any(|(_, _, v, _, _)| matches!(v, rusqlite::types::Value::Text(ref s) if s == "rust"));
+    let has_rust_tx2 = tags_tx2
+        .iter()
+        .any(|(_, _, v, _, _)| matches!(v, rusqlite::types::Value::Text(ref s) if s == "rust"));
 
     assert!(has_rust_tx1, "Should have 'rust' tag at tx1");
     assert!(!has_rust_tx2, "Should NOT have 'rust' tag at tx2");
@@ -217,10 +223,7 @@ fn test_as_of_before_first_transaction() {
     conn.sanitized_partition_map();
 
     // Add data
-    assert_transact!(
-        conn,
-        r#"[{:db/id :db/doc :db/doc "some doc"}]"#
-    );
+    assert_transact!(conn, r#"[{:db/id :db/doc :db/doc "some doc"}]"#);
     let tx1 = conn.last_tx_id();
 
     // Query as-of before any transactions should return empty
@@ -228,7 +231,10 @@ fn test_as_of_before_first_transaction() {
 
     // Should not include our entity (only bootstrap schema entities)
     let has_our_entity = datoms.iter().any(|(e, _, _, _, _)| *e == 37);
-    assert!(!has_our_entity, "Should not have entity 37 before it was transacted");
+    assert!(
+        !has_our_entity,
+        "Should not have entity 37 before it was transacted"
+    );
 }
 
 #[test]
@@ -237,10 +243,7 @@ fn test_as_of_future_transaction() {
     conn.sanitized_partition_map();
 
     // Add data
-    assert_transact!(
-        conn,
-        r#"[{:db/id :db/doc :db/doc "some doc"}]"#
-    );
+    assert_transact!(conn, r#"[{:db/id :db/doc :db/doc "some doc"}]"#);
     let tx1 = conn.last_tx_id();
 
     // Query as-of future transaction should show current state
@@ -248,7 +251,10 @@ fn test_as_of_future_transaction() {
 
     // Should include our entity
     let has_our_entity = datoms.iter().any(|(e, _, _, _, _)| *e == 37);
-    assert!(has_our_entity, "Should have entity 37 when querying future time");
+    assert!(
+        has_our_entity,
+        "Should have entity 37 when querying future time"
+    );
 }
 
 #[test]

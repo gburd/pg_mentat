@@ -47,27 +47,20 @@ pub enum AlgebrizerError {
     #[error("unexpected FnArg")]
     UnsupportedArgument,
 
-    #[error(
-        "value of type {} provided for var {}, expected {}",
-        _0, 1, 2
-    )]
+    #[error("value of type {} provided for var {}, expected {}", _0, 1, 2)]
     InputTypeDisagreement(PlainSymbol, ValueType, ValueType),
 
-    #[error(
-        "invalid number of arguments to {}: expected {}, got {}.",
-        _0, 1, 2
-    )]
+    #[error("invalid number of arguments to {}: expected {}, got {}.", _0, 1, 2)]
     InvalidNumberOfArguments(PlainSymbol, usize, usize),
 
-    #[error(
-        "invalid argument to {}: expected {} in position {}.",
-        _0, 1, 2
-    )]
+    #[error("invalid argument to {}: expected {} in position {}.", _0, 1, 2)]
     InvalidArgument(PlainSymbol, &'static str, usize),
 
     #[error(
         "invalid argument to {}: expected one of {:?} in position {}.",
-        _0, 1, 2
+        _0,
+        1,
+        2
     )]
     InvalidArgumentType(PlainSymbol, ValueTypeSet, usize),
 
@@ -75,16 +68,10 @@ pub enum AlgebrizerError {
     #[error("invalid expression in ground constant")]
     InvalidGroundConstant,
 
-    #[error(
-        "invalid limit {} of type {}: expected natural number.",
-        _0, 1
-    )]
+    #[error("invalid limit {} of type {}: expected natural number.", _0, 1)]
     InvalidLimit(String, ValueType),
 
-    #[error(
-        "invalid offset {} of type {}: expected non-negative number.",
-        _0, 1
-    )]
+    #[error("invalid offset {} of type {}: expected non-negative number.", _0, 1)]
     InvalidOffset(String, ValueType),
 
     #[error("mismatched bindings in ground")]
@@ -127,5 +114,3 @@ pub enum AlgebrizerError {
     #[error(transparent)]
     EdnParseError(#[from] ParseError),
 }
-
-
