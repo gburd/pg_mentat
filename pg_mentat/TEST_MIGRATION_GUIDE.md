@@ -340,9 +340,57 @@ Before marking a test as complete:
 - [ ] Test is properly documented with comments
 - [ ] Test cleans up after itself (automatic via pgrx transactions)
 
+## Environment Workarounds
+
+### CARGO_HOME Override
+
+In sandboxed or restricted environments where `~/.cargo` is inaccessible, set
+`CARGO_HOME` to use the project-local cargo cache:
+
+```bash
+export CARGO_HOME=/home/gburd/ws/pg_mentat/.cargo
+```
+
+This variable must be set before running any `cargo` command.
+
+### libclang / LLVM Dependency
+
+pgrx depends on bindgen, which requires libclang. Install the development
+packages for your platform:
+
+```bash
+# Fedora
+sudo dnf install clang-devel llvm-devel
+
+# Debian/Ubuntu
+sudo apt install libclang-dev llvm-dev
+```
+
+If libclang is installed but not found automatically, set:
+
+```bash
+export LIBCLANG_PATH=/usr/lib64  # adjust path as needed
+```
+
+See [WORKAROUNDS.md](WORKAROUNDS.md) for the full list of known issues and
+their resolutions.
+
+### Test Consolidation Note (2026-03-06)
+
+All 38 tests have been migrated from the external `tests/*.rs` files into
+`src/lib.rs` under `#[cfg(any(test, feature = "pg_test"))]`. The external
+test files remain as reference but are no longer the authoritative source.
+Run tests with:
+
+```bash
+cargo pgrx test pg16
+```
+
 ## References
 
 - pgrx documentation: https://github.com/pgcentralfoundation/pgrx
 - PostgreSQL FTS: https://www.postgresql.org/docs/current/textsearch.html
 - Original Mentat tests: `/tests/*.rs`, `/*/tests/*.rs`
 - TEST_PORT_STATUS.md: Current progress tracking
+- WORKAROUNDS.md: Environment workarounds
+- TEST_EXECUTION_STATUS.md: Test execution history
