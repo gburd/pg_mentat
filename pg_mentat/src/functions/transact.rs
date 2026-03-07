@@ -4,17 +4,18 @@ use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use std::collections::BTreeMap;
 
-/// Entids for built-in schema attributes (from bootstrap data in 06_bootstrap_data.sql).
+/// Entids for built-in schema attributes (from bootstrap data in lib.rs bootstrap_schema()).
 mod bootstrap_entids {
-    pub const DB_IDENT: i64 = 10;
-    pub const DB_VALUE_TYPE: i64 = 11;
-    pub const DB_CARDINALITY: i64 = 12;
-    pub const DB_UNIQUE: i64 = 13;
-    pub const DB_INDEX: i64 = 14;
-    pub const DB_FULLTEXT: i64 = 15;
-    pub const DB_COMPONENT: i64 = 16;
-    pub const DB_NO_HISTORY: i64 = 17;
-    pub const DB_IS_COMPONENT: i64 = 18;
+    pub const DB_IDENT: i64 = 1;
+    pub const DB_VALUE_TYPE: i64 = 2;
+    pub const DB_CARDINALITY: i64 = 3;
+    pub const DB_UNIQUE: i64 = 4;
+    pub const DB_DOC: i64 = 5;
+    pub const DB_IS_COMPONENT: i64 = 6;
+    pub const DB_FULLTEXT: i64 = 7;
+    pub const DB_INDEX: i64 = 8;
+    pub const DB_NO_HISTORY: i64 = 9;
+    pub const DB_TX_INSTANT: i64 = 10;
 }
 
 /// Schema attribute properties collected during the first pass.
@@ -269,7 +270,7 @@ fn collect_schema_assertion(
                 builders.entry(entity_id).or_default().fulltext = Some(*b);
             }
         }
-        bootstrap_entids::DB_COMPONENT | bootstrap_entids::DB_IS_COMPONENT => {
+        bootstrap_entids::DB_IS_COMPONENT => {
             if let edn::Value::Boolean(b) = value {
                 builders.entry(entity_id).or_default().component = Some(*b);
             }
