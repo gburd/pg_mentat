@@ -1,0 +1,1678 @@
+
+running 45 tests
+test planner::hooks::tests::test_suggest_index_value ... ok
+test planner::hooks::tests::test_suggest_index_entity ... ok
+test planner::hooks::tests::test_suggest_index_attribute_value ... ok
+test planner::hooks::tests::test_estimate_query_cost ... ok
+test planner::hooks::tests::test_suggest_index_attribute ... ok
+[32m[1m    Building[0m[39m extension with features [36mpg16 pg_test[39m
+[32m[1m     Running[0m[39m command [36m"/nix/store/f8484mgn3gj26s1xsgqfh62hqnlrlrvl-cargo-1.90.0-x86_64-unknown-linux-gnu/bin/cargo" "build" "--lib" "--features" "pg16 pg_test" "--no-default-features" "--message-format=json-render-diagnostics"[39m
+[32m[1m  Installing[0m[39m extension
+[32m[1m     Copying[0m[39m control file to [36m/home/gburd/.pgrx/16.13/pgrx-install/share/postgresql/extension/pg_mentat.control[39m
+[32m[1m     Copying[0m[39m shared library to [36m/home/gburd/.pgrx/16.13/pgrx-install/lib/postgresql/pg_mentat.so[39m
+[32m[1m    Finished[0m[39m installing pg_mentat
+test tests::pg_test_edn_roundtrip_integer ... ok
+test tests::pg_test_edn_roundtrip_vector ... ok
+test tests::pg_test_edn_roundtrip_map ... ok
+test tests::pg_test_edn_roundtrip_boolean ... ok
+test tests::pg_test_edn_roundtrip_string ... ok
+test tests::pg_test_pg_query_order ... FAILED
+test tests::pg_test_pg_fulltext_multi_term ... FAILED
+test tests::pg_test_pg_query_with_inputs ... FAILED
+test tests::pg_test_pg_fulltext_special_chars ... FAILED
+test tests::pg_test_pg_as_of_future_entity ... FAILED
+test tests::pg_test_pg_query_limit ... FAILED
+test tests::pg_test_pg_fulltext_scoring ... FAILED
+test tests::pg_test_pg_as_of_complex ... FAILED
+test tests::pg_test_pg_fulltext_basic ... FAILED
+test tests::pg_test_pg_fulltext_non_fts_attribute ... FAILED
+test tests::pg_test_pg_history ... FAILED
+test tests::pg_test_pg_query_or ... FAILED
+test tests::pg_test_pg_multi_clause ... FAILED
+test tests::pg_test_pg_fulltext_empty_query ... FAILED
+test types::edn::tests::test_edn_value_size ... ok
+test types::edn::tests::test_edn_value_validation ... ok
+test tests::pg_test_pg_fulltext_phrase ... FAILED
+test tests::pg_test_pg_failing_scalar ... FAILED
+test tests::pg_test_pg_history_retraction ... FAILED
+test tests::pg_test_pg_query_not ... FAILED
+test tests::pg_test_pg_coll ... FAILED
+test tests::pg_test_pg_as_of ... FAILED
+test tests::pg_test_pg_rule_aggregation ... FAILED
+test tests::pg_test_pg_recursive_rule ... FAILED
+test tests::pg_test_pg_rel ... FAILED
+test tests::pg_test_pg_rule_bind ... FAILED
+test tests::pg_test_pg_rule_or ... FAILED
+test tests::pg_test_pg_rule_negation ... FAILED
+test tests::pg_test_pg_rule_with_predicates ... FAILED
+test tests::pg_test_pg_rule_multi_clause ... FAILED
+test tests::pg_test_pg_simple_rule ... FAILED
+test tests::pg_test_pg_since ... FAILED
+test tests::pg_test_pg_tx_metadata ... FAILED
+test tests::pg_test_pg_scalar ... FAILED
+test tests::pg_test_pg_tuple ... FAILED
+
+failures:
+
+---- tests::pg_test_pg_query_order stdout ----
+
+thread 'tests::pg_test_pg_query_order' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.215 EST] [1347] [69ac63ee.543]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.215 EST] [1347] [69ac63ee.543]: LOG:  statement: SELECT "tests"."test_pg_query_order"();
+[2026-03-07 12:44:14.217 EST] [1347] [69ac63ee.543]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.217 EST] [1347] [69ac63ee.543]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.254 EST] [1347] [69ac63ee.543]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.254 EST] [1347] [69ac63ee.543]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.254 EST] [1347] [69ac63ee.543]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.254 EST] [1347] [69ac63ee.543]: STATEMENT:  SELECT "tests"."test_pg_query_order"();
+[2026-03-07 12:44:14.254 EST] [1347] [69ac63ee.543]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_query_order
+             at ./src/lib.rs:467:5
+   4: pg_mentat::tests::pg_test_pg_query_order::{{closure}}
+             at ./src/lib.rs:467:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_multi_term stdout ----
+
+thread 'tests::pg_test_pg_fulltext_multi_term' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.177 EST] [1263] [69ac63ee.4ef]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.177 EST] [1263] [69ac63ee.4ef]: LOG:  statement: SELECT "tests"."test_pg_fulltext_multi_term"();
+[2026-03-07 12:44:14.179 EST] [1263] [69ac63ee.4ef]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.179 EST] [1263] [69ac63ee.4ef]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.228 EST] [1263] [69ac63ee.4ef]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.228 EST] [1263] [69ac63ee.4ef]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.228 EST] [1263] [69ac63ee.4ef]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.228 EST] [1263] [69ac63ee.4ef]: STATEMENT:  SELECT "tests"."test_pg_fulltext_multi_term"();
+[2026-03-07 12:44:14.229 EST] [1263] [69ac63ee.4ef]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_multi_term
+             at ./src/lib.rs:1177:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_multi_term::{{closure}}
+             at ./src/lib.rs:1177:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_query_with_inputs stdout ----
+
+thread 'tests::pg_test_pg_query_with_inputs' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.212 EST] [1356] [69ac63ee.54c]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.212 EST] [1356] [69ac63ee.54c]: LOG:  statement: SELECT "tests"."test_pg_query_with_inputs"();
+[2026-03-07 12:44:14.212 EST] [1356] [69ac63ee.54c]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.212 EST] [1356] [69ac63ee.54c]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.278 EST] [1356] [69ac63ee.54c]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.278 EST] [1356] [69ac63ee.54c]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.278 EST] [1356] [69ac63ee.54c]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.278 EST] [1356] [69ac63ee.54c]: STATEMENT:  SELECT "tests"."test_pg_query_with_inputs"();
+[2026-03-07 12:44:14.278 EST] [1356] [69ac63ee.54c]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_query_with_inputs
+             at ./src/lib.rs:358:5
+   4: pg_mentat::tests::pg_test_pg_query_with_inputs::{{closure}}
+             at ./src/lib.rs:358:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_special_chars stdout ----
+
+thread 'tests::pg_test_pg_fulltext_special_chars' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.197 EST] [1319] [69ac63ee.527]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.197 EST] [1319] [69ac63ee.527]: LOG:  statement: SELECT "tests"."test_pg_fulltext_special_chars"();
+[2026-03-07 12:44:14.198 EST] [1319] [69ac63ee.527]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.198 EST] [1319] [69ac63ee.527]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.307 EST] [1319] [69ac63ee.527]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.307 EST] [1319] [69ac63ee.527]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.307 EST] [1319] [69ac63ee.527]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.307 EST] [1319] [69ac63ee.527]: STATEMENT:  SELECT "tests"."test_pg_fulltext_special_chars"();
+[2026-03-07 12:44:14.308 EST] [1319] [69ac63ee.527]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_special_chars
+             at ./src/lib.rs:1280:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_special_chars::{{closure}}
+             at ./src/lib.rs:1280:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_as_of_future_entity stdout ----
+
+thread 'tests::pg_test_pg_as_of_future_entity' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.183 EST] [1279] [69ac63ee.4ff]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.183 EST] [1279] [69ac63ee.4ff]: LOG:  statement: SELECT "tests"."test_pg_as_of_future_entity"();
+[2026-03-07 12:44:14.185 EST] [1279] [69ac63ee.4ff]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.185 EST] [1279] [69ac63ee.4ff]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.332 EST] [1279] [69ac63ee.4ff]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.332 EST] [1279] [69ac63ee.4ff]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.332 EST] [1279] [69ac63ee.4ff]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.332 EST] [1279] [69ac63ee.4ff]: STATEMENT:  SELECT "tests"."test_pg_as_of_future_entity"();
+[2026-03-07 12:44:14.333 EST] [1279] [69ac63ee.4ff]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_as_of_future_entity
+             at ./src/lib.rs:667:5
+   4: pg_mentat::tests::pg_test_pg_as_of_future_entity::{{closure}}
+             at ./src/lib.rs:667:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_query_limit stdout ----
+
+thread 'tests::pg_test_pg_query_limit' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.215 EST] [1352] [69ac63ee.548]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.215 EST] [1352] [69ac63ee.548]: LOG:  statement: SELECT "tests"."test_pg_query_limit"();
+[2026-03-07 12:44:14.216 EST] [1352] [69ac63ee.548]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.216 EST] [1352] [69ac63ee.548]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.367 EST] [1352] [69ac63ee.548]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.367 EST] [1352] [69ac63ee.548]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.367 EST] [1352] [69ac63ee.548]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.367 EST] [1352] [69ac63ee.548]: STATEMENT:  SELECT "tests"."test_pg_query_limit"();
+[2026-03-07 12:44:14.368 EST] [1352] [69ac63ee.548]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_query_limit
+             at ./src/lib.rs:497:5
+   4: pg_mentat::tests::pg_test_pg_query_limit::{{closure}}
+             at ./src/lib.rs:497:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_scoring stdout ----
+
+thread 'tests::pg_test_pg_fulltext_scoring' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.198 EST] [1318] [69ac63ee.526]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.198 EST] [1318] [69ac63ee.526]: LOG:  statement: SELECT "tests"."test_pg_fulltext_scoring"();
+[2026-03-07 12:44:14.200 EST] [1318] [69ac63ee.526]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.200 EST] [1318] [69ac63ee.526]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.396 EST] [1318] [69ac63ee.526]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.396 EST] [1318] [69ac63ee.526]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.396 EST] [1318] [69ac63ee.526]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.396 EST] [1318] [69ac63ee.526]: STATEMENT:  SELECT "tests"."test_pg_fulltext_scoring"();
+[2026-03-07 12:44:14.397 EST] [1318] [69ac63ee.526]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_scoring
+             at ./src/lib.rs:1239:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_scoring::{{closure}}
+             at ./src/lib.rs:1239:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_as_of_complex stdout ----
+
+thread 'tests::pg_test_pg_as_of_complex' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.184 EST] [1266] [69ac63ee.4f2]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.184 EST] [1266] [69ac63ee.4f2]: LOG:  statement: SELECT "tests"."test_pg_as_of_complex"();
+[2026-03-07 12:44:14.185 EST] [1266] [69ac63ee.4f2]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.185 EST] [1266] [69ac63ee.4f2]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.432 EST] [1266] [69ac63ee.4f2]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.432 EST] [1266] [69ac63ee.4f2]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.432 EST] [1266] [69ac63ee.4f2]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.432 EST] [1266] [69ac63ee.4f2]: STATEMENT:  SELECT "tests"."test_pg_as_of_complex"();
+[2026-03-07 12:44:14.433 EST] [1266] [69ac63ee.4f2]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_as_of_complex
+             at ./src/lib.rs:739:5
+   4: pg_mentat::tests::pg_test_pg_as_of_complex::{{closure}}
+             at ./src/lib.rs:739:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_basic stdout ----
+
+thread 'tests::pg_test_pg_fulltext_basic' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.203 EST] [1303] [69ac63ee.517]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.203 EST] [1303] [69ac63ee.517]: LOG:  statement: SELECT "tests"."test_pg_fulltext_basic"();
+[2026-03-07 12:44:14.204 EST] [1303] [69ac63ee.517]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.204 EST] [1303] [69ac63ee.517]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.469 EST] [1303] [69ac63ee.517]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.469 EST] [1303] [69ac63ee.517]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.469 EST] [1303] [69ac63ee.517]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.469 EST] [1303] [69ac63ee.517]: STATEMENT:  SELECT "tests"."test_pg_fulltext_basic"();
+[2026-03-07 12:44:14.470 EST] [1303] [69ac63ee.517]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_basic
+             at ./src/lib.rs:1136:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_basic::{{closure}}
+             at ./src/lib.rs:1136:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_non_fts_attribute stdout ----
+
+thread 'tests::pg_test_pg_fulltext_non_fts_attribute' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.200 EST] [1316] [69ac63ee.524]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.200 EST] [1316] [69ac63ee.524]: LOG:  statement: SELECT "tests"."test_pg_fulltext_non_fts_attribute"();
+[2026-03-07 12:44:14.201 EST] [1316] [69ac63ee.524]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.201 EST] [1316] [69ac63ee.524]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.509 EST] [1316] [69ac63ee.524]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.509 EST] [1316] [69ac63ee.524]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.509 EST] [1316] [69ac63ee.524]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.509 EST] [1316] [69ac63ee.524]: STATEMENT:  SELECT "tests"."test_pg_fulltext_non_fts_attribute"();
+[2026-03-07 12:44:14.510 EST] [1316] [69ac63ee.524]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_non_fts_attribute
+             at ./src/lib.rs:1216:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_non_fts_attribute::{{closure}}
+             at ./src/lib.rs:1216:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_history stdout ----
+
+thread 'tests::pg_test_pg_history' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.199 EST] [1313] [69ac63ee.521]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.200 EST] [1313] [69ac63ee.521]: LOG:  statement: SELECT "tests"."test_pg_history"();
+[2026-03-07 12:44:14.201 EST] [1313] [69ac63ee.521]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.201 EST] [1313] [69ac63ee.521]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.544 EST] [1313] [69ac63ee.521]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.544 EST] [1313] [69ac63ee.521]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.544 EST] [1313] [69ac63ee.521]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.544 EST] [1313] [69ac63ee.521]: STATEMENT:  SELECT "tests"."test_pg_history"();
+[2026-03-07 12:44:14.545 EST] [1313] [69ac63ee.521]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_history
+             at ./src/lib.rs:632:5
+   4: pg_mentat::tests::pg_test_pg_history::{{closure}}
+             at ./src/lib.rs:632:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_query_or stdout ----
+
+thread 'tests::pg_test_pg_query_or' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.216 EST] [1346] [69ac63ee.542]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.216 EST] [1346] [69ac63ee.542]: LOG:  statement: SELECT "tests"."test_pg_query_or"();
+[2026-03-07 12:44:14.216 EST] [1346] [69ac63ee.542]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.216 EST] [1346] [69ac63ee.542]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.577 EST] [1346] [69ac63ee.542]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.577 EST] [1346] [69ac63ee.542]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.577 EST] [1346] [69ac63ee.542]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.577 EST] [1346] [69ac63ee.542]: STATEMENT:  SELECT "tests"."test_pg_query_or"();
+[2026-03-07 12:44:14.577 EST] [1346] [69ac63ee.542]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_query_or
+             at ./src/lib.rs:442:5
+   4: pg_mentat::tests::pg_test_pg_query_or::{{closure}}
+             at ./src/lib.rs:442:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_multi_clause stdout ----
+
+thread 'tests::pg_test_pg_multi_clause' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.200 EST] [1309] [69ac63ee.51d]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.200 EST] [1309] [69ac63ee.51d]: LOG:  statement: SELECT "tests"."test_pg_multi_clause"();
+[2026-03-07 12:44:14.201 EST] [1309] [69ac63ee.51d]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.201 EST] [1309] [69ac63ee.51d]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.607 EST] [1309] [69ac63ee.51d]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.607 EST] [1309] [69ac63ee.51d]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.607 EST] [1309] [69ac63ee.51d]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.607 EST] [1309] [69ac63ee.51d]: STATEMENT:  SELECT "tests"."test_pg_multi_clause"();
+[2026-03-07 12:44:14.608 EST] [1309] [69ac63ee.51d]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_multi_clause
+             at ./src/lib.rs:387:5
+   4: pg_mentat::tests::pg_test_pg_multi_clause::{{closure}}
+             at ./src/lib.rs:387:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_empty_query stdout ----
+
+thread 'tests::pg_test_pg_fulltext_empty_query' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.178 EST] [1257] [69ac63ee.4e9]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.179 EST] [1257] [69ac63ee.4e9]: LOG:  statement: SELECT "tests"."test_pg_fulltext_empty_query"();
+[2026-03-07 12:44:14.180 EST] [1257] [69ac63ee.4e9]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.180 EST] [1257] [69ac63ee.4e9]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.636 EST] [1257] [69ac63ee.4e9]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.636 EST] [1257] [69ac63ee.4e9]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.636 EST] [1257] [69ac63ee.4e9]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.636 EST] [1257] [69ac63ee.4e9]: STATEMENT:  SELECT "tests"."test_pg_fulltext_empty_query"();
+[2026-03-07 12:44:14.636 EST] [1257] [69ac63ee.4e9]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_empty_query
+             at ./src/lib.rs:1348:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_empty_query::{{closure}}
+             at ./src/lib.rs:1348:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_fulltext_phrase stdout ----
+
+thread 'tests::pg_test_pg_fulltext_phrase' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.190 EST] [1287] [69ac63ee.507]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.190 EST] [1287] [69ac63ee.507]: LOG:  statement: SELECT "tests"."test_pg_fulltext_phrase"();
+[2026-03-07 12:44:14.191 EST] [1287] [69ac63ee.507]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.191 EST] [1287] [69ac63ee.507]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.668 EST] [1287] [69ac63ee.507]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.668 EST] [1287] [69ac63ee.507]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.668 EST] [1287] [69ac63ee.507]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.668 EST] [1287] [69ac63ee.507]: STATEMENT:  SELECT "tests"."test_pg_fulltext_phrase"();
+[2026-03-07 12:44:14.669 EST] [1287] [69ac63ee.507]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_fulltext_phrase
+             at ./src/lib.rs:1312:5
+   4: pg_mentat::tests::pg_test_pg_fulltext_phrase::{{closure}}
+             at ./src/lib.rs:1312:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_failing_scalar stdout ----
+
+thread 'tests::pg_test_pg_failing_scalar' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.185 EST] [1245] [69ac63ee.4dd]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.185 EST] [1245] [69ac63ee.4dd]: LOG:  statement: SELECT "tests"."test_pg_failing_scalar"();
+[2026-03-07 12:44:14.186 EST] [1245] [69ac63ee.4dd]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.186 EST] [1245] [69ac63ee.4dd]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.691 EST] [1245] [69ac63ee.4dd]: ERROR:  function mentat.mentat_query(text, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.691 EST] [1245] [69ac63ee.4dd]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.691 EST] [1245] [69ac63ee.4dd]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.691 EST] [1245] [69ac63ee.4dd]: STATEMENT:  SELECT "tests"."test_pg_failing_scalar"();
+[2026-03-07 12:44:14.692 EST] [1245] [69ac63ee.4dd]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(text, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_failing_scalar
+             at ./src/lib.rs:268:5
+   4: pg_mentat::tests::pg_test_pg_failing_scalar::{{closure}}
+             at ./src/lib.rs:268:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_history_retraction stdout ----
+
+thread 'tests::pg_test_pg_history_retraction' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.187 EST] [1261] [69ac63ee.4ed]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.187 EST] [1261] [69ac63ee.4ed]: LOG:  statement: SELECT "tests"."test_pg_history_retraction"();
+[2026-03-07 12:44:14.188 EST] [1261] [69ac63ee.4ed]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.188 EST] [1261] [69ac63ee.4ed]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.717 EST] [1261] [69ac63ee.4ed]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.717 EST] [1261] [69ac63ee.4ed]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.717 EST] [1261] [69ac63ee.4ed]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.717 EST] [1261] [69ac63ee.4ed]: STATEMENT:  SELECT "tests"."test_pg_history_retraction"();
+[2026-03-07 12:44:14.718 EST] [1261] [69ac63ee.4ed]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_history_retraction
+             at ./src/lib.rs:689:5
+   4: pg_mentat::tests::pg_test_pg_history_retraction::{{closure}}
+             at ./src/lib.rs:689:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_query_not stdout ----
+
+thread 'tests::pg_test_pg_query_not' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.215 EST] [1338] [69ac63ee.53a]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.215 EST] [1338] [69ac63ee.53a]: LOG:  statement: SELECT "tests"."test_pg_query_not"();
+[2026-03-07 12:44:14.216 EST] [1338] [69ac63ee.53a]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.216 EST] [1338] [69ac63ee.53a]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.750 EST] [1338] [69ac63ee.53a]: ERROR:  function mentat.mentat_query(unknown, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.750 EST] [1338] [69ac63ee.53a]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.750 EST] [1338] [69ac63ee.53a]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.750 EST] [1338] [69ac63ee.53a]: STATEMENT:  SELECT "tests"."test_pg_query_not"();
+[2026-03-07 12:44:14.751 EST] [1338] [69ac63ee.53a]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(unknown, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_query_not
+             at ./src/lib.rs:417:5
+   4: pg_mentat::tests::pg_test_pg_query_not::{{closure}}
+             at ./src/lib.rs:417:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_coll stdout ----
+
+thread 'tests::pg_test_pg_coll' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.193 EST] [1288] [69ac63ee.508]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.193 EST] [1288] [69ac63ee.508]: LOG:  statement: SELECT "tests"."test_pg_coll"();
+[2026-03-07 12:44:14.195 EST] [1288] [69ac63ee.508]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.195 EST] [1288] [69ac63ee.508]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.773 EST] [1288] [69ac63ee.508]: ERROR:  function mentat.mentat_query(text, jsonb) does not exist at character 8
+[2026-03-07 12:44:14.773 EST] [1288] [69ac63ee.508]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.773 EST] [1288] [69ac63ee.508]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:14.773 EST] [1288] [69ac63ee.508]: STATEMENT:  SELECT "tests"."test_pg_coll"();
+[2026-03-07 12:44:14.773 EST] [1288] [69ac63ee.508]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(text, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_coll
+             at ./src/lib.rs:332:5
+   4: pg_mentat::tests::pg_test_pg_coll::{{closure}}
+             at ./src/lib.rs:332:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_as_of stdout ----
+
+thread 'tests::pg_test_pg_as_of' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:14.192 EST] [1285] [69ac63ee.505]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:14.192 EST] [1285] [69ac63ee.505]: LOG:  statement: SELECT "tests"."test_pg_as_of"();
+[2026-03-07 12:44:14.192 EST] [1285] [69ac63ee.505]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:14.192 EST] [1285] [69ac63ee.505]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:14.798 EST] [1285] [69ac63ee.505]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:14.798 EST] [1285] [69ac63ee.505]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:14.798 EST] [1285] [69ac63ee.505]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:14.798 EST] [1285] [69ac63ee.505]: STATEMENT:  SELECT "tests"."test_pg_as_of"();
+[2026-03-07 12:44:14.798 EST] [1285] [69ac63ee.505]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_as_of
+             at ./src/lib.rs:563:5
+   4: pg_mentat::tests::pg_test_pg_as_of::{{closure}}
+             at ./src/lib.rs:563:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_aggregation stdout ----
+
+thread 'tests::pg_test_pg_rule_aggregation' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.289 EST] [1369] [69ac63ef.559]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.289 EST] [1369] [69ac63ef.559]: LOG:  statement: SELECT "tests"."test_pg_rule_aggregation"();
+[2026-03-07 12:44:15.290 EST] [1369] [69ac63ef.559]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.290 EST] [1369] [69ac63ef.559]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.324 EST] [1369] [69ac63ef.559]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.324 EST] [1369] [69ac63ef.559]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.324 EST] [1369] [69ac63ef.559]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.324 EST] [1369] [69ac63ef.559]: STATEMENT:  SELECT "tests"."test_pg_rule_aggregation"();
+[2026-03-07 12:44:15.325 EST] [1369] [69ac63ef.559]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_aggregation
+             at ./src/lib.rs:1005:5
+   4: pg_mentat::tests::pg_test_pg_rule_aggregation::{{closure}}
+             at ./src/lib.rs:1005:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_recursive_rule stdout ----
+
+thread 'tests::pg_test_pg_recursive_rule' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.296 EST] [1379] [69ac63ef.563]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.296 EST] [1379] [69ac63ef.563]: LOG:  statement: SELECT "tests"."test_pg_recursive_rule"();
+[2026-03-07 12:44:15.297 EST] [1379] [69ac63ef.563]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.297 EST] [1379] [69ac63ef.563]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.363 EST] [1379] [69ac63ef.563]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.363 EST] [1379] [69ac63ef.563]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.363 EST] [1379] [69ac63ef.563]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.363 EST] [1379] [69ac63ef.563]: STATEMENT:  SELECT "tests"."test_pg_recursive_rule"();
+[2026-03-07 12:44:15.363 EST] [1379] [69ac63ef.563]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_recursive_rule
+             at ./src/lib.rs:868:5
+   4: pg_mentat::tests::pg_test_pg_recursive_rule::{{closure}}
+             at ./src/lib.rs:868:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rel stdout ----
+
+thread 'tests::pg_test_pg_rel' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.299 EST] [1378] [69ac63ef.562]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.299 EST] [1378] [69ac63ef.562]: LOG:  statement: SELECT "tests"."test_pg_rel"();
+[2026-03-07 12:44:15.300 EST] [1378] [69ac63ef.562]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.300 EST] [1378] [69ac63ef.562]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.389 EST] [1378] [69ac63ef.562]: ERROR:  function mentat.mentat_query(text, jsonb) does not exist at character 8
+[2026-03-07 12:44:15.389 EST] [1378] [69ac63ef.562]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.389 EST] [1378] [69ac63ef.562]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:15.389 EST] [1378] [69ac63ef.562]: STATEMENT:  SELECT "tests"."test_pg_rel"();
+[2026-03-07 12:44:15.389 EST] [1378] [69ac63ef.562]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(text, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rel
+             at ./src/lib.rs:238:5
+   4: pg_mentat::tests::pg_test_pg_rel::{{closure}}
+             at ./src/lib.rs:238:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_bind stdout ----
+
+thread 'tests::pg_test_pg_rule_bind' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.323 EST] [1386] [69ac63ef.56a]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.323 EST] [1386] [69ac63ef.56a]: LOG:  statement: SELECT "tests"."test_pg_rule_bind"();
+[2026-03-07 12:44:15.324 EST] [1386] [69ac63ef.56a]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.324 EST] [1386] [69ac63ef.56a]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.415 EST] [1386] [69ac63ef.56a]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.415 EST] [1386] [69ac63ef.56a]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.415 EST] [1386] [69ac63ef.56a]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.415 EST] [1386] [69ac63ef.56a]: STATEMENT:  SELECT "tests"."test_pg_rule_bind"();
+[2026-03-07 12:44:15.415 EST] [1386] [69ac63ef.56a]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_bind
+             at ./src/lib.rs:1076:5
+   4: pg_mentat::tests::pg_test_pg_rule_bind::{{closure}}
+             at ./src/lib.rs:1076:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_or stdout ----
+
+thread 'tests::pg_test_pg_rule_or' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.409 EST] [1411] [69ac63ef.583]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.410 EST] [1411] [69ac63ef.583]: LOG:  statement: SELECT "tests"."test_pg_rule_or"();
+[2026-03-07 12:44:15.411 EST] [1411] [69ac63ef.583]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.411 EST] [1411] [69ac63ef.583]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.457 EST] [1411] [69ac63ef.583]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.457 EST] [1411] [69ac63ef.583]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.457 EST] [1411] [69ac63ef.583]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.457 EST] [1411] [69ac63ef.583]: STATEMENT:  SELECT "tests"."test_pg_rule_or"();
+[2026-03-07 12:44:15.458 EST] [1411] [69ac63ef.583]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_or
+             at ./src/lib.rs:1037:5
+   4: pg_mentat::tests::pg_test_pg_rule_or::{{closure}}
+             at ./src/lib.rs:1037:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_negation stdout ----
+
+thread 'tests::pg_test_pg_rule_negation' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.385 EST] [1405] [69ac63ef.57d]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.385 EST] [1405] [69ac63ef.57d]: LOG:  statement: SELECT "tests"."test_pg_rule_negation"();
+[2026-03-07 12:44:15.386 EST] [1405] [69ac63ef.57d]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.386 EST] [1405] [69ac63ef.57d]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.484 EST] [1405] [69ac63ef.57d]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.484 EST] [1405] [69ac63ef.57d]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.484 EST] [1405] [69ac63ef.57d]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.484 EST] [1405] [69ac63ef.57d]: STATEMENT:  SELECT "tests"."test_pg_rule_negation"();
+[2026-03-07 12:44:15.484 EST] [1405] [69ac63ef.57d]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_negation
+             at ./src/lib.rs:980:5
+   4: pg_mentat::tests::pg_test_pg_rule_negation::{{closure}}
+             at ./src/lib.rs:980:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_with_predicates stdout ----
+
+thread 'tests::pg_test_pg_rule_with_predicates' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.447 EST] [1419] [69ac63ef.58b]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.447 EST] [1419] [69ac63ef.58b]: LOG:  statement: SELECT "tests"."test_pg_rule_with_predicates"();
+[2026-03-07 12:44:15.449 EST] [1419] [69ac63ef.58b]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.449 EST] [1419] [69ac63ef.58b]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.522 EST] [1419] [69ac63ef.58b]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.522 EST] [1419] [69ac63ef.58b]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.522 EST] [1419] [69ac63ef.58b]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.522 EST] [1419] [69ac63ef.58b]: STATEMENT:  SELECT "tests"."test_pg_rule_with_predicates"();
+[2026-03-07 12:44:15.522 EST] [1419] [69ac63ef.58b]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_with_predicates
+             at ./src/lib.rs:936:5
+   4: pg_mentat::tests::pg_test_pg_rule_with_predicates::{{closure}}
+             at ./src/lib.rs:936:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_rule_multi_clause stdout ----
+
+thread 'tests::pg_test_pg_rule_multi_clause' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.351 EST] [1396] [69ac63ef.574]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.351 EST] [1396] [69ac63ef.574]: LOG:  statement: SELECT "tests"."test_pg_rule_multi_clause"();
+[2026-03-07 12:44:15.351 EST] [1396] [69ac63ef.574]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.351 EST] [1396] [69ac63ef.574]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.551 EST] [1396] [69ac63ef.574]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.551 EST] [1396] [69ac63ef.574]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.551 EST] [1396] [69ac63ef.574]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.551 EST] [1396] [69ac63ef.574]: STATEMENT:  SELECT "tests"."test_pg_rule_multi_clause"();
+[2026-03-07 12:44:15.551 EST] [1396] [69ac63ef.574]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_rule_multi_clause
+             at ./src/lib.rs:908:5
+   4: pg_mentat::tests::pg_test_pg_rule_multi_clause::{{closure}}
+             at ./src/lib.rs:908:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_simple_rule stdout ----
+
+thread 'tests::pg_test_pg_simple_rule' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.526 EST] [1432] [69ac63ef.598]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.527 EST] [1432] [69ac63ef.598]: LOG:  statement: SELECT "tests"."test_pg_simple_rule"();
+[2026-03-07 12:44:15.528 EST] [1432] [69ac63ef.598]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.528 EST] [1432] [69ac63ef.598]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.595 EST] [1432] [69ac63ef.598]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.595 EST] [1432] [69ac63ef.598]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.595 EST] [1432] [69ac63ef.598]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.595 EST] [1432] [69ac63ef.598]: STATEMENT:  SELECT "tests"."test_pg_simple_rule"();
+[2026-03-07 12:44:15.596 EST] [1432] [69ac63ef.598]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_simple_rule
+             at ./src/lib.rs:841:5
+   4: pg_mentat::tests::pg_test_pg_simple_rule::{{closure}}
+             at ./src/lib.rs:841:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_since stdout ----
+
+thread 'tests::pg_test_pg_since' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.561 EST] [1439] [69ac63ef.59f]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.561 EST] [1439] [69ac63ef.59f]: LOG:  statement: SELECT "tests"."test_pg_since"();
+[2026-03-07 12:44:15.562 EST] [1439] [69ac63ef.59f]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.562 EST] [1439] [69ac63ef.59f]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.627 EST] [1439] [69ac63ef.59f]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.627 EST] [1439] [69ac63ef.59f]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.627 EST] [1439] [69ac63ef.59f]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.627 EST] [1439] [69ac63ef.59f]: STATEMENT:  SELECT "tests"."test_pg_since"();
+[2026-03-07 12:44:15.628 EST] [1439] [69ac63ef.59f]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_since
+             at ./src/lib.rs:602:5
+   4: pg_mentat::tests::pg_test_pg_since::{{closure}}
+             at ./src/lib.rs:602:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_tx_metadata stdout ----
+
+thread 'tests::pg_test_pg_tx_metadata' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.622 EST] [1455] [69ac63ef.5af]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.622 EST] [1455] [69ac63ef.5af]: LOG:  statement: SELECT "tests"."test_pg_tx_metadata"();
+[2026-03-07 12:44:15.623 EST] [1455] [69ac63ef.5af]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.623 EST] [1455] [69ac63ef.5af]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.662 EST] [1455] [69ac63ef.5af]: ERROR:  function mentat.mentat_transact(text) does not exist at character 8
+[2026-03-07 12:44:15.662 EST] [1455] [69ac63ef.5af]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.662 EST] [1455] [69ac63ef.5af]: QUERY:  SELECT mentat.mentat_transact('
+[2026-03-07 12:44:15.662 EST] [1455] [69ac63ef.5af]: STATEMENT:  SELECT "tests"."test_pg_tx_metadata"();
+[2026-03-07 12:44:15.663 EST] [1455] [69ac63ef.5af]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_transact(text) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_tx_metadata
+             at ./src/lib.rs:776:5
+   4: pg_mentat::tests::pg_test_pg_tx_metadata::{{closure}}
+             at ./src/lib.rs:776:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_scalar stdout ----
+
+thread 'tests::pg_test_pg_scalar' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.483 EST] [1425] [69ac63ef.591]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.483 EST] [1425] [69ac63ef.591]: LOG:  statement: SELECT "tests"."test_pg_scalar"();
+[2026-03-07 12:44:15.484 EST] [1425] [69ac63ef.591]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.484 EST] [1425] [69ac63ef.591]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.696 EST] [1425] [69ac63ef.591]: ERROR:  function mentat.mentat_query(text, jsonb) does not exist at character 8
+[2026-03-07 12:44:15.696 EST] [1425] [69ac63ef.591]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.696 EST] [1425] [69ac63ef.591]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:15.696 EST] [1425] [69ac63ef.591]: STATEMENT:  SELECT "tests"."test_pg_scalar"();
+[2026-03-07 12:44:15.696 EST] [1425] [69ac63ef.591]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(text, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_scalar
+             at ./src/lib.rs:287:5
+   4: pg_mentat::tests::pg_test_pg_scalar::{{closure}}
+             at ./src/lib.rs:287:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+---- tests::pg_test_pg_tuple stdout ----
+
+thread 'tests::pg_test_pg_tuple' panicked at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9:
+
+
+Postgres Messages:
+[37m[2m[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  starting PostgreSQL 16.13 on x86_64-pc-linux-gnu, compiled by gcc (GCC) 15.2.0, 64-bit
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv6 address "::1", port 32216
+[2026-03-07 12:44:13.970 EST] [1173] [69ac63ed.495]: LOG:  listening on IPv4 address "127.0.0.1", port 32216
+[2026-03-07 12:44:13.972 EST] [1173] [69ac63ed.495]: LOG:  listening on Unix socket "/home/gburd/ws/pg_mentat/target/test-pgdata/.s.PGSQL.32216"
+[2026-03-07 12:44:13.976 EST] [1173] [69ac63ed.495]: LOG:  database system is ready to accept connections
+[0m[39m
+
+Test Function Messages:
+[36m[2026-03-07 12:44:15.595 EST] [1449] [69ac63ef.5a9]: LOG:  statement: START TRANSACTION
+[2026-03-07 12:44:15.595 EST] [1449] [69ac63ef.5a9]: LOG:  statement: SELECT "tests"."test_pg_tuple"();
+[2026-03-07 12:44:15.596 EST] [1449] [69ac63ef.5a9]: NOTICE:  schema "mentat" already exists, skipping
+[2026-03-07 12:44:15.596 EST] [1449] [69ac63ef.5a9]: CONTEXT:  SQL statement "
+[2026-03-07 12:44:15.727 EST] [1449] [69ac63ef.5a9]: ERROR:  function mentat.mentat_query(text, jsonb) does not exist at character 8
+[2026-03-07 12:44:15.727 EST] [1449] [69ac63ef.5a9]: HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
+[2026-03-07 12:44:15.727 EST] [1449] [69ac63ef.5a9]: QUERY:  SELECT mentat.mentat_query(
+[2026-03-07 12:44:15.727 EST] [1449] [69ac63ef.5a9]: STATEMENT:  SELECT "tests"."test_pg_tuple"();
+[2026-03-07 12:44:15.728 EST] [1449] [69ac63ef.5a9]: LOG:  statement: ROLLBACK
+[39m
+
+Client Error:
+[31m[1mfunction mentat.mentat_query(text, jsonb) does not exist[0m[39m
+postgres location: [37m[2mparse_func.c:629[0m[39m
+rust location: [33m<unknown>[39m
+
+
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/std/src/panicking.rs:697:5
+   1: core::panicking::panic_fmt
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/panicking.rs:75:14
+   2: pgrx_tests::framework::run_test
+             at /home/gburd/ws/pg_mentat/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-tests-0.17.0/src/framework.rs:169:9
+   3: pg_mentat::tests::pg_test_pg_tuple
+             at ./src/lib.rs:309:5
+   4: pg_mentat::tests::pg_test_pg_tuple::{{closure}}
+             at ./src/lib.rs:309:15
+   5: core::ops::function::FnOnce::call_once
+             at /nix/store/7h25cfy06zv1d5ivp9gsv3qq4mqvyd3l-rust-default-1.90.0/lib/rustlib/src/rust/library/core/src/ops/function.rs:253:5
+   6: core::ops::function::FnOnce::call_once
+             at /rustc/1159e78c4747b02ef996e55082b704c09b970588/library/core/src/ops/function.rs:253:5
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+
+failures:
+    tests::pg_test_pg_as_of
+    tests::pg_test_pg_as_of_complex
+    tests::pg_test_pg_as_of_future_entity
+    tests::pg_test_pg_coll
+    tests::pg_test_pg_failing_scalar
+    tests::pg_test_pg_fulltext_basic
+    tests::pg_test_pg_fulltext_empty_query
+    tests::pg_test_pg_fulltext_multi_term
+    tests::pg_test_pg_fulltext_non_fts_attribute
+    tests::pg_test_pg_fulltext_phrase
+    tests::pg_test_pg_fulltext_scoring
+    tests::pg_test_pg_fulltext_special_chars
+    tests::pg_test_pg_history
+    tests::pg_test_pg_history_retraction
+    tests::pg_test_pg_multi_clause
+    tests::pg_test_pg_query_limit
+    tests::pg_test_pg_query_not
+    tests::pg_test_pg_query_or
+    tests::pg_test_pg_query_order
+    tests::pg_test_pg_query_with_inputs
+    tests::pg_test_pg_recursive_rule
+    tests::pg_test_pg_rel
+    tests::pg_test_pg_rule_aggregation
+    tests::pg_test_pg_rule_bind
+    tests::pg_test_pg_rule_multi_clause
+    tests::pg_test_pg_rule_negation
+    tests::pg_test_pg_rule_or
+    tests::pg_test_pg_rule_with_predicates
+    tests::pg_test_pg_scalar
+    tests::pg_test_pg_simple_rule
+    tests::pg_test_pg_since
+    tests::pg_test_pg_tuple
+    tests::pg_test_pg_tx_metadata
+
+test result: FAILED. 12 passed; 33 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.67s
+

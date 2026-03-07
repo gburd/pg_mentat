@@ -1,0 +1,35 @@
+[32m[1m       Using[0m[39m [37m[1mCliArgument("pg16")[0m[39m and `pg_config` from [36m/home/gburd/.pgrx/16.13/pgrx-install/bin/pg_config[39m
+CARGO_TARGET_DIR="/home/gburd/ws/pg_mentat/target" PGRX_ALL_FEATURES="false" PGRX_BUILD_PROFILE="dev" PGRX_FEATURES="pg16 pg_test" PGRX_NO_DEFAULT_FEATURES="true" PGRX_NO_SCHEMA="false" "/nix/store/f8484mgn3gj26s1xsgqfh62hqnlrlrvl-cargo-1.90.0-x86_64-unknown-linux-gnu/bin/cargo" "test" "--features" "pg16 pg_test" "--no-default-features"
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/gburd/ws/pg_mentat/pg_mentat/Cargo.toml
+workspace: /home/gburd/ws/pg_mentat/Cargo.toml
+   Compiling pg_mentat v0.1.0 (/home/gburd/ws/pg_mentat/pg_mentat)
+warning: unused import: `hooks::init_planner_hooks`
+  --> pg_mentat/src/planner/mod.rs:18:9
+   |
+18 | pub use hooks::init_planner_hooks;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: function `init_planner_hooks` is never used
+   --> pg_mentat/src/planner/hooks.rs:167:15
+    |
+167 | pub unsafe fn init_planner_hooks() {
+    |               ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+error: symbol `__pgrx_internals_fn_ednvalue_eq` is already defined
+  --> pg_mentat/src/types/edn.rs:15:83
+   |
+15 | #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PostgresType, PostgresEq, PostgresHash)]
+   |                                                                                   ^^^^^^^^^^
+   |
+   = note: this error originates in the attribute macro `::pgrx::pgrx_macros::pg_operator` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: `pg_mentat` (lib) generated 2 warnings
+error: could not compile `pg_mentat` (lib) due to 1 previous error; 2 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `pg_mentat` (lib test) generated 2 warnings (2 duplicates)
+error: could not compile `pg_mentat` (lib test) due to 1 previous error; 2 warnings emitted

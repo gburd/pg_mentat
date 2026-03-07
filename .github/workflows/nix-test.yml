@@ -1,0 +1,148 @@
+name: Test pg_mentat (Nix)
+
+on:
+  push:
+    branches: [main, claude, develop]
+  pull_request:
+    branches: [main, claude]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - name: Show flake metadata
+        run: nix flake metadata
+
+      - name: Enter dev shell and run tests
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+
+            echo "=== Environment ==="
+            rustc --version
+            cargo --version
+            pg_config --version
+            echo "LIBCLANG_PATH=$LIBCLANG_PATH"
+
+            echo "=== Installing cargo-pgrx ==="
+            setup-pgrx
+
+            echo "=== Running tests ==="
+            test-pg16 --nocapture
+          '
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "## Test Results (Nix)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Date**: $(date -u)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit**: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch**: ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Runner**: Nix flake dev shell" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nix-test-failure-logs
+          path: |
+            pg_mentat/target/pgrx-test-data-*/
+          retention-days: 7
+
+  build-package:
+    name: Build Extension Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      # Use the dev shell to build the extension package.  The flake's
+      # packages.default derivation needs network access (cargo fetches)
+      # which is incompatible with the Nix sandbox on most CI runners.
+      # Building inside `nix develop` avoids that problem entirely.
+      - name: Build extension package
+        run: |
+          nix develop --command bash -c '
+            set -euo pipefail
+            setup-pgrx
+            build-extension
+          '
+
+      - name: List build outputs
+        run: |
+          echo "## Build Outputs" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          find pg_mentat/target -name "pg_mentat.so" -o -name "*.control" -o -name "*.sql" 2>/dev/null | sort >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg_mentat-extension
+          path: |
+            pg_mentat/target/release/pg_mentat-pg16/
+          retention-days: 30
+
+  lint:
+    name: Lint and Format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+      - name: Check formatting
+        run: |
+          nix develop --command bash -c 'cargo fmt --all -- --check'
+
+      - name: Run clippy
+        run: |
+          nix develop --command bash -c '
+            setup-pgrx
+            cargo clippy --all-targets -- -D warnings
+          '
+

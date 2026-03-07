@@ -1,0 +1,58 @@
+# Docker/Podman-based CI workflow for pg_mentat
+#
+# Alternative to the Nix workflow for environments that already have a
+# container runtime but cannot install Nix.  Builds the Containerfile
+# and runs tests inside the resulting image.
+#
+# See CI_CD_GUIDE.md for documentation.
+
+name: Test pg_mentat (Container)
+
+on:
+  push:
+    branches: [main, claude, develop]
+  pull_request:
+    branches: [main, claude]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build and Test (Container)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build container image
+        run: docker build -t pg_mentat_ci -f Containerfile .
+
+      - name: Run tests
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace:ro" \
+            -w /workspace/pg_mentat \
+            pg_mentat_ci \
+            bash -c '
+              set -euo pipefail
+              echo "=== Environment ==="
+              rustc --version
+              cargo --version
+              pg_config --version 2>/dev/null || true
+
+              echo "=== Running tests ==="
+              cargo pgrx test pg16 --no-schema -- --test-threads=1 --nocapture
+            '
+        env:
+          RUST_BACKTRACE: "1"
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "## Test Results (Container)" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Date**: $(date -u)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit**: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch**: ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Runner**: Containerfile (Fedora 43)" >> "$GITHUB_STEP_SUMMARY"

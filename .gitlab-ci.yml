@@ -1,0 +1,107 @@
+# GitLab CI configuration for pg_mentat
+#
+# Uses the Nix flake for a reproducible build and test environment.
+# Requires a runner with the `nix` Docker image or a NixOS-based runner.
+#
+# See CI_CD_GUIDE.md for documentation.
+
+image: nixos/nix:latest
+
+variables:
+  # Enable flakes inside the container
+  NIX_CONFIG: "experimental-features = nix-command flakes"
+
+stages:
+  - check
+  - test
+  - build
+
+# ---------------------------------------------------------------------------
+# Caching: persist the Nix store across pipeline runs.
+# ---------------------------------------------------------------------------
+.nix-cache:
+  cache:
+    key:
+      files:
+        - flake.lock
+    paths:
+      - /nix/store
+    policy: pull-push
+
+# ---------------------------------------------------------------------------
+# Stage: check -- fast feedback on code style
+# ---------------------------------------------------------------------------
+fmt:
+  stage: check
+  extends: .nix-cache
+  script:
+    - nix develop --command bash -c 'cargo fmt --all -- --check'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|claude|develop)$/
+
+clippy:
+  stage: check
+  extends: .nix-cache
+  script:
+    - |
+      nix develop --command bash -c '
+        set -euo pipefail
+        setup-pgrx
+        cargo clippy --all-targets -- -D warnings
+      '
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|claude|develop)$/
+
+# ---------------------------------------------------------------------------
+# Stage: test -- run the full pgrx test suite
+# ---------------------------------------------------------------------------
+test-pg16:
+  stage: test
+  extends: .nix-cache
+  script:
+    - |
+      nix develop --command bash -c '
+        set -euo pipefail
+
+        echo "=== Environment ==="
+        rustc --version
+        cargo --version
+        pg_config --version
+
+        echo "=== Installing cargo-pgrx ==="
+        setup-pgrx
+
+        echo "=== Running tests ==="
+        test-pg16 --nocapture
+      '
+  artifacts:
+    when: on_failure
+    paths:
+      - pg_mentat/target/pgrx-test-data-*/
+    expire_in: 7 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|claude|develop)$/
+
+# ---------------------------------------------------------------------------
+# Stage: build -- package the extension
+# ---------------------------------------------------------------------------
+build-extension:
+  stage: build
+  extends: .nix-cache
+  script:
+    - |
+      nix develop --command bash -c '
+        set -euo pipefail
+        setup-pgrx
+        build-extension
+      '
+  artifacts:
+    paths:
+      - pg_mentat/target/release/pg_mentat-pg16/
+    expire_in: 30 days
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH =~ /^(main|claude|develop)$/

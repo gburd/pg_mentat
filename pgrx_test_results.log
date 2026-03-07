@@ -1,0 +1,482 @@
+[32m[1m       Using[0m[39m [37m[1mCliArgument("pg16")[0m[39m and `pg_config` from [36m/root/.pgrx/16.13/pgrx-install/bin/pg_config[39m
+CARGO_TARGET_DIR="/workspace/target" PGRX_ALL_FEATURES="false" PGRX_BUILD_PROFILE="dev" PGRX_FEATURES="pg16 pg_test" PGRX_NO_DEFAULT_FEATURES="true" PGRX_NO_SCHEMA="false" "/usr/local/rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/bin/cargo" "test" "--features" "pg16 pg_test" "--no-default-features"
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /workspace/pg_mentat/Cargo.toml
+workspace: /workspace/Cargo.toml
+   Compiling pgrx-pg-sys v0.17.0
+   Compiling pgrx v0.17.0
+   Compiling pgrx-tests v0.17.0
+   Compiling pg_mentat v0.1.0 (/workspace/pg_mentat)
+warning: unused import: `hooks::init_planner_hooks`
+  --> pg_mentat/src/planner/mod.rs:18:9
+   |
+18 | pub use hooks::init_planner_hooks;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: function `init_planner_hooks` is never used
+   --> pg_mentat/src/planner/hooks.rs:167:15
+    |
+167 | pub unsafe fn init_planner_hooks() {
+    |               ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
+
+warning: `pg_mentat` (lib) generated 2 warnings (run `cargo fix --lib -p pg_mentat` to apply 1 suggestion)
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:171:48
+    |
+171 |         let result = client.select(&sql, None, None)?;
+    |                             ------             ^^^^ expected `&[DatumWithOid<'_>]`, found `Option<_>`
+    |                             |
+    |                             arguments to this method are incorrect
+    |
+    = note: expected reference `&[DatumWithOid<'_>]`
+                    found enum `Option<_>`
+note: method defined here
+   --> /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-0.17.0/src/spi/client.rs:43:12
+    |
+ 43 |     pub fn select<'mcx, Q: Query<'conn>>(
+    |            ^^^^^^
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:172:16
+    |
+172 |         if let Some(row) = result.first() {
+    |                ^^^^^^^^^   -------------- this expression has type `SpiTupleTable<'_>`
+    |                |
+    |                expected `SpiTupleTable<'_>`, found `Option<_>`
+    |
+    = note: expected struct `SpiTupleTable<'_>`
+                 found enum `Option<_>`
+help: you might have meant to use field `table` whose type is `Option<&mut SPITupleTable>`
+    |
+172 |         if let Some(row) = result.first().table {
+    |                                          ++++++
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:191:48
+    |
+191 |         let result = client.select(&sql, None, None)?;
+    |                             ------             ^^^^ expected `&[DatumWithOid<'_>]`, found `Option<_>`
+    |                             |
+    |                             arguments to this method are incorrect
+    |
+    = note: expected reference `&[DatumWithOid<'_>]`
+                    found enum `Option<_>`
+note: method defined here
+   --> /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-0.17.0/src/spi/client.rs:43:12
+    |
+ 43 |     pub fn select<'mcx, Q: Query<'conn>>(
+    |            ^^^^^^
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:192:16
+    |
+192 |         if let Some(row) = result.first() {
+    |                ^^^^^^^^^   -------------- this expression has type `SpiTupleTable<'_>`
+    |                |
+    |                expected `SpiTupleTable<'_>`, found `Option<_>`
+    |
+    = note: expected struct `SpiTupleTable<'_>`
+                 found enum `Option<_>`
+help: you might have meant to use field `table` whose type is `Option<&mut SPITupleTable>`
+    |
+192 |         if let Some(row) = result.first().table {
+    |                                          ++++++
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:208:48
+    |
+208 |         let result = client.select(&sql, None, None)?;
+    |                             ------             ^^^^ expected `&[DatumWithOid<'_>]`, found `Option<_>`
+    |                             |
+    |                             arguments to this method are incorrect
+    |
+    = note: expected reference `&[DatumWithOid<'_>]`
+                    found enum `Option<_>`
+note: method defined here
+   --> /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-0.17.0/src/spi/client.rs:43:12
+    |
+ 43 |     pub fn select<'mcx, Q: Query<'conn>>(
+    |            ^^^^^^
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:209:16
+    |
+209 |         if let Some(row) = result.first() {
+    |                ^^^^^^^^^   -------------- this expression has type `SpiTupleTable<'_>`
+    |                |
+    |                expected `SpiTupleTable<'_>`, found `Option<_>`
+    |
+    = note: expected struct `SpiTupleTable<'_>`
+                 found enum `Option<_>`
+help: you might have meant to use field `table` whose type is `Option<&mut SPITupleTable>`
+    |
+209 |         if let Some(row) = result.first().table {
+    |                                          ++++++
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:223:75
+    |
+223 |         let result = client.select("SELECT mentat.mentat_schema()", None, None)?;
+    |                             ------ arguments to this method are incorrect ^^^^ expected `&[DatumWithOid<'_>]`, found `Option<_>`
+    |
+    = note: expected reference `&[DatumWithOid<'_>]`
+                    found enum `Option<_>`
+note: method defined here
+   --> /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pgrx-0.17.0/src/spi/client.rs:43:12
+    |
+ 43 |     pub fn select<'mcx, Q: Query<'conn>>(
+    |            ^^^^^^
+
+error[E0308]: mismatched types
+   --> pg_mentat/tests/test_common.rs:224:16
+    |
+224 |         if let Some(row) = result.first() {
+    |                ^^^^^^^^^   -------------- this expression has type `SpiTupleTable<'_>`
+    |                |
+    |                expected `SpiTupleTable<'_>`, found `Option<_>`
+    |
+    = note: expected struct `SpiTupleTable<'_>`
+                 found enum `Option<_>`
+help: you might have meant to use field `table` whose type is `Option<&mut SPITupleTable>`
+    |
+224 |         if let Some(row) = result.first().table {
+    |                                          ++++++
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `pg_mentat` (test "test_common") due to 8 previous errors
+warning: build failed, waiting for other jobs to finish...
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_fulltext.rs:47:5
+   |
+47 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_rules.rs:65:5
+   |
+65 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_timetravel.rs:76:5
+   |
+76 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_fulltext.rs:94:5
+   |
+94 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_rules.rs:95:5
+   |
+95 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:118:5
+    |
+118 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_fulltext.rs:137:5
+    |
+137 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:140:5
+    |
+140 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_query.rs:29:5
+   |
+29 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:152:5
+    |
+152 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_fulltext.rs:163:5
+    |
+163 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:171:5
+    |
+171 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:191:5
+    |
+191 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_fulltext.rs:208:5
+    |
+208 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_query.rs:67:5
+   |
+67 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:220:5
+    |
+220 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:216:5
+    |
+216 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_fulltext.rs:244:5
+    |
+244 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:248:5
+    |
+248 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+  --> pg_mentat/tests/test_query.rs:91:5
+   |
+91 |     #[pgrx::pg_test]
+   |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+   |
+   = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:275:5
+    |
+275 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_fulltext.rs:284:5
+    |
+284 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:284:5
+    |
+284 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:118:5
+    |
+118 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `pgrx::prelude::*`
+  --> pg_mentat/tests/test_fulltext.rs:16:5
+   |
+16 | use pgrx::prelude::*;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `query` and `transact`
+  --> pg_mentat/tests/test_fulltext.rs:25:58
+   |
+25 |     use crate::common::{setup_test_db, bootstrap_schema, transact, query};
+   |                                                          ^^^^^^^^  ^^^^^
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_timetravel.rs:315:5
+    |
+315 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `pgrx::prelude::*`
+  --> pg_mentat/tests/test_timetravel.rs:15:5
+   |
+15 | use pgrx::prelude::*;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `transact`
+  --> pg_mentat/tests/test_timetravel.rs:24:58
+   |
+24 |     use crate::common::{setup_test_db, bootstrap_schema, transact};
+   |                                                          ^^^^^^^^
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:146:5
+    |
+146 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_rules.rs:327:5
+    |
+327 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `pgrx::prelude::*`
+  --> pg_mentat/tests/test_rules.rs:15:5
+   |
+15 | use pgrx::prelude::*;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `query` and `transact`
+  --> pg_mentat/tests/test_rules.rs:24:58
+   |
+24 |     use crate::common::{setup_test_db, bootstrap_schema, transact, query};
+   |                                                          ^^^^^^^^  ^^^^^
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:178:5
+    |
+178 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:210:5
+    |
+210 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:244:5
+    |
+244 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:272:5
+    |
+272 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:299:5
+    |
+299 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0433]: failed to resolve: could not find `pg_test` in the crate root
+   --> pg_mentat/tests/test_query.rs:332:5
+    |
+332 |     #[pgrx::pg_test]
+    |     ^^^^^^^^^^^^^^^^ could not find `pg_test` in the crate root
+    |
+    = note: this error originates in the attribute macro `pgrx::pg_test` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: unused import: `pgrx::prelude::*`
+  --> pg_mentat/tests/test_query.rs:15:5
+   |
+15 | use pgrx::prelude::*;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `query`
+  --> pg_mentat/tests/test_query.rs:24:58
+   |
+24 |     use crate::common::{setup_test_db, bootstrap_schema, query};
+   |                                                          ^^^^^
+
+Some errors have detailed explanations: E0308, E0433.
+For more information about an error, try `rustc --explain E0308`.
+warning: `pg_mentat` (test "test_fulltext") generated 2 warnings
+error: could not compile `pg_mentat` (test "test_fulltext") due to 15 previous errors; 2 warnings emitted
+warning: `pg_mentat` (test "test_timetravel") generated 2 warnings
+error: could not compile `pg_mentat` (test "test_timetravel") due to 15 previous errors; 2 warnings emitted
+warning: `pg_mentat` (test "test_rules") generated 2 warnings
+error: could not compile `pg_mentat` (test "test_rules") due to 16 previous errors; 2 warnings emitted
+warning: `pg_mentat` (test "test_query") generated 2 warnings
+error: could not compile `pg_mentat` (test "test_query") due to 19 previous errors; 2 warnings emitted
+warning: `pg_mentat` (lib test) generated 2 warnings (2 duplicates)
