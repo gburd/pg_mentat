@@ -458,23 +458,28 @@ fn build_sql_from_datalog(
         rule_cte_info = Some(cte_info);
     }
 
-    // Build the base query
-    let base_sql = build_extended_pattern_query(
-        &pattern_clauses,
-        &not_joins,
-        &predicates,
-        &fts_joins,
-        &extra_var_bindings,
-        find_vars,
-        &parsed.find_spec,
-        builder,
-        temporal,
-        &rule_cte_info,
-    )?;
+    // Build the base query (skip if we only have OR clauses)
+    let (base_sql, base_var_to_alias) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
+        // No base patterns, only OR clauses - will be handled below
+        (String::new(), HashMap::new())
+    } else {
+        build_extended_pattern_query(
+            &pattern_clauses,
+            &not_joins,
+            &predicates,
+            &fts_joins,
+            &extra_var_bindings,
+            find_vars,
+            &parsed.find_spec,
+            builder,
+            temporal,
+            &rule_cte_info,
+        )?
+    };
 
     // Handle OR-joins
-    let query_sql = if or_joins.is_empty() {
-        base_sql
+    let (query_sql, has_union) = if or_joins.is_empty() {
+        (base_sql, false)
     } else {
         if or_joins.len() > 1 {
             return Err("Multiple OR-join clauses in a single query are not yet supported".into());
@@ -506,7 +511,7 @@ fn build_sql_from_datalog(
             combined.extend(arm_patterns);
 
             let mut arm_builder = SqlBuilder::new();
-            let arm_sql = build_extended_pattern_query(
+            let (arm_sql, _arm_var_to_alias) = build_extended_pattern_query(
                 &combined,
                 &not_joins,
                 &predicates,
@@ -530,7 +535,7 @@ fn build_sql_from_datalog(
             union_parts.push(format!("({})", remapped));
         }
 
-        union_parts.join(" UNION ")
+        (union_parts.join(" UNION "), true)
     };
 
     // Prepend CTEs if we have rules
@@ -541,7 +546,10 @@ fn build_sql_from_datalog(
     };
 
     // Append ORDER BY
-    let query_sql = append_order_by(query_sql, &parsed.order, find_vars);
+    // For non-UNION queries, pass var_to_alias so numeric columns (e, a, tx)
+    // are ordered numerically rather than lexicographically as TEXT.
+    let var_alias_ref = if has_union { None } else { Some(&base_var_to_alias) };
+    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref);
 
     // Append LIMIT
     let query_sql = append_limit(query_sql, &parsed.limit, &parsed.find_spec);
@@ -704,11 +712,31 @@ fn fn_arg_to_placeholder(arg: &FnArg) -> String {
 // ============================================================================
 
 /// Append ORDER BY clause to SQL string.
-fn append_order_by(sql: String, order: &Option<Vec<Order>>, find_vars: &[String]) -> String {
+///
+/// When `var_to_alias` is provided (non-UNION queries) and a variable maps to a
+/// numeric column (e, a, tx), the query is wrapped in a subquery so that the
+/// ORDER BY can cast the TEXT column to BIGINT for proper numeric ordering.
+/// This avoids the "ORDER BY must appear in select list" error with DISTINCT.
+fn append_order_by(
+    sql: String,
+    order: &Option<Vec<Order>>,
+    find_vars: &[String],
+    var_to_alias: Option<&HashMap<String, (String, &'static str)>>,
+) -> String {
     if let Some(ref orders) = order {
         if orders.is_empty() {
             return sql;
         }
+
+        // Check if any ordered variable is a numeric column (e, a, tx)
+        let has_numeric_order = var_to_alias.map_or(false, |vta| {
+            orders.iter().any(|Order(_, var)| {
+                let var_name = format!("{}", var);
+                vta.get(var_name.as_str())
+                    .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx")
+            })
+        });
+
         let mut order_parts = Vec::new();
         for Order(direction, var) in orders {
             let var_name = format!("{}", var);
@@ -717,11 +745,39 @@ fn append_order_by(sql: String, order: &Option<Vec<Order>>, find_vars: &[String]
                     Direction::Ascending => "ASC",
                     Direction::Descending => "DESC",
                 };
-                order_parts.push(format!("{} {}", col_pos + 1, dir));
+                if has_numeric_order {
+                    // Use column alias from the subquery wrapper
+                    let is_numeric = var_to_alias
+                        .and_then(|vta| vta.get(var_name.as_str()))
+                        .map_or(false, |(_, col)| {
+                            *col == "e" || *col == "a" || *col == "tx"
+                        });
+                    if is_numeric {
+                        order_parts.push(format!("_c{}::BIGINT {}", col_pos + 1, dir));
+                    } else {
+                        order_parts.push(format!("_c{} {}", col_pos + 1, dir));
+                    }
+                } else {
+                    order_parts.push(format!("{} {}", col_pos + 1, dir));
+                }
             }
         }
         if !order_parts.is_empty() {
-            return format!("{} ORDER BY {}", sql, order_parts.join(", "));
+            if has_numeric_order {
+                // Wrap in subquery with named columns so we can cast in ORDER BY
+                let col_aliases: Vec<String> = (1..=find_vars.len())
+                    .map(|i| format!("_c{}", i))
+                    .collect();
+                return format!(
+                    "SELECT {cols} FROM ({inner}) AS _q({col_defs}) ORDER BY {order}",
+                    cols = col_aliases.join(", "),
+                    inner = sql,
+                    col_defs = col_aliases.join(", "),
+                    order = order_parts.join(", "),
+                );
+            } else {
+                return format!("{} ORDER BY {}", sql, order_parts.join(", "));
+            }
         }
     }
     sql
@@ -788,7 +844,7 @@ fn build_extended_pattern_query(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     rule_cte_info: &Option<RuleCteInfo>,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, HashMap<String, (String, &'static str)>), Box<dyn std::error::Error + Send + Sync>> {
     // Track variable bindings to datom table aliases
     let mut var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
     let mut joins = Vec::new();
@@ -1037,7 +1093,7 @@ fn build_extended_pattern_query(
         sql.push_str(&format!(" GROUP BY {}", group_by_exprs.join(", ")));
     }
 
-    Ok(sql)
+    Ok((sql, var_to_alias))
 }
 
 /// Get the Element at the given index from a FindSpec.

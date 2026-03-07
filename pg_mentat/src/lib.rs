@@ -286,9 +286,12 @@ mod tests {
             ON CONFLICT (ident) DO NOTHING;
 
             -- Bootstrap datoms in the datoms table so queries can find them.
-            -- Each entity with an ident gets a (:db/ident, keyword) datom.
-            -- a=1 is :db/ident, value_type_tag=8 is keyword, tx=1000000 is bootstrap tx.
+            -- a=1 is :db/ident (keyword type_tag=8)
+            -- a=2 is :db/valueType (ref type_tag=0, value is entity ID as LE i64)
+            -- a=3 is :db/cardinality (ref type_tag=0, value is entity ID as LE i64)
+            -- tx=1000000 is the bootstrap transaction.
             INSERT INTO mentat.datoms (e, a, v, value_type_tag, tx, added) VALUES
+                -- :db/ident datoms (a=1, keyword)
                 (1,  1, 'db/ident'::bytea,            8, 1000000, true),
                 (2,  1, 'db/valueType'::bytea,        8, 1000000, true),
                 (3,  1, 'db/cardinality'::bytea,      8, 1000000, true),
@@ -311,7 +314,42 @@ mod tests {
                 (30, 1, 'db.cardinality/one'::bytea,   8, 1000000, true),
                 (31, 1, 'db.cardinality/many'::bytea,  8, 1000000, true),
                 (32, 1, 'db.unique/value'::bytea,      8, 1000000, true),
-                (33, 1, 'db.unique/identity'::bytea,   8, 1000000, true);
+                (33, 1, 'db.unique/identity'::bytea,   8, 1000000, true),
+
+                -- :db/valueType datoms (a=2, ref type_tag=0, value = entity ID as LE i64)
+                -- Entity 1 (:db/ident) -> :db.type/keyword (entity 21 = 0x15)
+                (1,  2, E'\\x1500000000000000'::bytea, 0, 1000000, true),
+                -- Entity 2 (:db/valueType) -> :db.type/ref (entity 20 = 0x14)
+                (2,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
+                -- Entity 3 (:db/cardinality) -> :db.type/ref (entity 20)
+                (3,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
+                -- Entity 4 (:db/unique) -> :db.type/ref (entity 20)
+                (4,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
+                -- Entity 5 (:db/doc) -> :db.type/string (entity 24 = 0x18)
+                (5,  2, E'\\x1800000000000000'::bytea, 0, 1000000, true),
+                -- Entity 6 (:db/isComponent) -> :db.type/boolean (entity 25 = 0x19)
+                (6,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                -- Entity 7 (:db/fulltext) -> :db.type/boolean (entity 25)
+                (7,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                -- Entity 8 (:db/index) -> :db.type/boolean (entity 25)
+                (8,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                -- Entity 9 (:db/noHistory) -> :db.type/boolean (entity 25)
+                (9,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26 = 0x1a)
+                (10, 2, E'\\x1a00000000000000'::bytea, 0, 1000000, true),
+
+                -- :db/cardinality datoms (a=3, ref type_tag=0, value = entity ID as LE i64)
+                -- All core attrs have cardinality :db.cardinality/one (entity 30 = 0x1e)
+                (1,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (2,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (3,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (4,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (5,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (6,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (7,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (8,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (9,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
+                (10, 3, E'\\x1e00000000000000'::bytea, 0, 1000000, true);
             "#,
         )?;
         Ok(())
