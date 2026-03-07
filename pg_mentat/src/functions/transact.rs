@@ -15,7 +15,6 @@ mod bootstrap_entids {
     pub const DB_FULLTEXT: i64 = 7;
     pub const DB_INDEX: i64 = 8;
     pub const DB_NO_HISTORY: i64 = 9;
-    pub const DB_TX_INSTANT: i64 = 10;
 }
 
 /// Schema attribute properties collected during the first pass.
@@ -86,6 +85,12 @@ fn keyword_to_unique(kw: &edn::symbols::Keyword) -> Option<&'static str> {
 /// When transactions include schema-defining assertions (:db/ident, :db/valueType,
 /// :db/cardinality, etc.), the mentat.schema and mentat.idents tables are updated
 /// so that newly defined attributes become immediately resolvable.
+///
+/// Uses a three-pass approach to handle transactions that both define schema
+/// attributes and reference them in the same transaction:
+///   Pass 1: Scan for schema definitions, allocate tempids, build pending ident map
+///   Install: Write new schema to mentat.schema and mentat.idents
+///   Pass 2: Parse all assertions using the now-resolvable idents, insert datoms
 #[pg_extern]
 fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Parse EDN transaction
@@ -111,17 +116,78 @@ fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + S
     )?;
 
     // ========================================================================
-    // Two-pass transaction processing:
-    //   Pass 1: Parse all assertions, allocate tempids, collect schema definitions
-    //   Between: Install new schema attributes into mentat.schema and mentat.idents
-    //   Pass 2: Insert all datoms into mentat.datoms
+    // Three-pass transaction processing:
+    //   Pass 1: Scan for schema definitions, allocate tempids for schema entities
+    //   Install: Write new attributes to mentat.schema and mentat.idents
+    //   Pass 2: Parse ALL assertions (idents now resolvable), insert datoms
     // ========================================================================
 
     let mut tempid_map: BTreeMap<String, i64> = BTreeMap::new();
-    let mut pending_datoms: Vec<PendingDatom> = Vec::new();
     let mut schema_builders: BTreeMap<i64, SchemaBuilder> = BTreeMap::new();
 
-    // --- Pass 1: Parse assertions and collect schema metadata ---
+    // --- Pass 1: Scan for schema definitions ---
+    // Only process :db/ident, :db/valueType, :db/cardinality, etc. assertions.
+    // Allocate tempids encountered so they're stable across passes.
+    for entity_value in entities {
+        match entity_value {
+            edn::Value::Vector(ref entity_vec) if entity_vec.len() >= 4 => {
+                // Only process :db/add
+                match &entity_vec[0] {
+                    edn::Value::Keyword(kw) if kw.name() == "add" => {}
+                    _ => continue,
+                };
+
+                // Allocate/resolve the entity tempid so it's stable
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+
+                // Try to resolve the attribute -- but only if it's a known
+                // bootstrap schema attribute. We use try_resolve here because
+                // user-defined attributes won't be in the DB yet.
+                let a = match try_resolve_attribute(&entity_vec[2]) {
+                    Some(a) => a,
+                    None => continue, // Not a bootstrap attr, skip in schema scan
+                };
+
+                collect_schema_assertion(e, a, &entity_vec[3], &mut schema_builders);
+            }
+            edn::Value::Map(ref map) => {
+                // Resolve entity for stable tempid allocation
+                let e = if let Some(id_val) =
+                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
+                {
+                    resolve_entity_place(id_val, &mut tempid_map)?
+                } else {
+                    Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
+                        .ok()
+                        .flatten()
+                        .ok_or("Failed to allocate entity ID")?
+                };
+
+                for (attr_key, attr_value) in map {
+                    if let edn::Value::Keyword(kw) = attr_key {
+                        if kw.name() == "db/id" {
+                            continue;
+                        }
+                    }
+                    let a = match try_resolve_attribute(attr_key) {
+                        Some(a) => a,
+                        None => continue,
+                    };
+                    collect_schema_assertion(e, a, attr_value, &mut schema_builders);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // --- Install new schema attributes ---
+    // This writes to mentat.idents and mentat.schema so that resolve_attribute()
+    // will succeed for newly-defined attributes in Pass 2.
+    install_schema_attributes(&schema_builders)?;
+
+    // --- Pass 2: Parse ALL assertions and insert datoms ---
+    // Now all idents (both bootstrap and newly-defined) are resolvable.
+    let mut pending_datoms: Vec<PendingDatom> = Vec::new();
 
     for entity_value in entities {
         match entity_value {
@@ -136,11 +202,6 @@ fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + S
                 let a = resolve_attribute(&entity_vec[2])?;
                 let (v_bytes, v_type_tag) = encode_value(&entity_vec[3])?;
                 let added = matches!(op, OpType::Add);
-
-                // Detect schema-defining assertions and collect them
-                if added {
-                    collect_schema_assertion(e, a, &entity_vec[3], &mut schema_builders);
-                }
 
                 pending_datoms.push(PendingDatom {
                     e,
@@ -172,8 +233,6 @@ fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + S
                     let a = resolve_attribute(attr_key)?;
                     let (v_bytes, v_type_tag) = encode_value(attr_value)?;
 
-                    collect_schema_assertion(e, a, attr_value, &mut schema_builders);
-
                     pending_datoms.push(PendingDatom {
                         e,
                         a,
@@ -187,10 +246,7 @@ fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + S
         }
     }
 
-    // --- Between passes: Install new schema attributes ---
-    install_schema_attributes(&schema_builders)?;
-
-    // --- Pass 2: Insert all datoms ---
+    // Insert all datoms
     let datom_count = pending_datoms.len();
     for datom in &pending_datoms {
         Spi::run_with_args(
@@ -395,7 +451,7 @@ fn resolve_entity_place(
     }
 }
 
-/// Resolve attribute (entid or ident)
+/// Resolve attribute (entid or ident). Errors if the ident is not found.
 fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     match value {
         edn::Value::Integer(i) => Ok(*i),
@@ -408,10 +464,29 @@ fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Erro
             )
             .ok()
             .flatten()
-            .ok_or("Failed to resolve attribute")?;
+            .ok_or_else(|| format!("Failed to resolve attribute: {}", ident_str))?;
             Ok(entid)
         }
         _ => Err("Invalid attribute".into()),
+    }
+}
+
+/// Try to resolve an attribute, returning None if not found.
+/// Used during the schema-scanning pass where user-defined attributes
+/// may not yet exist in the database.
+fn try_resolve_attribute(value: &edn::Value) -> Option<i64> {
+    match value {
+        edn::Value::Integer(i) => Some(*i),
+        edn::Value::Keyword(kw) => {
+            let ident_str = format!("{}", kw);
+            Spi::get_one_with_args::<i64>(
+                "SELECT mentat.resolve_ident($1)",
+                &[DatumWithOid::from(ident_str.as_str())],
+            )
+            .ok()
+            .flatten()
+        }
+        _ => None,
     }
 }
 

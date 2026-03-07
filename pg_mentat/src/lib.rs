@@ -147,9 +147,11 @@ mod tests {
             );
 
             CREATE TABLE IF NOT EXISTS mentat.partitions (
-                part TEXT PRIMARY KEY,
-                start_id BIGINT NOT NULL,
-                end_id BIGINT NOT NULL
+                name TEXT PRIMARY KEY,
+                start_entid BIGINT NOT NULL,
+                end_entid BIGINT NOT NULL,
+                next_entid BIGINT NOT NULL,
+                allow_excision BOOLEAN NOT NULL DEFAULT FALSE
             );
 
             CREATE TABLE IF NOT EXISTS mentat.transactions (
@@ -164,11 +166,11 @@ mod tests {
             CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v, a, e, tx) WHERE value_type_tag = 0;
             CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
 
-            INSERT INTO mentat.partitions (part, start_id, end_id) VALUES
-                ('db.part/db', 0, 10000),
-                ('db.part/user', 10000, 1000000),
-                ('db.part/tx', 1000001, 2000000)
-            ON CONFLICT (part) DO NOTHING;
+            INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
+                ('db.part/db', 0, 10000, 100, FALSE),
+                ('db.part/user', 10000, 1000000, 10000, FALSE),
+                ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+            ON CONFLICT (name) DO NOTHING;
 
             INSERT INTO mentat.transactions (tx, tx_instant)
             VALUES (1000000, '2025-01-01T00:00:00Z')
@@ -180,9 +182,9 @@ mod tests {
             DECLARE new_entid BIGINT;
             BEGIN
                 UPDATE mentat.partitions
-                SET start_id = start_id + 1
-                WHERE part = partition_name
-                RETURNING start_id - 1 INTO new_entid;
+                SET next_entid = next_entid + 1
+                WHERE name = partition_name
+                RETURNING next_entid - 1 INTO new_entid;
                 IF NOT FOUND THEN
                     RAISE EXCEPTION 'Partition % not found', partition_name;
                 END IF;

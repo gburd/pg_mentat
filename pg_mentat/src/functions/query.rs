@@ -450,14 +450,12 @@ fn build_sql_from_datalog(
 
     // Build CTEs from rule definitions and rule invocations
     let mut cte_prefix = String::new();
+    let mut rule_cte_info: Option<RuleCteInfo> = None;
     if !rule_invocations.is_empty() && !parsed.rules.is_empty() {
-        let (cte_sql, rule_var_map) =
+        let (cte_sql, cte_info) =
             build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal)?;
         cte_prefix = cte_sql;
-        // Merge rule variable bindings into extra_var_bindings
-        for (var_name, expr) in rule_var_map {
-            extra_var_bindings.insert(var_name, expr);
-        }
+        rule_cte_info = Some(cte_info);
     }
 
     // Build the base query
@@ -471,6 +469,7 @@ fn build_sql_from_datalog(
         &parsed.find_spec,
         builder,
         temporal,
+        &rule_cte_info,
     )?;
 
     // Handle OR-joins
@@ -1320,4 +1319,299 @@ fn pred_arg_to_sql(
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(format!("'{}'", b)),
         _ => Err("Unsupported predicate argument type".into()),
     }
+}
+
+// ============================================================================
+// Rule CTE builder
+// ============================================================================
+
+/// Build WITH RECURSIVE CTE(s) from rule definitions and invocations.
+///
+/// Returns:
+/// - The CTE prefix string (e.g., "WITH RECURSIVE rule_name(col1, col2) AS (...)")
+/// - A map of variable names to SQL expressions for binding rule results
+///   into the main query's find variables.
+fn build_rule_ctes(
+    rules: &[Rule],
+    invocations: &[&RuleInvocation],
+    builder: &mut SqlBuilder<'_>,
+    temporal: &TemporalOption,
+) -> Result<(String, HashMap<String, String>), Box<dyn std::error::Error + Send + Sync>> {
+    let mut cte_parts = Vec::new();
+    let mut var_bindings: HashMap<String, String> = HashMap::new();
+
+    for invocation in invocations {
+        let rule_name = invocation.name.0.as_str();
+
+        // Find the matching rule definition
+        let rule = rules
+            .iter()
+            .find(|r| r.name.0.as_str() == rule_name)
+            .ok_or_else(|| format!("No rule definition found for '{}'", rule_name))?;
+
+        // Determine the arity (number of arguments) from the first clause head
+        let arity = if let Some(first_clause) = rule.clauses.first() {
+            first_clause.head.args.len()
+        } else {
+            return Err(format!("Rule '{}' has no clauses", rule_name).into());
+        };
+
+        // Generate column names for the CTE: col0, col1, ...
+        let cte_cols: Vec<String> = (0..arity).map(|i| format!("col{}", i)).collect();
+        let cte_col_list = cte_cols.join(", ");
+
+        // Build UNION of each rule clause body
+        let mut union_parts = Vec::new();
+        for clause in &rule.clauses {
+            let clause_sql =
+                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name)?;
+            union_parts.push(clause_sql);
+        }
+
+        let cte_body = union_parts.join(" UNION ALL ");
+
+        let is_recursive = rule.clauses.iter().any(|clause| {
+            clause.body.iter().any(
+                |wc| matches!(wc, WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name),
+            )
+        });
+
+        let recursive_kw = if is_recursive { "RECURSIVE " } else { "" };
+
+        cte_parts.push(format!(
+            "WITH {recursive_kw}{rule_name}({cte_col_list}) AS ({cte_body})"
+        ));
+
+        // Bind invocation arguments to CTE columns
+        // The invocation (ancestor ?anc ?desc) binds ?anc -> rule_name.col0, ?desc -> rule_name.col1
+        for (i, arg) in invocation.args.iter().enumerate() {
+            if let FnArg::Variable(v) = arg {
+                let var_name = format!("{}", v);
+                let col_name = format!("{}.col{}::TEXT", rule_name, i);
+                var_bindings.insert(var_name, col_name);
+            }
+        }
+    }
+
+    // Join all CTEs (in practice we only support one CTE for now)
+    let cte_sql = cte_parts.join(", ");
+
+    Ok((cte_sql, var_bindings))
+}
+
+/// Build SQL for a single rule clause body.
+///
+/// Each clause has a head (defining result columns) and a body (patterns + optional
+/// recursive rule invocations).
+fn build_rule_clause_sql(
+    clause: &edn::query::RuleClause,
+    cte_cols: &[String],
+    builder: &mut SqlBuilder<'_>,
+    temporal: &TemporalOption,
+    rule_name: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Map head argument variables to CTE column positions
+    let mut head_var_to_col: HashMap<String, usize> = HashMap::new();
+    for (i, arg) in clause.head.args.iter().enumerate() {
+        if let FnArg::Variable(v) = arg {
+            head_var_to_col.insert(format!("{}", v), i);
+        }
+    }
+
+    // Process body patterns
+    let mut pattern_joins = Vec::new();
+    let mut where_parts = Vec::new();
+    let mut body_var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
+    let mut recursive_join: Option<String> = None;
+    let mut recursive_alias = String::new();
+
+    let mut pattern_idx = 0;
+    for wc in &clause.body {
+        match wc {
+            WhereClause::Pattern(p) => {
+                let alias = format!("r_d{}", pattern_idx);
+                pattern_idx += 1;
+
+                // Entity position
+                match &p.entity {
+                    PatternNonValuePlace::Variable(v) => {
+                        let var_name = format!("{}", v);
+                        if let Some((existing, col)) = body_var_to_alias.get(&var_name) {
+                            where_parts.push(format!("{alias}.e = {existing}.{col}"));
+                        } else {
+                            body_var_to_alias.insert(var_name, (alias.clone(), "e"));
+                        }
+                    }
+                    PatternNonValuePlace::Entid(id) => {
+                        let param = builder.bind_bigint(*id);
+                        where_parts.push(format!("{alias}.e = {param}"));
+                    }
+                    PatternNonValuePlace::Ident(kw) => {
+                        let ident_str = keyword_to_ident(kw);
+                        let param = builder.bind_text(ident_str);
+                        where_parts.push(format!(
+                            "{alias}.e = (SELECT entid FROM mentat.idents WHERE ident = {param})"
+                        ));
+                    }
+                    PatternNonValuePlace::Placeholder => {}
+                }
+
+                // Attribute position
+                match &p.attribute {
+                    PatternNonValuePlace::Ident(kw) => {
+                        let ident_str = keyword_to_ident(kw);
+                        let param = builder.bind_text(ident_str);
+                        where_parts.push(format!(
+                            "{alias}.a = (SELECT entid FROM mentat.schema WHERE ident = {param})"
+                        ));
+                    }
+                    PatternNonValuePlace::Entid(id) => {
+                        let param = builder.bind_bigint(*id);
+                        where_parts.push(format!("{alias}.a = {param}"));
+                    }
+                    PatternNonValuePlace::Variable(v) => {
+                        let var_name = format!("{}", v);
+                        if let Some((existing, col)) = body_var_to_alias.get(&var_name) {
+                            where_parts.push(format!("{alias}.a = {existing}.{col}"));
+                        } else {
+                            body_var_to_alias.insert(var_name, (alias.clone(), "a"));
+                        }
+                    }
+                    PatternNonValuePlace::Placeholder => {}
+                }
+
+                // Value position
+                match &p.value {
+                    PatternValuePlace::Variable(v) => {
+                        let var_name = format!("{}", v);
+                        if let Some((existing, col)) = body_var_to_alias.get(&var_name) {
+                            if *col == "v" {
+                                where_parts.push(format!(
+                                    "{alias}.v = {existing}.v AND {alias}.value_type_tag = {existing}.value_type_tag"
+                                ));
+                            } else {
+                                where_parts.push(format!("{alias}.v = {existing}.{col}"));
+                            }
+                        } else {
+                            body_var_to_alias.insert(var_name, (alias.clone(), "v"));
+                        }
+                    }
+                    _ => {
+                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
+                            where_parts.push(constraint);
+                        }
+                    }
+                }
+
+                // Temporal filtering
+                if !temporal.history {
+                    where_parts.push(format!("{alias}.added = true"));
+                }
+                if let Some(as_of) = temporal.as_of {
+                    let param = builder.bind_bigint(as_of);
+                    where_parts.push(format!("{alias}.tx <= {param}"));
+                }
+                if let Some(since) = temporal.since {
+                    let param = builder.bind_bigint(since);
+                    where_parts.push(format!("{alias}.tx > {param}"));
+                }
+
+                pattern_joins.push(format!("mentat.datoms {alias}"));
+            }
+            WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {
+                // Recursive self-reference: JOIN against the CTE itself
+                recursive_alias = format!("rec_{}", rule_name);
+                recursive_join = Some(format!("{rule_name} {recursive_alias}"));
+
+                // Bind recursive arguments to body variables
+                for (i, arg) in ri.args.iter().enumerate() {
+                    if let FnArg::Variable(v) = arg {
+                        let var_name = format!("{}", v);
+                        let col_ref = format!("{}.col{}", recursive_alias, i);
+                        // Link the recursive CTE column to the body variable
+                        if let Some((alias, col)) = body_var_to_alias.get(&var_name) {
+                            if *col == "v" {
+                                // Value column: need to compare decoded value
+                                // For ref-type values (entity IDs stored as BYTEA),
+                                // decode and compare
+                                where_parts.push(format!("({}::TEXT) = {alias}.e::TEXT", col_ref));
+                            } else {
+                                where_parts.push(format!("{col_ref}::BIGINT = {alias}.{col}",));
+                            }
+                        } else {
+                            // New variable - bind to recursive column
+                            body_var_to_alias
+                                .insert(var_name, (recursive_alias.clone(), "computed"));
+                        }
+                    }
+                }
+            }
+            _ => {
+                return Err(
+                    "Only patterns and recursive rule invocations are supported in rule bodies"
+                        .into(),
+                );
+            }
+        }
+    }
+
+    // Build SELECT expressions: map head variables to body columns
+    let mut select_parts = Vec::new();
+    for (i, arg) in clause.head.args.iter().enumerate() {
+        if let FnArg::Variable(v) = arg {
+            let var_name = format!("{}", v);
+            if let Some((alias, col)) = body_var_to_alias.get(var_name.as_str()) {
+                if alias == &recursive_alias && *col == "computed" {
+                    // Recursive variable mapped directly
+                    select_parts.push(format!("{}.col{}::BIGINT", recursive_alias, i));
+                } else if *col == "v" {
+                    // Value column: for ref-type, decode the entity reference
+                    let i64_decode = format!(
+                        "(get_byte({alias}.v, 0)::BIGINT | \
+                         (get_byte({alias}.v, 1)::BIGINT << 8) | \
+                         (get_byte({alias}.v, 2)::BIGINT << 16) | \
+                         (get_byte({alias}.v, 3)::BIGINT << 24) | \
+                         (get_byte({alias}.v, 4)::BIGINT << 32) | \
+                         (get_byte({alias}.v, 5)::BIGINT << 40) | \
+                         (get_byte({alias}.v, 6)::BIGINT << 48) | \
+                         (get_byte({alias}.v, 7)::BIGINT << 56))"
+                    );
+                    select_parts.push(i64_decode);
+                } else {
+                    select_parts.push(format!("{alias}.{col}"));
+                }
+            } else {
+                select_parts.push("NULL::BIGINT".to_string());
+            }
+        } else {
+            select_parts.push("NULL::BIGINT".to_string());
+        }
+    }
+
+    // Combine FROM
+    let mut from_parts: Vec<String> = pattern_joins;
+    if let Some(ref rj) = recursive_join {
+        from_parts.push(rj.clone());
+    }
+
+    if from_parts.is_empty() {
+        return Err("Rule clause body has no patterns".into());
+    }
+
+    let sql = if where_parts.is_empty() {
+        format!(
+            "SELECT {} FROM {}",
+            select_parts.join(", "),
+            from_parts.join(", ")
+        )
+    } else {
+        format!(
+            "SELECT {} FROM {} WHERE {}",
+            select_parts.join(", "),
+            from_parts.join(", "),
+            where_parts.join(" AND ")
+        )
+    };
+
+    Ok(sql)
 }
