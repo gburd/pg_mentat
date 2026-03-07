@@ -166,6 +166,24 @@ mod tests {
             CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v, a, e, tx) WHERE value_type_tag = 0;
             CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
 
+            -- Full-text search support table
+            CREATE TABLE IF NOT EXISTS mentat.fulltext (
+                text_value TEXT NOT NULL,
+                search_vector TSVECTOR
+            );
+            CREATE INDEX IF NOT EXISTS idx_fulltext_search ON mentat.fulltext USING GIN (search_vector);
+
+            -- Trigger to auto-update search vector
+            CREATE OR REPLACE FUNCTION mentat.fulltext_update_trigger() RETURNS trigger AS $$
+            BEGIN
+                NEW.search_vector := to_tsvector('english', NEW.text_value);
+                RETURN NEW;
+            END; $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS fulltext_update ON mentat.fulltext;
+            CREATE TRIGGER fulltext_update BEFORE INSERT OR UPDATE ON mentat.fulltext
+                FOR EACH ROW EXECUTE FUNCTION mentat.fulltext_update_trigger();
+
             INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
                 ('db.part/db', 0, 10000, 100, FALSE),
                 ('db.part/user', 10000, 1000000, 10000, FALSE),
@@ -266,6 +284,34 @@ mod tests {
                 (':db.unique/value', 32),
                 (':db.unique/identity', 33)
             ON CONFLICT (ident) DO NOTHING;
+
+            -- Bootstrap datoms in the datoms table so queries can find them.
+            -- Each entity with an ident gets a (:db/ident, keyword) datom.
+            -- a=1 is :db/ident, value_type_tag=8 is keyword, tx=1000000 is bootstrap tx.
+            INSERT INTO mentat.datoms (e, a, v, value_type_tag, tx, added) VALUES
+                (1,  1, 'db/ident'::bytea,            8, 1000000, true),
+                (2,  1, 'db/valueType'::bytea,        8, 1000000, true),
+                (3,  1, 'db/cardinality'::bytea,      8, 1000000, true),
+                (4,  1, 'db/unique'::bytea,            8, 1000000, true),
+                (5,  1, 'db/doc'::bytea,               8, 1000000, true),
+                (6,  1, 'db/isComponent'::bytea,       8, 1000000, true),
+                (7,  1, 'db/fulltext'::bytea,          8, 1000000, true),
+                (8,  1, 'db/index'::bytea,             8, 1000000, true),
+                (9,  1, 'db/noHistory'::bytea,         8, 1000000, true),
+                (10, 1, 'db/txInstant'::bytea,         8, 1000000, true),
+                (20, 1, 'db.type/ref'::bytea,          8, 1000000, true),
+                (21, 1, 'db.type/keyword'::bytea,      8, 1000000, true),
+                (22, 1, 'db.type/long'::bytea,         8, 1000000, true),
+                (23, 1, 'db.type/double'::bytea,       8, 1000000, true),
+                (24, 1, 'db.type/string'::bytea,       8, 1000000, true),
+                (25, 1, 'db.type/boolean'::bytea,      8, 1000000, true),
+                (26, 1, 'db.type/instant'::bytea,      8, 1000000, true),
+                (27, 1, 'db.type/uuid'::bytea,         8, 1000000, true),
+                (28, 1, 'db.type/bytes'::bytea,        8, 1000000, true),
+                (30, 1, 'db.cardinality/one'::bytea,   8, 1000000, true),
+                (31, 1, 'db.cardinality/many'::bytea,  8, 1000000, true),
+                (32, 1, 'db.unique/value'::bytea,      8, 1000000, true),
+                (33, 1, 'db.unique/identity'::bytea,   8, 1000000, true);
             "#,
         )?;
         Ok(())
@@ -632,7 +678,9 @@ mod tests {
         Spi::run("SELECT mentat_transact('[[:db/add \"p1\" :person/age 26]]'::TEXT)")
             .expect("Transaction 2 failed");
 
-        let tx2 = Spi::get_one::<i64>("SELECT MAX(tx) FROM mentat.datoms WHERE tx > $1")
+        let tx2 = Spi::get_one::<i64>(&format!(
+            "SELECT MAX(tx) FROM mentat.datoms WHERE tx > {}", tx1
+        ))
             .expect("Failed to get tx2")
             .expect("tx2 is null");
 
