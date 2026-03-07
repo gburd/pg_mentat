@@ -102,6 +102,24 @@ mod tests {
             r#"
             CREATE SCHEMA IF NOT EXISTS mentat;
 
+            -- Define enum types
+            DO $$ BEGIN
+                CREATE TYPE mentat.value_type AS ENUM (
+                    'ref', 'boolean', 'instant', 'long', 'double', 'string', 'keyword', 'uuid', 'bytes'
+                );
+            EXCEPTION WHEN duplicate_object THEN null;
+            END $$;
+
+            DO $$ BEGIN
+                CREATE TYPE mentat.unique_type AS ENUM ('value', 'identity');
+            EXCEPTION WHEN duplicate_object THEN null;
+            END $$;
+
+            DO $$ BEGIN
+                CREATE TYPE mentat.cardinality_type AS ENUM ('one', 'many');
+            EXCEPTION WHEN duplicate_object THEN null;
+            END $$;
+
             CREATE TABLE IF NOT EXISTS mentat.datoms (
                 e BIGINT NOT NULL,
                 a BIGINT NOT NULL,
@@ -114,13 +132,13 @@ mod tests {
             CREATE TABLE IF NOT EXISTS mentat.schema (
                 entid BIGINT PRIMARY KEY,
                 ident TEXT UNIQUE NOT NULL,
-                value_type INTEGER NOT NULL,
-                cardinality INTEGER NOT NULL,
-                unique_value BOOLEAN DEFAULT FALSE,
-                index_value BOOLEAN DEFAULT FALSE,
-                fulltext BOOLEAN DEFAULT FALSE,
-                component BOOLEAN DEFAULT FALSE,
-                no_history BOOLEAN DEFAULT FALSE
+                value_type mentat.value_type NOT NULL,
+                cardinality mentat.cardinality_type NOT NULL DEFAULT 'one',
+                unique_constraint mentat.unique_type,
+                indexed BOOLEAN NOT NULL DEFAULT FALSE,
+                fulltext BOOLEAN NOT NULL DEFAULT FALSE,
+                component BOOLEAN NOT NULL DEFAULT FALSE,
+                no_history BOOLEAN NOT NULL DEFAULT FALSE
             );
 
             CREATE TABLE IF NOT EXISTS mentat.idents (
@@ -185,17 +203,37 @@ mod tests {
     fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error>> {
         Spi::run(
             r#"
-            INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_value, index_value) VALUES
-                (1, ':db/ident', 20, 1, true, true),
-                (2, ':db/valueType', 21, 1, false, false),
-                (3, ':db/cardinality', 21, 1, false, false),
-                (4, ':db/unique', 21, 1, false, false),
-                (5, ':db/doc', 10, 1, false, false),
-                (6, ':db/isComponent', 1, 1, false, false),
-                (7, ':db/fulltext', 1, 1, false, false),
-                (8, ':db/index', 1, 1, false, false),
-                (9, ':db/noHistory', 1, 1, false, false),
-                (10, ':db/txInstant', 22, 1, false, true)
+            INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed) VALUES
+                -- Core schema attributes
+                (1, ':db/ident', 'keyword', 'one', 'identity', true),
+                (2, ':db/valueType', 'ref', 'one', NULL, false),
+                (3, ':db/cardinality', 'ref', 'one', NULL, false),
+                (4, ':db/unique', 'ref', 'one', NULL, false),
+                (5, ':db/doc', 'string', 'one', NULL, false),
+                (6, ':db/isComponent', 'boolean', 'one', NULL, false),
+                (7, ':db/fulltext', 'boolean', 'one', NULL, false),
+                (8, ':db/index', 'boolean', 'one', NULL, false),
+                (9, ':db/noHistory', 'boolean', 'one', NULL, false),
+                (10, ':db/txInstant', 'instant', 'one', NULL, true),
+
+                -- Value type enum entities (used as values for :db/valueType)
+                (20, ':db.type/ref', 'ref', 'one', NULL, false),
+                (21, ':db.type/keyword', 'ref', 'one', NULL, false),
+                (22, ':db.type/long', 'ref', 'one', NULL, false),
+                (23, ':db.type/double', 'ref', 'one', NULL, false),
+                (24, ':db.type/string', 'ref', 'one', NULL, false),
+                (25, ':db.type/boolean', 'ref', 'one', NULL, false),
+                (26, ':db.type/instant', 'ref', 'one', NULL, false),
+                (27, ':db.type/uuid', 'ref', 'one', NULL, false),
+                (28, ':db.type/bytes', 'ref', 'one', NULL, false),
+
+                -- Cardinality enum entities (used as values for :db/cardinality)
+                (30, ':db.cardinality/one', 'ref', 'one', NULL, false),
+                (31, ':db.cardinality/many', 'ref', 'one', NULL, false),
+
+                -- Unique constraint enum entities (used as values for :db/unique)
+                (32, ':db.unique/value', 'ref', 'one', NULL, false),
+                (33, ':db.unique/identity', 'ref', 'one', NULL, false)
             ON CONFLICT (entid) DO NOTHING;
 
             INSERT INTO mentat.idents (ident, entid) VALUES
@@ -208,7 +246,23 @@ mod tests {
                 (':db/fulltext', 7),
                 (':db/index', 8),
                 (':db/noHistory', 9),
-                (':db/txInstant', 10)
+                (':db/txInstant', 10),
+                -- Value type enums
+                (':db.type/ref', 20),
+                (':db.type/keyword', 21),
+                (':db.type/long', 22),
+                (':db.type/double', 23),
+                (':db.type/string', 24),
+                (':db.type/boolean', 25),
+                (':db.type/instant', 26),
+                (':db.type/uuid', 27),
+                (':db.type/bytes', 28),
+                -- Cardinality enums
+                (':db.cardinality/one', 30),
+                (':db.cardinality/many', 31),
+                -- Unique constraint enums
+                (':db.unique/value', 32),
+                (':db.unique/identity', 33)
             ON CONFLICT (ident) DO NOTHING;
             "#,
         )?;
@@ -742,8 +796,9 @@ mod tests {
         .expect("Transaction 1 failed");
 
         Spi::run(
-            "SELECT mentat_transact('[[:db/retract \"p1\" :person/status \"active\"]]'::TEXT)"
-        ).expect("Retraction failed");
+            "SELECT mentat_transact('[[:db/retract \"p1\" :person/status \"active\"]]'::TEXT)",
+        )
+        .expect("Retraction failed");
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query('

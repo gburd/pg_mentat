@@ -987,6 +987,7 @@ pub struct ParsedQuery {
     pub where_clauses: Vec<WhereClause>,
     pub order: Option<Vec<Order>>,
     pub distinct: bool,
+    pub rules: Vec<Rule>,
 }
 
 pub(crate) enum QueryPart {
@@ -998,6 +999,7 @@ pub(crate) enum QueryPart {
     WhereClauses(Vec<WhereClause>),
     Order(Vec<Order>),
     Distinct,
+    Rules(Vec<Rule>),
 }
 
 /// A `ParsedQuery` represents a parsed but potentially invalid query to the query algebrizer.
@@ -1018,6 +1020,7 @@ impl ParsedQuery {
         let mut where_clauses: Option<Vec<WhereClause>> = None;
         let mut order: Option<Vec<Order>> = None;
         let mut distinct = false;
+        let mut rules: Option<Vec<Rule>> = None;
 
         for part in parts.into_iter() {
             match part {
@@ -1066,6 +1069,12 @@ impl ParsedQuery {
                 QueryPart::Distinct => {
                     distinct = true;
                 }
+                QueryPart::Rules(x) => {
+                    if rules.is_some() {
+                        return Err("find query has repeated :rules");
+                    }
+                    rules = Some(x)
+                }
             }
         }
 
@@ -1080,6 +1089,7 @@ impl ParsedQuery {
             where_clauses: where_clauses.ok_or("expected :where")?,
             order,
             distinct,
+            rules: rules.unwrap_or_default(),
         })
     }
 }
