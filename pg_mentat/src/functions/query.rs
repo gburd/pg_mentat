@@ -1073,7 +1073,7 @@ fn build_aggregate_select(
     var_to_alias: &HashMap<String, (String, &'static str)>,
     extra_var_bindings: &HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let func_name = agg.func.0.as_str();
+    let func_name = agg.func.0.0.as_str();
 
     let sql_func = match func_name {
         "count" => "COUNT",

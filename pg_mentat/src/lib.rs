@@ -149,7 +149,7 @@ mod tests {
             INSERT INTO mentat.partitions (part, start_id, end_id) VALUES
                 ('db.part/db', 0, 10000),
                 ('db.part/user', 10000, 1000000),
-                ('db.part/tx', 1000000, 2000000)
+                ('db.part/tx', 1000001, 2000000)
             ON CONFLICT (part) DO NOTHING;
 
             INSERT INTO mentat.transactions (tx, tx_instant)
@@ -822,7 +822,7 @@ mod tests {
             "SELECT mentat_query('
                 [:find ?tx ?instant
                  :where
-                 [?tx :db/txInstant ?instant]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [?tx :db/txInstant ?instant]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("tx metadata query failed");
 
@@ -892,7 +892,7 @@ mod tests {
                  :where
                  [?p :family/child ?c]
                  [?p :person/name ?parent-name]
-                 [?c :person/name ?child-name]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [?c :person/name ?child-name]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -923,7 +923,7 @@ mod tests {
                  :where
                  (ancestor ?anc ?desc)
                  [?anc :person/name ?ancestor-name]
-                 [?desc :person/name ?descendant-name]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [?desc :person/name ?descendant-name]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Recursive query failed");
 
@@ -963,7 +963,7 @@ mod tests {
                  [?p :family/child ?s2]
                  [(< ?s1 ?s2)]
                  [?s1 :person/name ?sib1-name]
-                 [?s2 :person/name ?sib2-name]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [?s2 :person/name ?sib2-name]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1001,7 +1001,7 @@ mod tests {
                  :where
                  [?p :person/name ?name]
                  [?p :person/age ?age]
-                 [(> ?age 28)]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [(> ?age 28)]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1031,7 +1031,7 @@ mod tests {
                 [:find ?name
                  :where
                  [?p :person/name ?name]
-                 (not [?p :family/child _])]'::TEXT, '{{}'::jsonb)::TEXT",
+                 (not [?p :family/child _])]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1055,7 +1055,7 @@ mod tests {
                 [:find ?parent-name (count ?child)
                  :where
                  [?p :family/child ?child]
-                 [?p :person/name ?parent-name]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [?p :person/name ?parent-name]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1104,7 +1104,7 @@ mod tests {
                  [?p :person/name ?name]
                  [?p :person/role ?role]
                  (or [[?p :person/role \"admin\"]]
-                     [[?p :person/role \"moderator\"]])]'::TEXT, '{{}'::jsonb)::TEXT",
+                     [[?p :person/role \"moderator\"]])]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1137,7 +1137,7 @@ mod tests {
                  :where
                  [?p :person/name ?name]
                  [?p :person/age ?age]
-                 [(* ?age 2) ?double-age]]'::TEXT, '{{}'::jsonb)::TEXT",
+                 [(* ?age 2) ?double-age]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
