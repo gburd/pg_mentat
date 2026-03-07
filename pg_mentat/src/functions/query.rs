@@ -1,7 +1,7 @@
 use edn::parse;
 use edn::query::{
-    Binding, Direction, Element, FindSpec, FnArg, Limit, NonIntegerConstant, Order,
-    OrWhereClause, ParsedQuery, PatternNonValuePlace, PatternValuePlace, Predicate,
+    Binding, Direction, Element, FindSpec, FnArg, Limit, NonIntegerConstant, OrWhereClause, Order,
+    ParsedQuery, PatternNonValuePlace, PatternValuePlace, Predicate, Rule, RuleInvocation,
     VariableOrPlaceholder, WhereClause, WhereFn,
 };
 use pgrx::datum::DatumWithOid;
@@ -109,8 +109,7 @@ fn mentat_query(
     let find_vars = extract_find_variables(&parsed_query.find_spec);
 
     let mut builder = SqlBuilder::new();
-    let sql_query =
-        build_sql_from_datalog(&parsed_query, &find_vars, &mut builder, &temporal)?;
+    let sql_query = build_sql_from_datalog(&parsed_query, &find_vars, &mut builder, &temporal)?;
 
     let params = builder.params;
     let results = Spi::connect(|client| {
@@ -411,6 +410,7 @@ fn build_sql_from_datalog(
     let mut not_joins = Vec::new();
     let mut predicates = Vec::new();
     let mut where_fns: Vec<&WhereFn> = Vec::new();
+    let mut rule_invocations: Vec<&RuleInvocation> = Vec::new();
 
     for clause in &parsed.where_clauses {
         match clause {
@@ -419,11 +419,7 @@ fn build_sql_from_datalog(
             WhereClause::NotJoin(nj) => not_joins.push(nj),
             WhereClause::Pred(p) => predicates.push(p),
             WhereClause::WhereFn(wf) => where_fns.push(wf),
-            WhereClause::RuleExpr(_) => {
-                return Err(
-                    "Rule expressions are not yet supported in query translation".into(),
-                );
-            }
+            WhereClause::RuleExpr(ri) => rule_invocations.push(ri),
             WhereClause::TypeAnnotation(_) => {
                 // Type annotations are hints; silently ignore
             }
@@ -452,6 +448,18 @@ fn build_sql_from_datalog(
         }
     }
 
+    // Build CTEs from rule definitions and rule invocations
+    let mut cte_prefix = String::new();
+    if !rule_invocations.is_empty() && !parsed.rules.is_empty() {
+        let (cte_sql, rule_var_map) =
+            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal)?;
+        cte_prefix = cte_sql;
+        // Merge rule variable bindings into extra_var_bindings
+        for (var_name, expr) in rule_var_map {
+            extra_var_bindings.insert(var_name, expr);
+        }
+    }
+
     // Build the base query
     let base_sql = build_extended_pattern_query(
         &pattern_clauses,
@@ -470,9 +478,7 @@ fn build_sql_from_datalog(
         base_sql
     } else {
         if or_joins.len() > 1 {
-            return Err(
-                "Multiple OR-join clauses in a single query are not yet supported".into(),
-            );
+            return Err("Multiple OR-join clauses in a single query are not yet supported".into());
         }
 
         let or_join = or_joins[0];
@@ -486,21 +492,15 @@ fn build_sql_from_datalog(
                     for c in clauses {
                         match c {
                             WhereClause::Pattern(p) => ps.push(p),
-                            _ => {
-                                return Err(
-                                    "Non-pattern clauses inside (or (and ...)) are not yet supported"
-                                        .into(),
-                                )
-                            }
+                            _ => return Err(
+                                "Non-pattern clauses inside (or (and ...)) are not yet supported"
+                                    .into(),
+                            ),
                         }
                     }
                     ps
                 }
-                _ => {
-                    return Err(
-                        "Non-pattern clauses inside (or ...) are not yet supported".into(),
-                    )
-                }
+                _ => return Err("Non-pattern clauses inside (or ...) are not yet supported".into()),
             };
 
             let mut combined: Vec<&edn::query::Pattern> = pattern_clauses.clone();
@@ -533,6 +533,13 @@ fn build_sql_from_datalog(
         union_parts.join(" UNION ")
     };
 
+    // Prepend CTEs if we have rules
+    let query_sql = if cte_prefix.is_empty() {
+        query_sql
+    } else {
+        format!("{} {}", cte_prefix, query_sql)
+    };
+
     // Append ORDER BY
     let query_sql = append_order_by(query_sql, &parsed.order, find_vars);
 
@@ -560,9 +567,7 @@ fn build_fulltext_join(
     var_bindings: &mut HashMap<String, String>,
 ) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
     if wf.args.len() < 3 {
-        return Err(
-            "fulltext requires at least 3 arguments: (fulltext $ :attr \"term\")".into(),
-        );
+        return Err("fulltext requires at least 3 arguments: (fulltext $ :attr \"term\")".into());
     }
 
     let attr_ident = match &wf.args[1] {
@@ -610,16 +615,13 @@ fn build_fulltext_join(
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
-                        var_bindings
-                            .insert(var_name, format!("{datoms_alias}.e::TEXT"));
+                        var_bindings.insert(var_name, format!("{datoms_alias}.e::TEXT"));
                     }
                     1 => {
-                        var_bindings
-                            .insert(var_name, format!("{fts_alias}.text_value"));
+                        var_bindings.insert(var_name, format!("{fts_alias}.text_value"));
                     }
                     2 => {
-                        var_bindings
-                            .insert(var_name, format!("{datoms_alias}.tx::TEXT"));
+                        var_bindings.insert(var_name, format!("{datoms_alias}.tx::TEXT"));
                     }
                     3 => {
                         let score_param = builder.bind_text(search_term.clone());
@@ -636,8 +638,7 @@ fn build_fulltext_join(
         }
     }
 
-    let from_fragment =
-        format!("mentat.datoms {datoms_alias}, mentat.fulltext {fts_alias}");
+    let from_fragment = format!("mentat.datoms {datoms_alias}, mentat.fulltext {fts_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -664,20 +665,12 @@ fn build_where_fn_binding(
     };
 
     if wf.args.len() != 2 {
-        return Err(
-            format!("Arithmetic function '{}' requires exactly 2 arguments", op).into(),
-        );
+        return Err(format!("Arithmetic function '{}' requires exactly 2 arguments", op).into());
     }
 
     let result_var = match &wf.binding {
         Binding::BindScalar(v) => format!("{}", v),
-        _ => {
-            return Err(format!(
-                "Arithmetic function '{}' requires a scalar binding",
-                op
-            )
-            .into())
-        }
+        _ => return Err(format!("Arithmetic function '{}' requires a scalar binding", op).into()),
     };
 
     let arg0 = fn_arg_to_placeholder(&wf.args[0]);
@@ -878,9 +871,7 @@ fn build_extended_pattern_query(
                 }
             }
             _ => {
-                if let Some(constraint) =
-                    bind_constant_value(&alias, &pattern.value, builder)?
-                {
+                if let Some(constraint) = bind_constant_value(&alias, &pattern.value, builder)? {
                     where_clauses.push(constraint);
                 }
             }
@@ -936,8 +927,7 @@ fn build_extended_pattern_query(
 
     // Handle NOT clauses as NOT EXISTS subqueries
     for not_join in not_joins {
-        let not_sql =
-            build_not_exists_subquery(not_join, &var_to_alias, builder, temporal)?;
+        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal)?;
         where_clauses.push(not_sql);
     }
 
@@ -962,11 +952,7 @@ fn build_extended_pattern_query(
         if is_aggregate {
             // Build aggregate expression
             if let Some(Element::Aggregate(agg)) = elem {
-                let agg_sql = build_aggregate_select(
-                    agg,
-                    &var_to_alias,
-                    extra_var_bindings,
-                )?;
+                let agg_sql = build_aggregate_select(agg, &var_to_alias, extra_var_bindings)?;
                 select_exprs.push(agg_sql);
             }
         } else if let Some(expr) = extra_var_bindings.get(var_display) {
@@ -1073,7 +1059,7 @@ fn build_aggregate_select(
     var_to_alias: &HashMap<String, (String, &'static str)>,
     extra_var_bindings: &HashMap<String, String>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let func_name = agg.func.0.0.as_str();
+    let func_name = agg.func.0 .0.as_str();
 
     let sql_func = match func_name {
         "count" => "COUNT",
@@ -1081,11 +1067,7 @@ fn build_aggregate_select(
         "avg" => "AVG",
         "min" => "MIN",
         "max" => "MAX",
-        _ => {
-            return Err(
-                format!("Unsupported aggregate function: {}", func_name).into(),
-            )
-        }
+        _ => return Err(format!("Unsupported aggregate function: {}", func_name).into()),
     };
 
     // Get the variable argument
@@ -1118,10 +1100,7 @@ fn build_aggregate_select(
         Ok(format!("{}(DISTINCT {})::TEXT", sql_func, inner_expr))
     } else {
         // For SUM/AVG/MIN/MAX the inner expression is text, so cast to numeric first
-        Ok(format!(
-            "{}(({})::NUMERIC)::TEXT",
-            sql_func, inner_expr
-        ))
+        Ok(format!("{}(({})::NUMERIC)::TEXT", sql_func, inner_expr))
     }
 }
 
@@ -1137,7 +1116,9 @@ fn resolve_var_refs(
         let rest = &result[start + 8..];
         // Variable names end at space, ), or end of string
         let end = rest
-            .find(|c: char| c == ' ' || c == ')' || c == ',' || c == '+' || c == '-' || c == '*' || c == '/')
+            .find(|c: char| {
+                c == ' ' || c == ')' || c == ',' || c == '+' || c == '-' || c == '*' || c == '/'
+            })
             .unwrap_or(rest.len());
         let var_name = &rest[..end];
 
@@ -1187,12 +1168,8 @@ fn build_not_exists_subquery(
                     PatternNonValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
                         // Correlate with outer query
-                        if let Some((outer_alias, outer_col)) =
-                            outer_var_to_alias.get(&var_name)
-                        {
-                            sub_where.push(format!(
-                                "{alias}.e = {outer_alias}.{outer_col}"
-                            ));
+                        if let Some((outer_alias, outer_col)) = outer_var_to_alias.get(&var_name) {
+                            sub_where.push(format!("{alias}.e = {outer_alias}.{outer_col}"));
                         }
                     }
                     PatternNonValuePlace::Entid(id) => {
@@ -1224,12 +1201,8 @@ fn build_not_exists_subquery(
                     }
                     PatternNonValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
-                        if let Some((outer_alias, outer_col)) =
-                            outer_var_to_alias.get(&var_name)
-                        {
-                            sub_where.push(format!(
-                                "{alias}.a = {outer_alias}.{outer_col}"
-                            ));
+                        if let Some((outer_alias, outer_col)) = outer_var_to_alias.get(&var_name) {
+                            sub_where.push(format!("{alias}.a = {outer_alias}.{outer_col}"));
                         }
                     }
                     PatternNonValuePlace::Placeholder => {}
@@ -1239,24 +1212,18 @@ fn build_not_exists_subquery(
                 match &p.value {
                     PatternValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
-                        if let Some((outer_alias, outer_col)) =
-                            outer_var_to_alias.get(&var_name)
-                        {
+                        if let Some((outer_alias, outer_col)) = outer_var_to_alias.get(&var_name) {
                             if *outer_col == "v" {
                                 sub_where.push(format!(
                                     "{alias}.v = {outer_alias}.v AND {alias}.value_type_tag = {outer_alias}.value_type_tag"
                                 ));
                             } else {
-                                sub_where.push(format!(
-                                    "{alias}.v = {outer_alias}.{outer_col}"
-                                ));
+                                sub_where.push(format!("{alias}.v = {outer_alias}.{outer_col}"));
                             }
                         }
                     }
                     _ => {
-                        if let Some(constraint) =
-                            bind_constant_value(&alias, &p.value, builder)?
-                        {
+                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
                             sub_where.push(constraint);
                         }
                     }
@@ -1278,9 +1245,7 @@ fn build_not_exists_subquery(
                 sub_joins.push(format!("mentat.datoms {alias}"));
             }
             _ => {
-                return Err(
-                    "Only pattern clauses are supported inside NOT".into(),
-                );
+                return Err("Only pattern clauses are supported inside NOT".into());
             }
         }
     }
@@ -1314,19 +1279,11 @@ fn build_predicate_clause(
         ">=" => ">=",
         "=" => "=",
         "!=" => "!=",
-        _ => {
-            return Err(
-                format!("Unsupported predicate operator: {}", op).into(),
-            )
-        }
+        _ => return Err(format!("Unsupported predicate operator: {}", op).into()),
     };
 
     if pred.args.len() != 2 {
-        return Err(format!(
-            "Predicate '{}' requires exactly 2 arguments",
-            op
-        )
-        .into());
+        return Err(format!("Predicate '{}' requires exactly 2 arguments", op).into());
     }
 
     let left = pred_arg_to_sql(&pred.args[0], var_to_alias)?;
@@ -1358,13 +1315,9 @@ fn pred_arg_to_sql(
             }
         }
         FnArg::EntidOrInteger(i) => Ok(format!("'{}'", i)),
-        FnArg::Constant(NonIntegerConstant::Float(f)) => {
-            Ok(format!("'{}'", f.into_inner()))
-        }
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("'{}'", f.into_inner())),
         FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(format!("'{}'", s.as_ref())),
-        FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
-            Ok(format!("'{}'", b))
-        }
+        FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(format!("'{}'", b)),
         _ => Err("Unsupported predicate argument type".into()),
     }
 }
