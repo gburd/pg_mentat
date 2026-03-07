@@ -16,7 +16,7 @@ CREATE OR REPLACE FUNCTION mentat.validate_datom_value_type()
 RETURNS TRIGGER AS $$
 DECLARE
     expected_type mentat.value_type;
-    type_tag_map CONSTANT INTEGER[] := ARRAY[0, 1, 5, 4, 3, 10, 13, 11, 12];
+    expected_tag SMALLINT;
 BEGIN
     -- Get expected value type from schema
     SELECT value_type INTO expected_type
@@ -27,12 +27,24 @@ BEGIN
         RAISE EXCEPTION 'Attribute % not found in schema', NEW.a;
     END IF;
 
-    -- Map value_type enum to tag (ref=0, boolean=1, instant=5, long=4, etc.)
-    -- Validate that value_type_tag matches expected type
-    -- This mapping corresponds to mentat's ValueTypeTag constants
-    IF NEW.value_type_tag != type_tag_map[(expected_type::TEXT)::INTEGER + 1] THEN
-        RAISE EXCEPTION 'Value type mismatch for attribute %: expected %, got tag %',
-            NEW.a, expected_type, NEW.value_type_tag;
+    -- Map value_type enum to the SMALLINT type tag used in datoms.value_type_tag.
+    -- These tags match the encoding in transact.rs encode_value() and the
+    -- decoding in query.rs build_value_decode_expr() / pull.rs decode_typed_value().
+    expected_tag := CASE expected_type
+        WHEN 'ref'::mentat.value_type     THEN 0
+        WHEN 'boolean'::mentat.value_type  THEN 1
+        WHEN 'long'::mentat.value_type     THEN 2
+        WHEN 'double'::mentat.value_type   THEN 3
+        WHEN 'instant'::mentat.value_type  THEN 4
+        WHEN 'string'::mentat.value_type   THEN 7
+        WHEN 'keyword'::mentat.value_type  THEN 8
+        WHEN 'uuid'::mentat.value_type     THEN 10
+        WHEN 'bytes'::mentat.value_type    THEN 11
+    END;
+
+    IF NEW.value_type_tag != expected_tag THEN
+        RAISE EXCEPTION 'Value type mismatch for attribute %: expected % (tag %), got tag %',
+            NEW.a, expected_type, expected_tag, NEW.value_type_tag;
     END IF;
 
     RETURN NEW;

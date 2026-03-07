@@ -2,7 +2,6 @@
 comment = 'Mentat Datalog database for PostgreSQL'
 default_version = '0.1.0'
 module_pathname = '$libdir/pg_mentat'
-relocatable = true
+relocatable = false
 requires = ''
 superuser = false
-schema = mentat

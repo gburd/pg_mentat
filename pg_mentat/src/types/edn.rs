@@ -1,6 +1,8 @@
 use pgrx::prelude::*;
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
-use std::io::Cursor;
+
+// EdnValue is now defined in the mentat schema module in lib.rs
+// Import it here for use in impl blocks and functions
+pub use crate::mentat::EdnValue;
 
 /// Maximum nesting depth for EDN structures to prevent stack overflow
 const MAX_EDN_NESTING: usize = 100;
@@ -10,34 +12,6 @@ const MAX_COLLECTION_SIZE: usize = 1_000_000;
 
 /// Maximum input size (10MB)
 const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
-
-/// EdnValue is a PostgreSQL custom type that wraps Mentat's EDN Value.
-/// Uses CBOR for binary storage and custom EDN text I/O functions.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PostgresType, PostgresEq, PostgresHash)]
-pub struct EdnValue {
-    #[serde(serialize_with = "serialize_edn", deserialize_with = "deserialize_edn")]
-    inner: edn::Value,
-}
-
-fn serialize_edn<S>(value: &edn::Value, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    // Serialize as EDN text string
-    let edn_text = format!("{}", value);
-    serializer.serialize_str(&edn_text)
-}
-
-fn deserialize_edn<'de, D>(deserializer: D) -> Result<edn::Value, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    // Deserialize from EDN text string
-    let edn_text = String::deserialize(deserializer)?;
-    let value_and_span = edn::parse::value(&edn_text)
-        .map_err(serde::de::Error::custom)?;
-    Ok(value_and_span.without_spans())
-}
 
 impl EdnValue {
     /// Create a new EdnValue from an EDN Value
@@ -65,7 +39,9 @@ impl EdnValue {
     /// Recursively validate nesting depth
     fn validate_depth(&self, depth: usize) -> Result<(), String> {
         if depth > MAX_EDN_NESTING {
-            return Err(format!("EDN nesting depth exceeds maximum of {MAX_EDN_NESTING}"));
+            return Err(format!(
+                "EDN nesting depth exceeds maximum of {MAX_EDN_NESTING}"
+            ));
         }
 
         match &self.inner {

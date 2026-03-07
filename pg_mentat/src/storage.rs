@@ -23,6 +23,7 @@
 //! - Helper function wrapping for schema operations
 
 use pgrx::prelude::*;
+use pgrx::datum::DatumWithOid;
 
 /// Allocate a new entity ID from the specified partition.
 ///
@@ -34,10 +35,12 @@ use pgrx::prelude::*;
 /// ```
 #[pg_extern]
 fn alloc_entid(partition_name: &str) -> Result<i64, Box<dyn std::error::Error>> {
-    let query = format!("SELECT mentat.allocate_entid('{}')", partition_name);
-
     Spi::connect(|client| {
-        let result = client.select(&query, None, None)?;
+        let result = client.select(
+            "SELECT mentat.allocate_entid($1)",
+            None,
+            &[DatumWithOid::from(partition_name)],
+        )?;
 
         if let Some(row) = result.first() {
             let entid: i64 = row.get(1)?
@@ -59,10 +62,12 @@ fn alloc_entid(partition_name: &str) -> Result<i64, Box<dyn std::error::Error>> 
 /// ```
 #[pg_extern]
 fn resolve_ident_to_entid(ident: &str) -> Result<Option<i64>, Box<dyn std::error::Error>> {
-    let query = format!("SELECT mentat.resolve_ident('{}')", ident);
-
     Spi::connect(|client| {
-        match client.select(&query, None, None) {
+        match client.select(
+            "SELECT mentat.resolve_ident($1)",
+            None,
+            &[DatumWithOid::from(ident)],
+        ) {
             Ok(result) => {
                 if let Some(row) = result.first() {
                     let entid: Option<i64> = row.get(1)?;
@@ -95,17 +100,16 @@ fn lookup_entity_by_attr(
 
     Spi::connect(|client| {
         // Query datoms table for matching entity
-        let query = format!(
+        match client.select(
             "SELECT d.e FROM mentat.datoms d \
-             JOIN mentat.idents i ON i.ident = '{}' \
+             JOIN mentat.idents i ON i.ident = $1 \
              WHERE d.a = i.entid \
              AND d.added = true \
-             AND encode(d.v, 'escape') = '{}' \
+             AND encode(d.v, 'escape') = $2 \
              LIMIT 1",
-            attr_ident, value_str
-        );
-
-        match client.select(&query, None, None) {
+            None,
+            &[DatumWithOid::from(attr_ident), DatumWithOid::from(value_str)],
+        ) {
             Ok(result) => {
                 if let Some(row) = result.first() {
                     let entid: Option<i64> = row.get(1)?;
@@ -130,7 +134,7 @@ fn lookup_entity_by_attr(
 /// ```
 #[pg_extern]
 fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
-    Spi::connect(|client| {
+    Spi::connect(|mut client| {
         // Create temporary tables for transaction staging
         let statements = vec![
             "DROP TABLE IF EXISTS temp_exact_searches",
@@ -168,7 +172,7 @@ fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
         ];
 
         for stmt in statements {
-            client.update(stmt, None, None)?;
+            client.update(stmt, None, &[])?;
         }
 
         Ok(())
@@ -189,29 +193,27 @@ fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
 /// ```
 #[pg_extern]
 fn commit_transaction(tx_id: i64) -> Result<(), Box<dyn std::error::Error>> {
-    Spi::connect(|client| {
+    Spi::connect(|mut client| {
         // Phase 1: Simplified commit
         // Phase 2: Add full conflict detection and resolution
 
         // Insert new datoms from staged searches
-        let insert_query = format!(
+        client.update(
             "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
-             SELECT e0, a0, v0, {}, added0, value_type_tag0 \
+             SELECT e0, a0, v0, $1, added0, value_type_tag0 \
              FROM temp_exact_searches \
              WHERE added0 = true",
-            tx_id
-        );
-
-        client.update(&insert_query, None, None)?;
+            None,
+            &[DatumWithOid::from(tx_id)],
+        )?;
 
         // Record transaction
-        let tx_query = format!(
+        client.update(
             "INSERT INTO mentat.transactions (tx_id, instant) \
-             VALUES ({}, CURRENT_TIMESTAMP)",
-            tx_id
-        );
-
-        client.update(&tx_query, None, None)?;
+             VALUES ($1, CURRENT_TIMESTAMP)",
+            None,
+            &[DatumWithOid::from(tx_id)],
+        )?;
 
         Ok(())
     })
@@ -233,16 +235,15 @@ fn get_entity_datoms(
     TableIterator<'static, (name!(attribute, i64), name!(value, Vec<u8>), name!(value_type, i16), name!(transaction, i64))>,
     Box<dyn std::error::Error>
 > {
-    let query = format!(
-        "SELECT a, v, value_type_tag, tx \
-         FROM mentat.datoms \
-         WHERE e = {} AND added = true \
-         ORDER BY a, tx DESC",
-        entity_id
-    );
-
     Ok(TableIterator::new(Spi::connect(|client| {
-        let result = client.select(&query, None, None)?;
+        let result = client.select(
+            "SELECT a, v, value_type_tag, tx \
+             FROM mentat.datoms \
+             WHERE e = $1 AND added = true \
+             ORDER BY a, tx DESC",
+            None,
+            &[DatumWithOid::from(entity_id)],
+        )?;
 
         let rows: Vec<_> = result.into_iter()
             .filter_map(|row| {

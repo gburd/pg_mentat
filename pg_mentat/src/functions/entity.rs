@@ -1,3 +1,4 @@
+use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::JsonB;
 use serde_json::json;
@@ -20,15 +21,12 @@ fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Se
     entity_map.insert(":db/id".to_string(), json!(entity_id));
 
     Spi::connect(|client| {
-        let query = format!(
-            "SELECT s.ident, d.v, d.value_type_tag \
+        let query = "SELECT s.ident, d.v, d.value_type_tag \
              FROM mentat.datoms d \
              JOIN mentat.schema s ON d.a = s.entid \
-             WHERE d.e = {} AND d.added = true",
-            entity_id
-        );
+             WHERE d.e = $1 AND d.added = true";
 
-        for row in client.select(&query, None, &[])? {
+        for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
             let ident: String = row.get(1)?.ok_or("Missing ident")?;
             let v_bytes: Vec<u8> = row.get(2)?.ok_or("Missing value")?;
             let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
@@ -80,8 +78,7 @@ fn decode_value(
                 return Err("Invalid long value: wrong byte length".into());
             }
             let val = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3],
-                bytes[4], bytes[5], bytes[6], bytes[7]
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             ]);
             Ok(json!(val))
         }
@@ -95,6 +92,10 @@ fn decode_value(
             let s = String::from_utf8(bytes.to_vec())?;
             Ok(json!(format!(":{}", s)))
         }
-        _ => Err(format!("Unsupported value type tag: {} (not yet implemented)", type_tag).into()),
+        _ => Err(format!(
+            "Unsupported value type tag: {} (not yet implemented)",
+            type_tag
+        )
+        .into()),
     }
 }

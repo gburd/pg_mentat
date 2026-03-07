@@ -67,10 +67,10 @@ fn estimate_query_cost(
 ) -> Result<f64, Box<dyn std::error::Error>> {
     // Cost multipliers based on index effectiveness
     let index_cost = match access_pattern {
-        "e" | "ea" | "eav" | "eavt" => 1.0,  // Entity lookup is cheapest
-        "a" | "ae" | "aev" | "aevt" => 1.2,  // Attribute scan
-        "av" | "ave" | "avet" => 1.1,        // Attribute-value is efficient
-        "v" | "va" | "vae" | "vaet" => 2.0,  // Value-first scan is expensive
+        "e" | "ea" | "eav" | "eavt" => 1.0, // Entity lookup is cheapest
+        "a" | "ae" | "aev" | "aevt" => 1.2, // Attribute scan
+        "av" | "ave" | "avet" => 1.1,       // Attribute-value is efficient
+        "v" | "va" | "vae" | "vaet" => 2.0, // Value-first scan is expensive
         _ => 1.5,
     };
 
