@@ -277,9 +277,14 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         }
     }
 
-    // Insert all datoms
+    // Validate and insert all datoms
     let datom_count = pending_datoms.len();
     for datom in &pending_datoms {
+        // Only validate assertions (added=true), not retractions
+        if datom.added {
+            validate_datom_constraints(datom, &pending_datoms)?;
+        }
+
         Spi::run_with_args(
             "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
              VALUES ($1, $2, $3, $4, $5, $6)",
@@ -455,6 +460,9 @@ fn install_schema_attributes(
         )?;
     }
 
+    // Invalidate schema cache after schema changes
+    crate::cache::get_cache().invalidate();
+
     Ok(())
 }
 
@@ -494,21 +502,16 @@ fn resolve_entity_place(
     }
 }
 
-/// Resolve attribute (entid or ident). Errors if the ident is not found.
+/// Resolve attribute (entid or ident) using cache. Errors if the ident is not found.
 fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     match value {
         edn::Value::Integer(i) => Ok(*i),
         edn::Value::Keyword(kw) => {
             // Use Display format (:namespace/name) to match schema ident storage
             let ident_str = format!("{}", kw);
-            let entid = Spi::get_one_with_args::<i64>(
-                "SELECT mentat.resolve_ident($1)",
-                &[DatumWithOid::from(ident_str.as_str())],
-            )
-            .ok()
-            .flatten()
-            .ok_or_else(|| format!("Failed to resolve attribute: {}", ident_str))?;
-            Ok(entid)
+            crate::cache::get_cache()
+                .resolve_ident(&ident_str)
+                .ok_or_else(|| format!("Failed to resolve attribute: {}", ident_str).into())
         }
         _ => Err("Invalid attribute".into()),
     }
@@ -568,24 +571,163 @@ fn encode_ref_value(
     Ok((entity_id.to_le_bytes().to_vec(), 0)) // ref = 0
 }
 
-/// Look up the value_type of an attribute from mentat.schema.
+/// Look up the value_type of an attribute (using cache).
 /// Returns the value_type string (e.g., "string", "long", "ref") or None if not found.
 fn lookup_value_type(attr_id: i64) -> Option<String> {
-    Spi::get_one_with_args::<String>(
-        "SELECT value_type::TEXT FROM mentat.schema WHERE entid = $1",
-        &[DatumWithOid::from(attr_id)],
-    )
-    .ok()
-    .flatten()
+    crate::cache::get_cache()
+        .get_attribute(attr_id)
+        .map(|info| info.value_type)
 }
 
-/// Check if an attribute has fulltext=true in mentat.schema.
+/// Check if an attribute has fulltext=true (using cache).
 fn is_fulltext_attribute(attr_id: i64) -> bool {
-    Spi::get_one_with_args::<bool>(
-        "SELECT fulltext FROM mentat.schema WHERE entid = $1",
-        &[DatumWithOid::from(attr_id)],
-    )
-    .ok()
-    .flatten()
-    .unwrap_or(false)
+    crate::cache::get_cache()
+        .get_attribute(attr_id)
+        .map(|info| info.fulltext)
+        .unwrap_or(false)
+}
+
+/// Look up attribute metadata from cache (or database if not cached)
+fn lookup_attribute_info(attr_id: i64) -> Option<crate::cache::AttributeInfo> {
+    crate::cache::get_cache().get_attribute(attr_id)
+}
+
+/// Validate all constraints for a datom before insertion
+fn validate_datom_constraints(
+    datom: &PendingDatom,
+    all_pending: &[PendingDatom],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let attr_info = lookup_attribute_info(datom.a)
+        .ok_or_else(|| format!("Attribute {} not found in schema", datom.a))?;
+
+    // 1. Type validation
+    let expected_type_tag = value_type_to_tag(&attr_info.value_type);
+    if datom.v_type_tag != expected_type_tag {
+        return Err(format!(
+            "Type mismatch for attribute {}: expected type {} (tag {}), got tag {}",
+            datom.a, attr_info.value_type, expected_type_tag, datom.v_type_tag
+        )
+        .into());
+    }
+
+    // 2. Cardinality validation (only for cardinality/one)
+    if attr_info.cardinality == "one" {
+        // Check within this transaction for multiple assertions of same (e, a)
+        let count_in_tx = all_pending
+            .iter()
+            .filter(|d| d.e == datom.e && d.a == datom.a && d.added)
+            .count();
+
+        if count_in_tx > 1 {
+            return Err(format!(
+                "Cardinality violation: attribute {} has cardinality 'one' but transaction \
+                 contains {} assertions for entity {}",
+                datom.a, count_in_tx, datom.e
+            )
+            .into());
+        }
+
+        // Check existing datoms in database
+        let existing_count = Spi::get_one_with_args::<i64>(
+            "SELECT COUNT(*) FROM mentat.datoms \
+             WHERE e = $1 AND a = $2 AND added = true",
+            &[DatumWithOid::from(datom.e), DatumWithOid::from(datom.a)],
+        )
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+
+        if existing_count > 0 {
+            return Err(format!(
+                "Cardinality violation: attribute {} has cardinality 'one' but entity {} \
+                 already has a value",
+                datom.a, datom.e
+            )
+            .into());
+        }
+    }
+
+    // 3. Unique constraint validation
+    if let Some(ref unique_type) = attr_info.unique_constraint {
+        // Check within this transaction for duplicate values
+        let dups_in_tx = all_pending
+            .iter()
+            .filter(|d| {
+                d.a == datom.a
+                    && d.v_bytes == datom.v_bytes
+                    && d.e != datom.e
+                    && d.added
+            })
+            .count();
+
+        if dups_in_tx > 0 {
+            return Err(format!(
+                "Unique constraint violation: attribute {} has unique constraint '{}' but \
+                 transaction contains duplicate value for different entities",
+                datom.a, unique_type
+            )
+            .into());
+        }
+
+        // Check existing datoms in database (use advisory lock to prevent races)
+        // Advisory lock key: hash of (attribute_id, value_bytes)
+        let lock_key = (datom.a as i64) ^ (compute_value_hash(&datom.v_bytes) as i64);
+
+        Spi::run_with_args(
+            "SELECT pg_advisory_xact_lock($1)",
+            &[DatumWithOid::from(lock_key)],
+        )?;
+
+        let existing_entity = Spi::get_one_with_args::<i64>(
+            "SELECT e FROM mentat.datoms \
+             WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
+             LIMIT 1",
+            &[
+                DatumWithOid::from(datom.a),
+                DatumWithOid::from(datom.v_bytes.clone()),
+                DatumWithOid::from(datom.v_type_tag),
+            ],
+        )
+        .ok()
+        .flatten();
+
+        if let Some(existing_e) = existing_entity {
+            if existing_e != datom.e {
+                return Err(format!(
+                    "Unique constraint violation: attribute {} has unique constraint '{}' but \
+                     value already exists for entity {} (attempting to assert for entity {})",
+                    datom.a, unique_type, existing_e, datom.e
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Map value_type string to type tag (matches encoding in encode_value)
+fn value_type_to_tag(value_type: &str) -> i16 {
+    match value_type {
+        "ref" => 0,
+        "boolean" => 1,
+        "long" => 2,
+        "double" => 3,
+        "instant" => 4,
+        "string" => 7,
+        "keyword" => 8,
+        "uuid" => 10,
+        "bytes" => 11,
+        _ => -1,
+    }
+}
+
+/// Compute a simple hash of value bytes for advisory lock
+fn compute_value_hash(bytes: &[u8]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
