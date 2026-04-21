@@ -532,21 +532,239 @@ SELECT mentat_query('
 
 ---
 
+## Batch Operations and Import/Export
+
+### Batch Processing
+
+Execute multiple operations in a single EDN batch document:
+
+```sql
+-- Multiple operations in one call
+SELECT mentat.batch('[
+  [:query [:find ?e ?name
+           :where [?e :person/name ?name]]]
+
+  [:transact [{:db/id "new-person"
+               :person/name "Charlie"
+               :person/email "charlie@example.com"}]]
+
+  [:pull [:person/name :person/email] 100]
+
+  [:entity 101]
+
+  [:schema]
+]');
+```
+
+**Result:**
+```json
+[
+  {
+    "type": "query",
+    "results": [[100, "Alice"], [101, "Bob"]]
+  },
+  {
+    "type": "transact",
+    "result": {
+      "tx-id": 1001,
+      "tempids": {"new-person": 102},
+      "datoms-inserted": 2
+    }
+  },
+  {
+    "type": "pull",
+    "result": {
+      ":person/name": "Alice",
+      ":person/email": "alice@example.com"
+    }
+  },
+  {
+    "type": "entity",
+    "result": {
+      ":db/id": 101,
+      ":person/name": "Bob"
+    }
+  },
+  {
+    "type": "schema",
+    "result": { ... }
+  }
+]
+```
+
+**Supported Operations:**
+- `:query` - Execute Datalog query
+- `:transact` - Process transaction
+- `:pull` - Pull entity with pattern
+- `:entity` - Get full entity
+- `:schema` - Get schema
+
+### Export to EDN
+
+Export specific entities:
+
+```sql
+-- Export by entity IDs
+SELECT mentat.export_edn(ARRAY[100, 101, 102]);
+```
+
+**Returns:**
+```edn
+[
+  {:db/id 100
+   :person/name "Alice Anderson"
+   :person/email "alice@example.com"
+   :person/age 30}
+  {:db/id 101
+   :person/name "Bob Brown"
+   :person/age 25}
+  {:db/id 102
+   :person/name "Carol Chen"
+   :person/email "carol@example.com"}
+]
+```
+
+Query and export matching entities:
+
+```sql
+-- Export all people over 25
+SELECT mentat.query_export_edn(
+  '[:find ?e
+    :where
+    [?e :person/age ?age]
+    [(> ?age 25)]]',
+  '{}'::jsonb
+);
+```
+
+Export entire database:
+
+```sql
+-- Warning: Can be very large!
+SELECT mentat.export_all_edn();
+```
+
+### Import from EDN
+
+Import EDN transaction data:
+
+```sql
+-- Import entities with tempids
+SELECT mentat.import_edn('[
+  {:db/id "alice"
+   :person/name "Alice"
+   :person/email "alice@example.com"
+   :person/age 30}
+
+  {:db/id "bob"
+   :person/name "Bob"
+   :person/age 25
+   :person/friend "alice"}
+]');
+```
+
+**Returns transaction report:**
+```json
+{
+  "tx-id": 1002,
+  "tempids": {
+    "alice": 103,
+    "bob": 104
+  },
+  "datoms-inserted": 5
+}
+```
+
+Import with explicit entity IDs:
+
+```sql
+-- Reuse specific entity IDs (be careful with conflicts)
+SELECT mentat.import_edn('[
+  {:db/id 200
+   :person/name "Dave"}
+  {:db/id 201
+   :person/name "Eve"}
+]');
+```
+
+### Migration Workflow
+
+Complete database migration between environments:
+
+```sql
+-- Source database: Export all data
+\o /tmp/mentat_export.edn
+SELECT mentat.export_all_edn();
+\o
+
+-- Target database: Import data
+\set content `cat /tmp/mentat_export.edn`
+SELECT mentat.import_edn(:'content');
+```
+
+Incremental sync:
+
+```sql
+-- Export entities modified since transaction 1000
+SELECT mentat.query_export_edn(
+  '[:find ?e
+    :where
+    [?e _ _ ?tx]
+    [(> ?tx 1000)]]',
+  '{}'::jsonb
+);
+```
+
+---
+
 ## API Reference
 
 ### Core Functions
 
 ```sql
 -- Transaction processing
-mentat_transact(edn_tx TEXT) → TEXT
+mentat.mentat_transact(edn_tx TEXT) → TEXT
 
 -- Query execution
-mentat_query(query TEXT, inputs JSONB) → JSONB
+mentat.mentat_query(query TEXT, inputs JSONB) → JSONB
 
 -- Entity operations
-mentat_pull(pattern TEXT, entity_id BIGINT) → JSONB
+mentat.mentat_pull(pattern TEXT, entity_id BIGINT) → JSONB
+mentat.mentat_entity(entity_id BIGINT) → JSONB
+mentat.mentat_schema() → JSONB
+```
 
--- Schema introspection
+### Batch and Import/Export Functions
+
+```sql
+-- Batch operations
+mentat.batch(edn_batch TEXT) → JSONB
+
+-- Export to EDN
+mentat.export_edn(entity_ids BIGINT[]) → TEXT
+mentat.query_export_edn(query TEXT, inputs JSONB) → TEXT
+mentat.export_all_edn() → TEXT
+
+-- Import from EDN
+mentat.import_edn(edn_data TEXT) → JSONB
+```
+
+### Convenience Helper Functions
+
+```sql
+-- Lookup entity by unique attribute value
+mentat.lookup_by_ident(attr_ident TEXT, value TEXT) → BIGINT
+
+-- List all attributes for an entity
+mentat.entity_attrs(entity_id BIGINT) → JSONB
+
+-- Get all values for an attribute
+mentat.attribute_values(attr_ident TEXT) → JSONB
+
+-- Retract all facts about an entity
+mentat.retract_entity(entity_id BIGINT) → BIGINT
+
+-- Schema introspection (lower-level)
 mentat.resolve_ident(ident TEXT) → BIGINT
 mentat.lookup_entity_by_attr(attr_ident TEXT, value TEXT) → BIGINT
 mentat.allocate_entid(partition_name TEXT) → BIGINT

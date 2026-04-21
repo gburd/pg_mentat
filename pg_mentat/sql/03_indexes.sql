@@ -57,3 +57,20 @@ CREATE INDEX idx_partitions_name ON mentat.partitions
 -- Transaction timestamp lookups
 CREATE INDEX idx_transactions_instant ON mentat.transactions
     USING BTREE (instant DESC);
+
+-- Additional temporal index for as-of/since queries
+-- Optimizes time-travel queries that filter by transaction range
+CREATE INDEX idx_datoms_temporal ON mentat.datoms
+    USING BTREE (e, a, tx DESC)
+    WHERE added = TRUE;
+
+-- Covering index for cardinality checks during validation
+-- Avoids table lookups when checking for existing values
+CREATE INDEX idx_datoms_cardinality ON mentat.datoms
+    USING BTREE (e, a, added)
+    INCLUDE (v, value_type_tag, tx);
+
+-- Fulltext entity/attribute reference index
+-- Speeds up joins between fulltext and datoms tables
+CREATE INDEX idx_fulltext_entity_attr ON mentat.fulltext
+    USING BTREE (entity, attribute);

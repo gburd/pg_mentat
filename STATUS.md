@@ -48,6 +48,18 @@ pg_mentat is a PostgreSQL extension providing Mentat's Datalog query capabilitie
    - **NEW:** mentat.attribute_values(attr)
    - **NEW:** mentat.retract_entity(entity_id)
 
+4. **Batch Operations** - Multiple operations in one call
+   - **NEW:** mentat.batch(edn_batch) - Execute query, transact, pull, entity, schema
+   - Atomic execution of operation sequences
+   - Returns array of results for each operation
+
+5. **Import/Export** - EDN-based data migration
+   - **NEW:** mentat.export_edn(entity_ids[]) - Export entities to EDN
+   - **NEW:** mentat.import_edn(edn_data) - Import EDN transaction data
+   - **NEW:** mentat.query_export_edn(query, inputs) - Query and export
+   - **NEW:** mentat.export_all_edn() - Full database export
+   - Supports database migration and backup workflows
+
 4. **Temporal Queries** - Time-travel capabilities
    - Point-in-time (as-of)
    - Range queries (since)
@@ -99,10 +111,18 @@ Global schema cache with lazy initialization:
 - **Thread-safe:** RwLock for concurrent access
 - **Invalidation:** Automatic on schema changes
 
-### SQL Convenience Functions
-**File:** `pg_mentat/src/functions/helpers.rs` (NEW - 336 lines)
+### Additional Indexes (Task #7)
+**File:** `pg_mentat/sql/03_indexes.sql`
 
-Four new helper functions:
+Three new indexes for optimization:
+- `idx_datoms_temporal` - Temporal range queries (e, a, tx DESC)
+- `idx_datoms_cardinality` - Covering index for validation (e, a, added) INCLUDE (v, value_type_tag, tx)
+- `idx_fulltext_entity_attr` - Fulltext joins (entity, attribute)
+
+### SQL Convenience Functions
+**File:** `pg_mentat/src/functions/helpers.rs` (336 lines)
+
+Four helper functions:
 ```sql
 -- Find entity by unique value
 SELECT mentat.lookup_by_ident(':person/email', 'alice@example.com');
@@ -120,8 +140,57 @@ SELECT mentat.retract_entity(100);
 -- Returns: 7 (facts retracted)
 ```
 
+### Batch Operations and Import/Export
+**File:** `pg_mentat/src/functions/edn_helpers.rs` (NEW - 445 lines)
+
+Six EDN-native functions for advanced workflows:
+
+**Batch Processing:**
+```sql
+-- Execute multiple operations in one call
+SELECT mentat.batch('[
+  [:query [:find ?e :where [?e :person/name]]]
+  [:transact [{:db/id "new" :person/name "Alice"}]]
+  [:pull [:person/name] 100]
+  [:entity 101]
+  [:schema]
+]');
+-- Returns: Array of results for each operation
+```
+
+**Export Functions:**
+```sql
+-- Export specific entities to EDN
+SELECT mentat.export_edn(ARRAY[100, 101, 102]);
+
+-- Query and export matching entities
+SELECT mentat.query_export_edn(
+  '[:find ?e :where [?e :person/age ?age] [(> ?age 25)]]',
+  '{}'
+);
+
+-- Export entire database
+SELECT mentat.export_all_edn();
+```
+
+**Import Function:**
+```sql
+-- Import EDN transaction data
+SELECT mentat.import_edn('[
+  {:db/id "alice" :person/name "Alice"}
+  {:db/id "bob" :person/name "Bob"}
+]');
+```
+
+**Use Cases:**
+- Database migration between environments
+- Backup and restore workflows
+- Incremental data sync
+- Batch operations for performance
+- Integration testing with fixture data
+
 ### Comprehensive Documentation
-**File:** `EXAMPLES.md` (NEW - 652 lines)
+**File:** `EXAMPLES.md` (UPDATED - 750+ lines)
 
 SQL-first user guide covering:
 - Getting started and EAVT concepts
@@ -475,6 +544,15 @@ mentat.mentat_transact(edn_tx TEXT) → TEXT
 mentat.mentat_pull(pattern TEXT, entity_id BIGINT) → JSONB
 mentat.mentat_entity(entity_id BIGINT) → JSONB
 mentat.mentat_schema() → JSONB
+
+-- Batch Operations (NEW)
+mentat.batch(edn_batch TEXT) → JSONB
+
+-- Import/Export (NEW)
+mentat.export_edn(entity_ids BIGINT[]) → TEXT
+mentat.import_edn(edn_data TEXT) → JSONB
+mentat.query_export_edn(query TEXT, inputs JSONB) → TEXT
+mentat.export_all_edn() → TEXT
 
 -- Helper Functions (NEW)
 mentat.lookup_by_ident(attr TEXT, value TEXT) → BIGINT
