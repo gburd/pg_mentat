@@ -1,4 +1,5 @@
 pub mod entity;
+pub mod helpers;
 pub mod pull;
 pub mod query;
 pub mod schema;
