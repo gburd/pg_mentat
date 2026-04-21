@@ -124,8 +124,10 @@ test_*.sql
 .claude/
 
 # Status and progress documents (ephemeral)
+# Exclude generated status docs but keep important architecture docs
 *_STATUS.md
-*_SUMMARY.md
+IMPLEMENTATION_SUMMARY.md
+SESSION_*_SUMMARY.md
 *_REPORT.md
 *_RESULTS.md
 *_PROGRESS.md
@@ -136,6 +138,9 @@ test_*.sql
 ACTION_REQUIRED.md
 QUICK_START.md
 SESSION_*.md
+# Keep these important docs:
+# !EXPERT_REVIEW.md
+# !NEXT_STEPS_EXECUTIVE_SUMMARY.md
 
 # Nix and environment
 .envrc
