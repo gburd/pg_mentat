@@ -104,3 +104,47 @@ result-*
 # pg_mentat development
 .cargo/
 .postgres-data/
+
+# Temporary files and test artifacts
+.tmp/
+*.log
+core.*
+test_*.sql
+
+# User configuration files
+.bash_profile
+.bashrc
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.ripgreprc
+
+# Claude Code settings
+.claude/
+
+# Status and progress documents (ephemeral)
+*_STATUS.md
+*_SUMMARY.md
+*_REPORT.md
+*_RESULTS.md
+*_PROGRESS.md
+*_COMPLETE.md
+*_ANALYSIS.md
+*_PLAN.md
+*_GUIDE.md
+ACTION_REQUIRED.md
+QUICK_START.md
+SESSION_*.md
+
+# Nix and environment
+.envrc
+.envrc.cache
+.mcp.json
+
+# Build artifacts
+*.s
+*.o
+*.so
+*.dylib
+*.dll
