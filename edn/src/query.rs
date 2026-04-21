@@ -796,6 +796,9 @@ pub struct Pattern {
     pub attribute: PatternNonValuePlace,
     pub value: PatternValuePlace,
     pub tx: PatternNonValuePlace,
+    /// Optional 5th element for history queries: the `added` flag.
+    /// Used in patterns like `[?e ?a ?v ?tx ?added]`.
+    pub added: PatternNonValuePlace,
 }
 
 impl Pattern {
@@ -804,7 +807,14 @@ impl Pattern {
         a: PatternNonValuePlace,
         v: PatternValuePlace,
     ) -> Option<Pattern> {
-        Pattern::new(None, e, a, v, PatternNonValuePlace::Placeholder)
+        Pattern::new(
+            None,
+            e,
+            a,
+            v,
+            PatternNonValuePlace::Placeholder,
+            PatternNonValuePlace::Placeholder,
+        )
     }
 
     pub fn new(
@@ -813,6 +823,7 @@ impl Pattern {
         a: PatternNonValuePlace,
         v: PatternValuePlace,
         tx: PatternNonValuePlace,
+        added: PatternNonValuePlace,
     ) -> Option<Pattern> {
         let aa = a.clone(); // Too tired of fighting borrow scope for now.
         if let PatternNonValuePlace::Ident(ref k) = aa {
@@ -828,6 +839,7 @@ impl Pattern {
                         attribute: k.to_reversed().into(),
                         value: e_v,
                         tx,
+                        added,
                     });
                 } else {
                     return None;
@@ -840,6 +852,7 @@ impl Pattern {
             attribute: a,
             value: v,
             tx,
+            added,
         })
     }
 }
@@ -1268,6 +1281,9 @@ impl ContainsVariables for Pattern {
             acc_ref(acc, v)
         }
         if let PatternNonValuePlace::Variable(ref v) = self.tx {
+            acc_ref(acc, v)
+        }
+        if let PatternNonValuePlace::Variable(ref v) = self.added {
             acc_ref(acc, v)
         }
     }

@@ -724,6 +724,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Constant(NonIntegerConstant::Boolean(true)),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -746,6 +747,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Constant(NonIntegerConstant::Boolean(true)),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -777,6 +779,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Constant(NonIntegerConstant::Boolean(true)),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -828,6 +831,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::Constant(NonIntegerConstant::Boolean(true)),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -893,6 +897,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Variable(a),
                 value: PatternValuePlace::Variable(v.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -944,6 +949,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Variable(a),
                 value: PatternValuePlace::Variable(v),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -972,6 +978,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Variable(a),
                 value: PatternValuePlace::Variable(v),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1012,6 +1019,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::Constant("hello".into()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1087,6 +1095,7 @@ mod testing {
                 attribute: ident("foo", "roz"),
                 value: PatternValuePlace::Constant("idgoeshere".into()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
         cc.apply_parsed_pattern(
@@ -1097,6 +1106,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Variable(y),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1183,6 +1193,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1243,6 +1254,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Variable(y),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1288,6 +1300,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Variable(y),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1334,6 +1347,7 @@ mod testing {
                 attribute: ident("foo", "roz"),
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
         cc.apply_parsed_pattern(
@@ -1344,6 +1358,7 @@ mod testing {
                 attribute: ident("foo", "bar"),
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 
@@ -1385,6 +1400,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Variable(y.clone()),
                 value: PatternValuePlace::Constant(NonIntegerConstant::Boolean(true)),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
         cc.apply_parsed_pattern(
@@ -1395,6 +1411,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Variable(y),
                 value: PatternValuePlace::Variable(x.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 

@@ -15,4 +15,5 @@
 
 pub mod hooks;
 
+#[allow(unused_imports)]
 pub use hooks::init_planner_hooks;

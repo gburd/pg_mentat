@@ -42,6 +42,7 @@ fn can_parse_predicates() {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::Variable(Variable::from_valid_name("?y")),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             }),
             WhereClause::Pred(Predicate {
                 operator: PlainSymbol::plain("<"),
@@ -74,6 +75,7 @@ fn can_parse_simple_or() {
                     attribute: PatternNonValuePlace::Placeholder,
                     value: PatternValuePlace::EntidOrInteger(10),
                     tx: PatternNonValuePlace::Placeholder,
+                    added: PatternNonValuePlace::Placeholder,
                 })),
                 OrWhereClause::Clause(WhereClause::Pattern(Pattern {
                     source: None,
@@ -81,6 +83,7 @@ fn can_parse_simple_or() {
                     attribute: PatternNonValuePlace::Placeholder,
                     value: PatternValuePlace::EntidOrInteger(15),
                     tx: PatternNonValuePlace::Placeholder,
+                    added: PatternNonValuePlace::Placeholder,
                 })),
             ],
         )),]
@@ -106,6 +109,7 @@ fn can_parse_unit_or_join() {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::EntidOrInteger(15),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             })),],
         )),]
     );
@@ -131,6 +135,7 @@ fn can_parse_simple_or_join() {
                     attribute: PatternNonValuePlace::Placeholder,
                     value: PatternValuePlace::EntidOrInteger(10),
                     tx: PatternNonValuePlace::Placeholder,
+                    added: PatternNonValuePlace::Placeholder,
                 })),
                 OrWhereClause::Clause(WhereClause::Pattern(Pattern {
                     source: None,
@@ -138,6 +143,7 @@ fn can_parse_simple_or_join() {
                     attribute: PatternNonValuePlace::Placeholder,
                     value: PatternValuePlace::EntidOrInteger(-15),
                     tx: PatternNonValuePlace::Placeholder,
+                    added: PatternNonValuePlace::Placeholder,
                 })),
             ],
         )),]
@@ -169,6 +175,7 @@ fn can_parse_simple_or_and_join() {
                     attribute: PatternNonValuePlace::Placeholder,
                     value: PatternValuePlace::EntidOrInteger(10),
                     tx: PatternNonValuePlace::Placeholder,
+                    added: PatternNonValuePlace::Placeholder,
                 })),
                 OrWhereClause::And(vec![
                     WhereClause::OrJoin(OrJoin::new(
@@ -182,6 +189,7 @@ fn can_parse_simple_or_and_join() {
                                 attribute: ident("foo", "bar"),
                                 value: PatternValuePlace::Variable(Variable::from_valid_name("?y")),
                                 tx: PatternNonValuePlace::Placeholder,
+                                added: PatternNonValuePlace::Placeholder,
                             })),
                             OrWhereClause::Clause(WhereClause::Pattern(Pattern {
                                 source: None,
@@ -191,6 +199,7 @@ fn can_parse_simple_or_and_join() {
                                 attribute: ident("foo", "baz"),
                                 value: PatternValuePlace::Variable(Variable::from_valid_name("?y")),
                                 tx: PatternNonValuePlace::Placeholder,
+                                added: PatternNonValuePlace::Placeholder,
                             })),
                         ],
                     )),
@@ -297,7 +306,8 @@ fn can_parse_uuid() {
                 PatternNonValuePlace::Variable(Variable::from_valid_name("?x")),
                 Keyword::namespaced("foo", "baz").into(),
                 PatternValuePlace::Constant(NonIntegerConstant::Uuid(expected)),
-                PatternNonValuePlace::Placeholder
+                PatternNonValuePlace::Placeholder,
+                PatternNonValuePlace::Placeholder,
             )
             .expect("valid pattern")
         )
@@ -326,7 +336,8 @@ fn can_parse_exotic_whitespace() {
                 PatternNonValuePlace::Variable(Variable::from_valid_name("?x")),
                 Keyword::namespaced("foo", "baz").into(),
                 PatternValuePlace::Constant(NonIntegerConstant::Uuid(expected)),
-                PatternNonValuePlace::Placeholder
+                PatternNonValuePlace::Placeholder,
+                PatternNonValuePlace::Placeholder,
             )
             .expect("valid pattern")
         )

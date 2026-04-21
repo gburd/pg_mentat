@@ -407,10 +407,12 @@ peg::parser!(pub grammar parse() for str {
           a:pattern_non_value_place()
           v:pattern_value_place()?
           tx:pattern_non_value_place()?
+          added:pattern_non_value_place()?
         "]" __
         {?
             let v = v.unwrap_or(query::PatternValuePlace::Placeholder);
             let tx = tx.unwrap_or(query::PatternNonValuePlace::Placeholder);
+            let added = added.unwrap_or(query::PatternNonValuePlace::Placeholder);
 
             // Pattern::new takes care of reversal of reversed
             // attributes: [?x :foo/_bar ?y] turns into
@@ -430,7 +432,7 @@ peg::parser!(pub grammar parse() for str {
             // ```
             //
             // is nonsense. That leaves us with a nested optional, which we unwrap here.
-            query::Pattern::new(src, e, a, v, tx)
+            query::Pattern::new(src, e, a, v, tx, added)
                 .map(query::WhereClause::Pattern)
                 .ok_or("expected pattern")
         }

@@ -10,11 +10,13 @@ mod bootstrap_entids {
     pub const DB_VALUE_TYPE: i64 = 2;
     pub const DB_CARDINALITY: i64 = 3;
     pub const DB_UNIQUE: i64 = 4;
+    #[allow(dead_code)]
     pub const DB_DOC: i64 = 5;
     pub const DB_IS_COMPONENT: i64 = 6;
     pub const DB_FULLTEXT: i64 = 7;
     pub const DB_INDEX: i64 = 8;
     pub const DB_NO_HISTORY: i64 = 9;
+    pub const DB_TX_INSTANT: i64 = 10;
 }
 
 /// Schema attribute properties collected during the first pass.
@@ -109,10 +111,29 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         .flatten()
         .ok_or("Failed to allocate transaction ID")?;
 
-    // Create transaction record
-    Spi::run_with_args(
-        "INSERT INTO mentat.transactions (tx, tx_instant) VALUES ($1, CURRENT_TIMESTAMP)",
+    // Create transaction record and get the timestamp as microseconds since epoch
+    let tx_instant_micros = Spi::get_one_with_args::<i64>(
+        "INSERT INTO mentat.transactions (tx, tx_instant) VALUES ($1, CURRENT_TIMESTAMP) \
+         RETURNING (EXTRACT(EPOCH FROM tx_instant) * 1000000)::BIGINT",
         &[DatumWithOid::from(tx_id)],
+    )
+    .ok()
+    .flatten()
+    .ok_or("Failed to create transaction record")?;
+
+    // Insert :db/txInstant datom for this transaction
+    let instant_bytes = tx_instant_micros.to_le_bytes().to_vec();
+    Spi::run_with_args(
+        "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+        &[
+            DatumWithOid::from(tx_id),
+            DatumWithOid::from(bootstrap_entids::DB_TX_INSTANT),
+            DatumWithOid::from(instant_bytes),
+            DatumWithOid::from(tx_id),
+            DatumWithOid::from(true),
+            DatumWithOid::from(4_i16), // type_tag::INSTANT = 4
+        ],
     )?;
 
     // ========================================================================
@@ -200,7 +221,12 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 
                 let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
                 let a = resolve_attribute(&entity_vec[2])?;
-                let (v_bytes, v_type_tag) = encode_value(&entity_vec[3])?;
+                // Check if attribute is ref-type; if so, resolve value as entity reference
+                let (v_bytes, v_type_tag) = if lookup_value_type(a).as_deref() == Some("ref") {
+                    encode_ref_value(&entity_vec[3], &mut tempid_map)?
+                } else {
+                    encode_value(&entity_vec[3])?
+                };
                 let added = matches!(op, OpType::Add);
 
                 pending_datoms.push(PendingDatom {
@@ -231,7 +257,12 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
                     }
 
                     let a = resolve_attribute(attr_key)?;
-                    let (v_bytes, v_type_tag) = encode_value(attr_value)?;
+                    // Check if attribute is ref-type; if so, resolve value as entity reference
+                    let (v_bytes, v_type_tag) = if lookup_value_type(a).as_deref() == Some("ref") {
+                        encode_ref_value(attr_value, &mut tempid_map)?
+                    } else {
+                        encode_value(attr_value)?
+                    };
 
                     pending_datoms.push(PendingDatom {
                         e,
@@ -261,6 +292,17 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
                 DatumWithOid::from(datom.v_type_tag),
             ],
         )?;
+
+        // Populate mentat.fulltext for fulltext-enabled string attributes.
+        // The trigger on mentat.fulltext auto-updates the search_vector column.
+        if datom.added && datom.v_type_tag == 7 && is_fulltext_attribute(datom.a) {
+            if let Ok(text_value) = String::from_utf8(datom.v_bytes.clone()) {
+                Spi::run_with_args(
+                    "INSERT INTO mentat.fulltext (text_value) VALUES ($1)",
+                    &[DatumWithOid::from(text_value)],
+                )?;
+            }
+        }
     }
 
     // Build TxReport response
@@ -270,8 +312,9 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         .collect();
 
     Ok(format!(
-        "{{\"tx-id\":{},\"tx-instant\":null,\"tempids\":{{{}}},\"datoms-inserted\":{}}}",
+        "{{\"tx-id\":{},\"tx-instant\":{},\"tempids\":{{{}}},\"datoms-inserted\":{}}}",
         tx_id,
+        tx_instant_micros,
         tempids_json.join(","),
         datom_count
     ))
@@ -512,4 +555,37 @@ fn encode_value(
         }
         _ => Err("Unsupported value type".into()),
     }
+}
+
+/// Encode a value for a ref-type attribute. The value should be a tempid (string),
+/// integer entity ID, or keyword ident. Returns (bytes, type_tag=0) where bytes
+/// is the entity ID encoded as little-endian i64.
+fn encode_ref_value(
+    value: &edn::Value,
+    tempid_map: &mut BTreeMap<String, i64>,
+) -> Result<(Vec<u8>, i16), Box<dyn std::error::Error + Send + Sync>> {
+    let entity_id = resolve_entity_place(value, tempid_map)?;
+    Ok((entity_id.to_le_bytes().to_vec(), 0)) // ref = 0
+}
+
+/// Look up the value_type of an attribute from mentat.schema.
+/// Returns the value_type string (e.g., "string", "long", "ref") or None if not found.
+fn lookup_value_type(attr_id: i64) -> Option<String> {
+    Spi::get_one_with_args::<String>(
+        "SELECT value_type::TEXT FROM mentat.schema WHERE entid = $1",
+        &[DatumWithOid::from(attr_id)],
+    )
+    .ok()
+    .flatten()
+}
+
+/// Check if an attribute has fulltext=true in mentat.schema.
+fn is_fulltext_attribute(attr_id: i64) -> bool {
+    Spi::get_one_with_args::<bool>(
+        "SELECT fulltext FROM mentat.schema WHERE entid = $1",
+        &[DatumWithOid::from(attr_id)],
+    )
+    .ok()
+    .flatten()
+    .unwrap_or(false)
 }

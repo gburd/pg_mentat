@@ -266,6 +266,23 @@ fn keyword_to_ident(kw: &edn::Keyword) -> String {
     format!("{}", kw)
 }
 
+/// Build a SQL expression that decodes a BYTEA value as a BIGINT (for arithmetic).
+/// Assumes the value is a long/integer type (type_tag=2). Returns the decoded i64.
+fn build_numeric_value_decode_expr(alias: &str) -> String {
+    format!(
+        "(CASE WHEN octet_length({alias}.v) >= 8 THEN \
+         get_byte({alias}.v, 0)::BIGINT | \
+         (get_byte({alias}.v, 1)::BIGINT << 8) | \
+         (get_byte({alias}.v, 2)::BIGINT << 16) | \
+         (get_byte({alias}.v, 3)::BIGINT << 24) | \
+         (get_byte({alias}.v, 4)::BIGINT << 32) | \
+         (get_byte({alias}.v, 5)::BIGINT << 40) | \
+         (get_byte({alias}.v, 6)::BIGINT << 48) | \
+         (get_byte({alias}.v, 7)::BIGINT << 56) \
+         ELSE NULL END)"
+    )
+}
+
 /// Build a SQL CASE expression that decodes a BYTEA value column based on
 /// the value_type_tag for the given table alias.
 fn build_value_decode_expr(alias: &str) -> String {
@@ -288,7 +305,7 @@ fn build_value_decode_expr(alias: &str) -> String {
          WHEN {bool_tag} THEN (get_byte({alias}.v, 0) != 0)::TEXT \
          WHEN {long_tag} THEN {i64_expr}::TEXT \
          WHEN {double_tag} THEN {double_expr} \
-         WHEN {instant_tag} THEN {i64_expr}::TEXT \
+         WHEN {instant_tag} THEN to_char(to_timestamp(({i64_expr})::DOUBLE PRECISION / 1000000.0), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
          WHEN {str_tag} THEN convert_from({alias}.v, 'UTF8') \
          WHEN {kw_tag} THEN ':' || convert_from({alias}.v, 'UTF8') \
          WHEN {uuid_tag} THEN encode({alias}.v, 'hex') \
@@ -606,9 +623,22 @@ fn build_fulltext_join(
     ));
 
     if !search_term.is_empty() {
-        let search_param = builder.bind_text(search_term.clone());
+        // Detect phrase search: if the search term is wrapped in quotes, use phraseto_tsquery
+        // for proximity matching; otherwise use plainto_tsquery for simple keyword search.
+        let is_phrase = search_term.starts_with('"') && search_term.ends_with('"');
+        let clean_term = if is_phrase {
+            search_term[1..search_term.len() - 1].to_string()
+        } else {
+            search_term.clone()
+        };
+        let search_param = builder.bind_text(clean_term);
+        let tsquery_fn = if is_phrase {
+            "phraseto_tsquery"
+        } else {
+            "plainto_tsquery"
+        };
         where_parts.push(format!(
-            "{fts_alias}.search_vector @@ plainto_tsquery('english', {search_param})"
+            "{fts_alias}.search_vector @@ {tsquery_fn}('english', {search_param})"
         ));
     } else {
         where_parts.push("false".to_string());
@@ -632,11 +662,23 @@ fn build_fulltext_join(
                         var_bindings.insert(var_name, format!("{datoms_alias}.tx::TEXT"));
                     }
                     3 => {
-                        let score_param = builder.bind_text(search_term.clone());
+                        let is_phrase_score =
+                            search_term.starts_with('"') && search_term.ends_with('"');
+                        let clean_score_term = if is_phrase_score {
+                            search_term[1..search_term.len() - 1].to_string()
+                        } else {
+                            search_term.clone()
+                        };
+                        let score_param = builder.bind_text(clean_score_term);
+                        let score_fn = if is_phrase_score {
+                            "phraseto_tsquery"
+                        } else {
+                            "plainto_tsquery"
+                        };
                         var_bindings.insert(
                             var_name,
                             format!(
-                                "ts_rank({fts_alias}.search_vector, plainto_tsquery('english', {score_param}))::TEXT"
+                                "ts_rank({fts_alias}.search_vector, {score_fn}('english', {score_param}))::TEXT"
                             ),
                         );
                     }
@@ -681,8 +723,8 @@ fn build_where_fn_binding(
         _ => return Err(format!("Arithmetic function '{}' requires a scalar binding", op).into()),
     };
 
-    let arg0 = fn_arg_to_placeholder(&wf.args[0]);
-    let arg1 = fn_arg_to_placeholder(&wf.args[1]);
+    let arg0 = fn_arg_to_numeric_placeholder(&wf.args[0]);
+    let arg1 = fn_arg_to_numeric_placeholder(&wf.args[1]);
 
     Ok(Some((
         result_var,
@@ -704,6 +746,15 @@ fn fn_arg_to_placeholder(arg: &FnArg) -> String {
             }
         }
         _ => "NULL".to_string(),
+    }
+}
+
+/// Convert an FnArg to a SQL placeholder for numeric (arithmetic) context.
+/// Uses NUM_VAR_REF: prefix so resolve_var_refs produces a numeric expression.
+fn fn_arg_to_numeric_placeholder(arg: &FnArg) -> String {
+    match arg {
+        FnArg::Variable(v) => format!("NUM_VAR_REF:{}", v),
+        _ => fn_arg_to_placeholder(arg),
     }
 }
 
@@ -866,10 +917,19 @@ fn build_extended_pattern_query(
             PatternNonValuePlace::Variable(v) => {
                 let var_name = format!("{}", v);
                 if let Some((existing_alias, col)) = var_to_alias.get(&var_name) {
-                    where_clauses.push(format!(
-                        "{alias}.e = {existing}.{col}",
-                        existing = existing_alias
-                    ));
+                    if *col == "v" {
+                        // Variable was bound from a value column (BYTEA ref).
+                        // Decode it as BIGINT for comparison with entity column.
+                        where_clauses.push(format!(
+                            "{alias}.e = {decode}",
+                            decode = build_numeric_value_decode_expr(existing_alias)
+                        ));
+                    } else {
+                        where_clauses.push(format!(
+                            "{alias}.e = {existing}.{col}",
+                            existing = existing_alias
+                        ));
+                    }
                 } else {
                     var_to_alias.insert(var_name, (alias.clone(), "e"));
                 }
@@ -967,6 +1027,18 @@ fn build_extended_pattern_query(
         if let Some(as_of_tx) = temporal.as_of {
             let param = builder.bind_bigint(as_of_tx);
             where_clauses.push(format!("{alias}.tx <= {param}"));
+
+            // For as-of queries, ensure we only return the most recent datom
+            // for each (e, a) pair within the as-of window. This handles the
+            // case where cardinality-one attributes have multiple assertions
+            // without explicit retractions.
+            let param2 = builder.bind_bigint(as_of_tx);
+            where_clauses.push(format!(
+                "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                 WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                 AND newer.added = true \
+                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+            ));
         }
 
         if let Some(since_tx) = temporal.since {
@@ -974,12 +1046,17 @@ fn build_extended_pattern_query(
             where_clauses.push(format!("{alias}.tx > {param}"));
         }
 
-        // Handle "added" variable binding for history queries (5th position in pattern)
-        // Check if the pattern has an "added" variable: [?e ?a ?v ?tx ?added]
-        // The EDN parser puts the 5th element in the tx position; for 5-element patterns
-        // we handle this by checking find_vars for an "?added" variable.
-        // Actually, the parser only supports 4-element patterns [e a v tx], so "?added"
-        // bindings need special handling in the SELECT.
+        // Handle added position (5th element in pattern, e.g. [?e ?a ?v ?tx ?added])
+        if let Some(added_var) = non_value_var_name(&pattern.added) {
+            if let Some((existing_alias, col)) = var_to_alias.get(&added_var) {
+                where_clauses.push(format!(
+                    "{alias}.added = {existing}.{col}",
+                    existing = existing_alias
+                ));
+            } else {
+                var_to_alias.insert(added_var, (alias.clone(), "added"));
+            }
+        }
 
         joins.push(format!("mentat.datoms {alias}"));
     }
@@ -1043,23 +1120,7 @@ fn build_extended_pattern_query(
                     group_by_exprs.push(format!("{}", col_idx + 1));
                 }
             } else {
-                // Check for special ?added variable in history mode
-                if inner_var == "?added" && temporal.history {
-                    // Use the first datom alias's added column
-                    if let Some(first_alias) = joins.first() {
-                        let alias = first_alias
-                            .strip_prefix("mentat.datoms ")
-                            .unwrap_or("datoms0");
-                        select_exprs.push(format!("{alias}.added::TEXT"));
-                        if has_aggregates {
-                            group_by_exprs.push(format!("{}", col_idx + 1));
-                        }
-                    } else {
-                        select_exprs.push("NULL::TEXT".to_string());
-                    }
-                } else {
-                    select_exprs.push("NULL::TEXT".to_string());
-                }
+                select_exprs.push("NULL::TEXT".to_string());
             }
         }
     }
@@ -1176,9 +1237,25 @@ fn resolve_var_refs(
     extra_var_bindings: &HashMap<String, String>,
 ) -> String {
     let mut result = expr.to_string();
-    // Find all VAR_REF:?xxx occurrences and replace them
-    while let Some(start) = result.find("VAR_REF:") {
-        let rest = &result[start + 8..];
+    // Find all NUM_VAR_REF:?xxx and VAR_REF:?xxx occurrences and replace them
+    loop {
+        let num_pos = result.find("NUM_VAR_REF:");
+        let var_pos = result.find("VAR_REF:");
+
+        let (start, prefix_len, is_numeric) = match (num_pos, var_pos) {
+            (Some(n), Some(v)) => {
+                if n < v {
+                    (n, 12, true) // "NUM_VAR_REF:" is 12 chars
+                } else {
+                    (v, 8, false) // "VAR_REF:" is 8 chars
+                }
+            }
+            (Some(n), None) => (n, 12, true),
+            (None, Some(v)) => (v, 8, false),
+            (None, None) => break,
+        };
+
+        let rest = &result[start + prefix_len..];
         // Variable names end at space, ), or end of string
         let end = rest
             .find(|c: char| {
@@ -1189,7 +1266,12 @@ fn resolve_var_refs(
 
         let replacement = if let Some((alias, col)) = var_to_alias.get(var_name) {
             if *col == "v" {
-                format!("({})", build_value_decode_expr(alias))
+                if is_numeric {
+                    // For arithmetic context, decode as BIGINT
+                    format!("({})", build_numeric_value_decode_expr(alias))
+                } else {
+                    format!("({})", build_value_decode_expr(alias))
+                }
             } else {
                 format!("{}.{}", alias, col)
             }
@@ -1203,7 +1285,7 @@ fn resolve_var_refs(
             "{}{}{}",
             &result[..start],
             replacement,
-            &result[start + 8 + end..]
+            &result[start + prefix_len + end..]
         );
     }
     result
@@ -1301,6 +1383,14 @@ fn build_not_exists_subquery(
                 if let Some(as_of_tx) = temporal.as_of {
                     let param = builder.bind_bigint(as_of_tx);
                     sub_where.push(format!("{alias}.tx <= {param}"));
+
+                    let param2 = builder.bind_bigint(as_of_tx);
+                    sub_where.push(format!(
+                        "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                         WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                         AND newer.added = true \
+                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                    ));
                 }
                 if let Some(since_tx) = temporal.since {
                     let param = builder.bind_bigint(since_tx);
@@ -1594,6 +1684,14 @@ fn build_rule_clause_sql(
                 if let Some(as_of) = temporal.as_of {
                     let param = builder.bind_bigint(as_of);
                     where_parts.push(format!("{alias}.tx <= {param}"));
+
+                    let param2 = builder.bind_bigint(as_of);
+                    where_parts.push(format!(
+                        "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                         WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                         AND newer.added = true \
+                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                    ));
                 }
                 if let Some(since) = temporal.since {
                     let param = builder.bind_bigint(since);
@@ -1615,10 +1713,9 @@ fn build_rule_clause_sql(
                         // Link the recursive CTE column to the body variable
                         if let Some((alias, col)) = body_var_to_alias.get(&var_name) {
                             if *col == "v" {
-                                // Value column: need to compare decoded value
-                                // For ref-type values (entity IDs stored as BYTEA),
-                                // decode and compare
-                                where_parts.push(format!("({}::TEXT) = {alias}.e::TEXT", col_ref));
+                                // Value column: decode ref entity ID from BYTEA
+                                let decoded_v = build_numeric_value_decode_expr(alias);
+                                where_parts.push(format!("{col_ref}::BIGINT = {decoded_v}"));
                             } else {
                                 where_parts.push(format!("{col_ref}::BIGINT = {alias}.{col}",));
                             }
@@ -1650,17 +1747,7 @@ fn build_rule_clause_sql(
                     select_parts.push(format!("{}.col{}::BIGINT", recursive_alias, i));
                 } else if *col == "v" {
                     // Value column: for ref-type, decode the entity reference
-                    let i64_decode = format!(
-                        "(get_byte({alias}.v, 0)::BIGINT | \
-                         (get_byte({alias}.v, 1)::BIGINT << 8) | \
-                         (get_byte({alias}.v, 2)::BIGINT << 16) | \
-                         (get_byte({alias}.v, 3)::BIGINT << 24) | \
-                         (get_byte({alias}.v, 4)::BIGINT << 32) | \
-                         (get_byte({alias}.v, 5)::BIGINT << 40) | \
-                         (get_byte({alias}.v, 6)::BIGINT << 48) | \
-                         (get_byte({alias}.v, 7)::BIGINT << 56))"
-                    );
-                    select_parts.push(i64_decode);
+                    select_parts.push(build_numeric_value_decode_expr(alias));
                 } else {
                     select_parts.push(format!("{alias}.{col}"));
                 }

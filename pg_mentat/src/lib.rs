@@ -69,10 +69,15 @@ mod mentat {
     }
 
     // Re-export all extension functions into the mentat schema
+    #[allow(unused_imports)]
     pub use crate::functions::entity::*;
+    #[allow(unused_imports)]
     pub use crate::functions::pull::*;
+    #[allow(unused_imports)]
     pub use crate::functions::query::*;
+    #[allow(unused_imports)]
     pub use crate::functions::schema::*;
+    #[allow(unused_imports)]
     pub use crate::functions::transact::*;
 }
 
@@ -355,6 +360,29 @@ mod tests {
         Ok(())
     }
 
+    /// Define common person attributes (:person/name, :person/age, :person/parent,
+    /// :person/status) via mentat_transact. Must be called after setup_test_db()
+    /// and bootstrap_schema().
+    fn setup_person_schema() {
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"name-attr\" :db/ident :person/name]
+                 [:db/add \"name-attr\" :db/valueType :db.type/string]
+                 [:db/add \"name-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"age-attr\" :db/ident :person/age]
+                 [:db/add \"age-attr\" :db/valueType :db.type/long]
+                 [:db/add \"age-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"parent-attr\" :db/ident :person/parent]
+                 [:db/add \"parent-attr\" :db/valueType :db.type/ref]
+                 [:db/add \"parent-attr\" :db/cardinality :db.cardinality/many]
+                 [:db/add \"status-attr\" :db/ident :person/status]
+                 [:db/add \"status-attr\" :db/valueType :db.type/string]
+                 [:db/add \"status-attr\" :db/cardinality :db.cardinality/one]]
+            '::TEXT)",
+        )
+        .expect("Failed to setup person schema");
+    }
+
     // ============================================================================
     // EDN Type Tests
     // ============================================================================
@@ -533,6 +561,7 @@ mod tests {
     fn test_pg_query_with_inputs() {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
 
         Spi::run(
             "SELECT mentat_transact('
@@ -544,7 +573,7 @@ mod tests {
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query(
-                '[:find ?e :in $ ?name :where [?e :person/name ?name]]'::TEXT,
+                '[:find ?e :in ?name :where [?e :person/name ?name]]'::TEXT,
                 '{\"inputs\": [\"Alice\"]}'::jsonb
             )::TEXT",
         )
@@ -695,7 +724,7 @@ mod tests {
     // ============================================================================
 
     fn setup_temporal_data() -> (i64, i64, i64) {
-        Spi::run(
+        let result = Spi::get_one::<String>(
             "SELECT mentat_transact('
                 [[:db/add \"name-attr\" :db/ident :person/name]
                  [:db/add \"name-attr\" :db/valueType :db.type/string]
@@ -707,28 +736,42 @@ mod tests {
                  [:db/add \"p1\" :person/age 25]]
             '::TEXT)",
         )
-        .expect("Transaction 1 failed");
+        .expect("Transaction 1 failed")
+        .expect("Transaction 1 returned NULL");
+
+        // Extract Alice's entity ID from the tempid map in the tx report
+        let tx_report: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse tx report");
+        let alice_eid = tx_report["tempids"]["p1"]
+            .as_i64()
+            .expect("Failed to get Alice's entity ID from tempids");
 
         let tx1 = Spi::get_one::<i64>("SELECT MAX(tx) FROM mentat.datoms")
             .expect("Failed to get tx1")
             .expect("tx1 is null");
 
-        Spi::run("SELECT mentat_transact('[[:db/add \"p1\" :person/age 26]]'::TEXT)")
-            .expect("Transaction 2 failed");
+        // Use Alice's actual entity ID to update her age
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/age 26]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Transaction 2 failed");
 
         let tx2 = Spi::get_one::<i64>(&format!(
-            "SELECT MAX(tx) FROM mentat.datoms WHERE tx > {}", tx1
+            "SELECT MAX(tx) FROM mentat.datoms WHERE tx > {}",
+            tx1
         ))
-            .expect("Failed to get tx2")
-            .expect("tx2 is null");
+        .expect("Failed to get tx2")
+        .expect("tx2 is null");
 
-        Spi::run(
+        Spi::run(&format!(
             "SELECT mentat_transact('
-                [[:db/add \"p1\" :person/age 27]
+                [[:db/add {} :person/age 27]
                  [:db/add \"p2\" :person/name \"Bob\"]
                  [:db/add \"p2\" :person/age 30]]
             '::TEXT)",
-        )
+            alice_eid
+        ))
         .expect("Transaction 3 failed");
 
         let tx3 = Spi::get_one::<i64>("SELECT MAX(tx) FROM mentat.datoms")
@@ -871,22 +914,35 @@ mod tests {
     fn test_pg_history_retraction() {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
 
+        // Insert the initial data
         Spi::run(
             "SELECT mentat_transact('
-                [[:db/add \"status-attr\" :db/ident :person/status]
-                 [:db/add \"status-attr\" :db/valueType :db.type/string]
-                 [:db/add \"status-attr\" :db/cardinality :db.cardinality/one]
-                 [:db/add \"p1\" :person/name \"Alice\"]
+                [[:db/add \"p1\" :person/name \"Alice\"]
                  [:db/add \"p1\" :person/status \"active\"]]
             '::TEXT)",
         )
         .expect("Transaction 1 failed");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/retract \"p1\" :person/status \"active\"]]'::TEXT)",
+        // Look up the entity ID for the retraction (tempids don't carry across transactions)
+        let entity_id = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms d \
+             JOIN mentat.idents i ON d.a = i.entid \
+             WHERE i.ident = ':person/name' \
+             AND d.v = convert_to('Alice', 'UTF8') \
+             AND d.added = true \
+             LIMIT 1",
         )
-        .expect("Retraction failed");
+        .expect("Failed to find entity")
+        .expect("Entity not found");
+
+        // Retract using the actual entity ID
+        let retract_tx = format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/status \"active\"]]'::TEXT)",
+            entity_id
+        );
+        Spi::run(&retract_tx).expect("Retraction failed");
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query('
@@ -1031,7 +1087,6 @@ mod tests {
         let result = Spi::get_one::<String>(
             "SELECT mentat_query('
                 [:find ?parent-name ?child-name
-                 :in $
                  :where
                  [?p :family/child ?c]
                  [?p :person/name ?parent-name]
@@ -1122,13 +1177,11 @@ mod tests {
     fn test_pg_rule_with_predicates() {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
 
         Spi::run(
             "SELECT mentat_transact('
-                [[:db/add \"age-attr\" :db/ident :person/age]
-                 [:db/add \"age-attr\" :db/valueType :db.type/long]
-                 [:db/add \"age-attr\" :db/cardinality :db.cardinality/one]
-                 [:db/add \"p1\" :person/name \"Alice\"]
+                [[:db/add \"p1\" :person/name \"Alice\"]
                  [:db/add \"p1\" :person/age 25]
                  [:db/add \"p2\" :person/name \"Bob\"]
                  [:db/add \"p2\" :person/age 30]
@@ -1224,6 +1277,7 @@ mod tests {
     fn test_pg_rule_or() {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
 
         Spi::run(
             "SELECT mentat_transact('
@@ -1246,8 +1300,8 @@ mod tests {
                  :where
                  [?p :person/name ?name]
                  [?p :person/role ?role]
-                 (or [[?p :person/role \"admin\"]]
-                     [[?p :person/role \"moderator\"]])]'::TEXT, '{}'::jsonb)::TEXT",
+                 (or [?p :person/role \"admin\"]
+                     [?p :person/role \"moderator\"])]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("Query failed");
 
@@ -1263,6 +1317,7 @@ mod tests {
     fn test_pg_rule_bind() {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
 
         Spi::run(
             "SELECT mentat_transact('

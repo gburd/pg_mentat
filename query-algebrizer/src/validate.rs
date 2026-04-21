@@ -144,6 +144,7 @@ mod tests {
                         attribute: ident("artist", "type"),
                         value: value_ident("artist.type", "group"),
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     }))
                 );
                 assert_eq!(
@@ -157,6 +158,7 @@ mod tests {
                             attribute: ident("artist", "type"),
                             value: value_ident("artist.type", "person"),
                             tx: PatternNonValuePlace::Placeholder,
+                            added: PatternNonValuePlace::Placeholder,
                         }),
                         WhereClause::Pattern(Pattern {
                             source: None,
@@ -166,6 +168,7 @@ mod tests {
                             attribute: ident("artist", "gender"),
                             value: value_ident("artist.gender", "female"),
                             tx: PatternNonValuePlace::Placeholder,
+                            added: PatternNonValuePlace::Placeholder,
                         }),
                     ])
                 );
@@ -221,6 +224,7 @@ mod tests {
                         attribute: ident("artist", "type"),
                         value: value_ident("artist.type", "group"),
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     }))
                 );
                 assert_eq!(
@@ -234,6 +238,7 @@ mod tests {
                             attribute: ident("artist", "type"),
                             value: PatternValuePlace::Variable(Variable::from_valid_name("?type")),
                             tx: PatternNonValuePlace::Placeholder,
+                            added: PatternNonValuePlace::Placeholder,
                         }),
                         WhereClause::Pattern(Pattern {
                             source: None,
@@ -243,6 +248,7 @@ mod tests {
                             attribute: ident("artist", "role"),
                             value: value_ident("artist.role", "parody"),
                             tx: PatternNonValuePlace::Placeholder,
+                            added: PatternNonValuePlace::Placeholder,
                         }),
                     ])
                 );
@@ -298,6 +304,7 @@ mod tests {
                         attribute: artist_country.clone(),
                         value: value_ident("country", "CA"),
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     })
                 );
                 assert_eq!(
@@ -308,6 +315,7 @@ mod tests {
                         attribute: artist_country,
                         value: value_ident("country", "GB"),
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     })
                 );
             }
@@ -342,6 +350,7 @@ mod tests {
                         attribute: ident("release", "artists"),
                         value: artist,
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     })
                 );
                 assert_eq!(
@@ -352,6 +361,7 @@ mod tests {
                         attribute: ident("release", "year"),
                         value: PatternValuePlace::EntidOrInteger(1970),
                         tx: PatternNonValuePlace::Placeholder,
+                        added: PatternNonValuePlace::Placeholder,
                     })
                 );
             }

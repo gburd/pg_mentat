@@ -208,6 +208,12 @@ fn substitute_variables(
                 }
                 other => other.clone(),
             };
+            new_pattern.added = match &pattern.added {
+                PatternNonValuePlace::Variable(v) => {
+                    PatternNonValuePlace::Variable(substitutions.get(v).unwrap_or(v).clone())
+                }
+                other => other.clone(),
+            };
             Ok(WhereClause::Pattern(new_pattern))
         }
         WhereClause::RuleExpr(ref invocation) => {

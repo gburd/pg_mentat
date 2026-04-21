@@ -239,6 +239,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
         assert!(!cc.is_known_empty());
@@ -323,6 +324,7 @@ mod testing {
                 attribute: PatternNonValuePlace::Placeholder,
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
         assert!(!cc.is_known_empty());
@@ -352,6 +354,7 @@ mod testing {
                 attribute: ident("foo", "roz"),
                 value: PatternValuePlace::Variable(y.clone()),
                 tx: PatternNonValuePlace::Placeholder,
+                added: PatternNonValuePlace::Placeholder,
             },
         );
 

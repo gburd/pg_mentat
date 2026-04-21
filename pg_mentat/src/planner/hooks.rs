@@ -164,6 +164,7 @@ fn get_index_info() -> Result<
 /// This function is called from the extension's `_PG_init` function.
 /// Phase 1: Logs initialization message
 /// Phase 2: Will register GUC settings and install planner hooks
+#[allow(dead_code)]
 pub unsafe fn init_planner_hooks() {
     // Phase 1: Basic initialization
     // Phase 2 TODO: Register GUC settings and install planner hook
