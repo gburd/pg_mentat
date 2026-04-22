@@ -283,6 +283,14 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         // Only validate assertions (added=true), not retractions
         if datom.added {
             validate_datom_constraints(datom, &pending_datoms)?;
+
+            // For cardinality-one attributes, automatically retract any existing
+            // value before asserting the new one (Datomic upsert semantics).
+            if let Some(attr_info) = lookup_attribute_info(datom.a) {
+                if attr_info.cardinality == "one" {
+                    retract_existing_cardinality_one(datom.e, datom.a, tx_id, &datom.v_bytes, datom.v_type_tag)?;
+                }
+            }
         }
 
         Spi::run_with_args(
@@ -627,24 +635,9 @@ fn validate_datom_constraints(
             .into());
         }
 
-        // Check existing datoms in database
-        let existing_count = Spi::get_one_with_args::<i64>(
-            "SELECT COUNT(*) FROM mentat.datoms \
-             WHERE e = $1 AND a = $2 AND added = true",
-            &[DatumWithOid::from(datom.e), DatumWithOid::from(datom.a)],
-        )
-        .ok()
-        .flatten()
-        .unwrap_or(0);
-
-        if existing_count > 0 {
-            return Err(format!(
-                "Cardinality violation: attribute {} has cardinality 'one' but entity {} \
-                 already has a value",
-                datom.a, datom.e
-            )
-            .into());
-        }
+        // Note: existing values for cardinality-one attributes are handled by
+        // retract_existing_cardinality_one() during insertion, implementing
+        // Datomic's upsert semantics (automatically retract old, assert new).
     }
 
     // 3. Unique constraint validation
@@ -701,6 +694,61 @@ fn validate_datom_constraints(
                 .into());
             }
         }
+    }
+
+    Ok(())
+}
+
+/// For cardinality-one attributes, retract any existing value for this (entity, attribute)
+/// pair before asserting a new value. This implements Datomic's upsert semantics.
+/// If the new value is identical to the existing value, no retraction is needed (idempotent).
+fn retract_existing_cardinality_one(
+    entity_id: i64,
+    attr_id: i64,
+    tx_id: i64,
+    new_v_bytes: &[u8],
+    new_v_type_tag: i16,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Find the current value (if any)
+    let existing = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT v, value_type_tag FROM mentat.datoms \
+             WHERE e = $1 AND a = $2 AND added = true \
+             ORDER BY tx DESC LIMIT 1",
+            None,
+            &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id)],
+        )?;
+
+        for row in rows {
+            if let (Ok(Some(v_bytes)), Ok(Some(type_tag))) = (
+                row.get::<Vec<u8>>(1),
+                row.get::<i16>(2),
+            ) {
+                return Ok::<_, pgrx::spi::SpiError>(Some((v_bytes, type_tag)));
+            }
+        }
+        Ok(None)
+    })?;
+
+    if let Some((old_v_bytes, old_type_tag)) = existing {
+        // If the value is identical, no retraction needed (idempotent assertion)
+        if old_v_bytes == new_v_bytes && old_type_tag == new_v_type_tag {
+            return Ok(());
+        }
+
+        // Insert a retraction datom for the old value
+        Spi::run_with_args(
+            "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
+             VALUES ($1, $2, $3, $4, $5, $6)",
+            &[
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(old_v_bytes),
+                DatumWithOid::from(tx_id),
+                DatumWithOid::from(false), // added = false (retraction)
+                DatumWithOid::from(old_type_tag),
+            ],
+        )?;
     }
 
     Ok(())

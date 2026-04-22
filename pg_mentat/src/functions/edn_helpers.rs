@@ -2,8 +2,10 @@
 ///
 /// These functions provide EDN-native interfaces for batch operations,
 /// import/export, and advanced query patterns.
+use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::Spi;
+use pgrx::JsonB;
 use serde_json::{json, Value as JsonValue};
 
 /// Execute multiple operations in a single EDN batch document
@@ -209,9 +211,7 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
 
             let mut entity_facts = Vec::new();
 
-            for row in client.select(query, None, Some(vec![
-                (PgBuiltInOids::INT8OID.oid(), entity_id.into_datum())
-            ]))? {
+            for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
                 if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
                     row.get::<i64>(1),
                     row.get::<Vec<u8>>(2),
@@ -339,13 +339,13 @@ fn export_all_edn() -> Result<String, Box<dyn std::error::Error + Send + Sync>> 
         let query = "SELECT DISTINCT e FROM mentat.datoms WHERE added = true ORDER BY e";
 
         let mut ids = Vec::new();
-        for row in client.select(query, None, None)? {
+        for row in client.select(query, None, &[])? {
             if let Ok(Some(id)) = row.get::<i64>(1) {
                 ids.push(id);
             }
         }
 
-        Ok(ids)
+        Ok::<_, pgrx::spi::SpiError>(ids)
     })?;
 
     export_edn(entity_ids)
