@@ -36,7 +36,8 @@ impl SchemaCache {
     pub fn get_attribute(&self, attr_id: i64) -> Option<AttributeInfo> {
         // Try read lock first (fast path)
         {
-            let cache = self.attrs_by_id.read().unwrap();
+            let cache = self.attrs_by_id.read()
+                .expect("RwLock poisoned - schema cache corrupted");
             if let Some(info) = cache.get(&attr_id) {
                 return Some(info.clone());
             }
@@ -47,7 +48,8 @@ impl SchemaCache {
 
         // Store in cache
         {
-            let mut cache = self.attrs_by_id.write().unwrap();
+            let mut cache = self.attrs_by_id.write()
+                .expect("RwLock poisoned - schema cache corrupted");
             cache.insert(attr_id, info.clone());
         }
 
@@ -106,7 +108,8 @@ impl SchemaCache {
     pub fn resolve_ident(&self, ident: &str) -> Option<i64> {
         // Try read lock first (fast path)
         {
-            let cache = self.idents_to_entid.read().unwrap();
+            let cache = self.idents_to_entid.read()
+                .expect("RwLock poisoned - ident cache corrupted");
             if let Some(&entid) = cache.get(ident) {
                 return Some(entid);
             }
@@ -122,8 +125,10 @@ impl SchemaCache {
 
         // Store in cache (both directions)
         {
-            let mut idents_cache = self.idents_to_entid.write().unwrap();
-            let mut entids_cache = self.entids_to_ident.write().unwrap();
+            let mut idents_cache = self.idents_to_entid.write()
+                .expect("RwLock poisoned - ident cache corrupted");
+            let mut entids_cache = self.entids_to_ident.write()
+                .expect("RwLock poisoned - ident cache corrupted");
             idents_cache.insert(ident.to_string(), entid);
             entids_cache.insert(entid, ident.to_string());
         }
@@ -135,7 +140,8 @@ impl SchemaCache {
     pub fn get_ident(&self, entid: i64) -> Option<String> {
         // Try read lock first (fast path)
         {
-            let cache = self.entids_to_ident.read().unwrap();
+            let cache = self.entids_to_ident.read()
+                .expect("RwLock poisoned - ident cache corrupted");
             if let Some(ident) = cache.get(&entid) {
                 return Some(ident.clone());
             }
@@ -151,8 +157,10 @@ impl SchemaCache {
 
         // Store in cache (both directions)
         {
-            let mut idents_cache = self.idents_to_entid.write().unwrap();
-            let mut entids_cache = self.entids_to_ident.write().unwrap();
+            let mut idents_cache = self.idents_to_entid.write()
+                .expect("RwLock poisoned - ident cache corrupted");
+            let mut entids_cache = self.entids_to_ident.write()
+                .expect("RwLock poisoned - ident cache corrupted");
             idents_cache.insert(ident.clone(), entid);
             entids_cache.insert(entid, ident.clone());
         }
@@ -162,9 +170,12 @@ impl SchemaCache {
 
     /// Invalidate all caches (call after schema changes)
     pub fn invalidate(&self) {
-        let mut attrs = self.attrs_by_id.write().unwrap();
-        let mut idents = self.idents_to_entid.write().unwrap();
-        let mut entids = self.entids_to_ident.write().unwrap();
+        let mut attrs = self.attrs_by_id.write()
+            .expect("RwLock poisoned - schema cache corrupted");
+        let mut idents = self.idents_to_entid.write()
+            .expect("RwLock poisoned - ident cache corrupted");
+        let mut entids = self.entids_to_ident.write()
+            .expect("RwLock poisoned - ident cache corrupted");
         attrs.clear();
         idents.clear();
         entids.clear();
