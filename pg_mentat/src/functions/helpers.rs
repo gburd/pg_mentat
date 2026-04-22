@@ -4,8 +4,10 @@
 /// - Entity and attribute lookups
 /// - Entity retraction
 /// - Value listing
+use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::Spi;
+use pgrx::JsonB;
 use serde_json::json;
 
 /// Look up an entity ID by its ident attribute value
@@ -27,9 +29,9 @@ fn lookup_by_ident(
     // Query datoms for the entity with this value (string type tag = 7)
     let result = Spi::get_one_with_args::<i64>(
         "SELECT e FROM mentat.datoms WHERE a = $1 AND v = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
-        vec![
-            (PgBuiltInOids::INT8OID.oid(), attr_id.into_datum()),
-            (PgBuiltInOids::BYTEAOID.oid(), value.as_bytes().into_datum()),
+        &[
+            DatumWithOid::from(attr_id),
+            DatumWithOid::from(value.as_bytes().to_vec()),
         ],
     );
 
@@ -58,9 +60,7 @@ fn entity_attrs(entity_id: i64) -> JsonB {
         let mut idents = Vec::new();
 
         for row in client
-            .select(query, None, Some(vec![
-                (PgBuiltInOids::INT8OID.oid(), entity_id.into_datum())
-            ]))?
+            .select(query, None, &[DatumWithOid::from(entity_id)])?
         {
             if let Ok(Some(attr_id)) = row.get::<i64>(1) {
                 // Resolve entid to ident string
@@ -70,7 +70,7 @@ fn entity_attrs(entity_id: i64) -> JsonB {
             }
         }
 
-        Ok(idents)
+        Ok::<_, pgrx::spi::SpiError>(idents)
     });
 
     match result {
@@ -108,9 +108,7 @@ fn attribute_values(attr_ident: &str) -> JsonB {
         let mut values = Vec::new();
 
         for row in client
-            .select(query, None, Some(vec![
-                (PgBuiltInOids::INT8OID.oid(), attr_id.into_datum())
-            ]))?
+            .select(query, None, &[DatumWithOid::from(attr_id)])?
         {
             if let (Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
                 row.get::<Vec<u8>>(1),
@@ -123,7 +121,7 @@ fn attribute_values(attr_ident: &str) -> JsonB {
             }
         }
 
-        Ok(values)
+        Ok::<_, pgrx::spi::SpiError>(values)
     });
 
     match result {
@@ -156,9 +154,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         let mut retract_list = Vec::new();
 
         for row in client
-            .select(facts_query, None, Some(vec![
-                (PgBuiltInOids::INT8OID.oid(), entity_id.into_datum())
-            ]))?
+            .select(facts_query, None, &[DatumWithOid::from(entity_id)])?
         {
             if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
                 row.get::<i64>(1),
@@ -169,7 +165,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
             }
         }
 
-        Ok(retract_list)
+        Ok::<_, pgrx::spi::SpiError>(retract_list)
     })?;
 
     if retractions.is_empty() {
