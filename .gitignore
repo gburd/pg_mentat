@@ -153,3 +153,17 @@ SESSION_*.md
 *.so
 *.dylib
 *.dll
+
+# Claude Code agent files
+.claude-tasks/
+
+# IDE configuration  
+.vscode/
+.idea/
+
+# Generated build files
+build/version.rs
+
+# Database fixtures (binary)
+fixtures/*.db
+fixtures/**/*.db
