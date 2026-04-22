@@ -2,6 +2,126 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
 
+// Initialize the mentat schema during CREATE EXTENSION
+extension_sql!(r#"
+    CREATE SCHEMA IF NOT EXISTS mentat;
+
+    -- Define enum types
+    DO $$ BEGIN
+        CREATE TYPE mentat.value_type AS ENUM (
+            'ref', 'boolean', 'instant', 'long', 'double', 'string', 'keyword', 'uuid', 'bytes'
+        );
+    EXCEPTION WHEN duplicate_object THEN null;
+    END $$;
+
+    DO $$ BEGIN
+        CREATE TYPE mentat.unique_type AS ENUM ('value', 'identity');
+    EXCEPTION WHEN duplicate_object THEN null;
+    END $$;
+
+    DO $$ BEGIN
+        CREATE TYPE mentat.cardinality_type AS ENUM ('one', 'many');
+    EXCEPTION WHEN duplicate_object THEN null;
+    END $$;
+
+    CREATE TABLE IF NOT EXISTS mentat.datoms (
+        e BIGINT NOT NULL,
+        a BIGINT NOT NULL,
+        v BYTEA NOT NULL,
+        value_type_tag SMALLINT NOT NULL,
+        tx BIGINT NOT NULL,
+        added BOOLEAN NOT NULL DEFAULT TRUE
+    );
+
+    CREATE TABLE IF NOT EXISTS mentat.schema (
+        entid BIGINT PRIMARY KEY,
+        ident TEXT UNIQUE NOT NULL,
+        value_type mentat.value_type NOT NULL,
+        cardinality mentat.cardinality_type NOT NULL DEFAULT 'one',
+        unique_constraint mentat.unique_type,
+        indexed BOOLEAN NOT NULL DEFAULT FALSE,
+        fulltext BOOLEAN NOT NULL DEFAULT FALSE,
+        component BOOLEAN NOT NULL DEFAULT FALSE,
+        no_history BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE TABLE IF NOT EXISTS mentat.idents (
+        ident TEXT PRIMARY KEY,
+        entid BIGINT UNIQUE NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS mentat.partitions (
+        name TEXT PRIMARY KEY,
+        start_entid BIGINT NOT NULL,
+        end_entid BIGINT NOT NULL,
+        next_entid BIGINT NOT NULL,
+        allow_excision BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    CREATE TABLE IF NOT EXISTS mentat.transactions (
+        tx BIGINT PRIMARY KEY,
+        tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- EAVT, AEVT, AVET, VAET index pattern
+    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, v, tx);
+    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, v, tx);
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet ON mentat.datoms (a, value_type_tag, v, e, tx);
+    CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v, a, e, tx) WHERE value_type_tag = 0;
+    CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+
+    -- Full-text search support table
+    CREATE TABLE IF NOT EXISTS mentat.fulltext (
+        text_value TEXT NOT NULL,
+        search_vector TSVECTOR
+    );
+    CREATE INDEX IF NOT EXISTS idx_fulltext_search ON mentat.fulltext USING GIN (search_vector);
+
+    -- Trigger to auto-update search vector
+    CREATE OR REPLACE FUNCTION mentat.fulltext_update_trigger() RETURNS trigger AS $$
+    BEGIN
+        NEW.search_vector := to_tsvector('english', NEW.text_value);
+        RETURN NEW;
+    END; $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS fulltext_update ON mentat.fulltext;
+    CREATE TRIGGER fulltext_update BEFORE INSERT OR UPDATE ON mentat.fulltext
+        FOR EACH ROW EXECUTE FUNCTION mentat.fulltext_update_trigger();
+
+    INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
+        ('db.part/db', 0, 10000, 100, FALSE),
+        ('db.part/user', 10000, 1000000, 10000, FALSE),
+        ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+    ON CONFLICT (name) DO NOTHING;
+
+    INSERT INTO mentat.transactions (tx, tx_instant)
+    VALUES (1000000, '2025-01-01T00:00:00Z')
+    ON CONFLICT (tx) DO NOTHING;
+
+    -- PL/pgSQL helper functions for transaction processing
+    CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
+    RETURNS BIGINT AS $$
+    DECLARE new_entid BIGINT;
+    BEGIN
+        UPDATE mentat.partitions
+        SET next_entid = next_entid + 1
+        WHERE name = partition_name
+        RETURNING next_entid - 1 INTO new_entid;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'Partition % not found', partition_name;
+        END IF;
+        RETURN new_entid;
+    END; $$ LANGUAGE plpgsql;
+
+    CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)
+    RETURNS BIGINT AS $$
+    BEGIN
+        RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
+    END; $$ LANGUAGE plpgsql;
+"#,
+name = "bootstrap_schema",
+);
+
 mod cache;
 mod functions;
 mod operators;
