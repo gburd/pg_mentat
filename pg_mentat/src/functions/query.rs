@@ -90,6 +90,106 @@ fn parse_temporal_options(inputs: &serde_json::Value) -> TemporalOption {
     opts
 }
 
+/// Parse :in clause input bindings from the inputs JSON parameter.
+///
+/// Matches the "inputs" JSON array positionally against the parsed query's
+/// :in variables. For example, given `:in ?name ?age` and
+/// `{"inputs": ["Alice", 30]}`, returns `{"?name": "Alice", "?age": 30}`.
+fn parse_input_bindings(
+    in_vars: &[edn::query::Variable],
+    inputs_json: &serde_json::Value,
+) -> HashMap<String, serde_json::Value> {
+    let mut bindings = HashMap::new();
+    if let Some(arr) = inputs_json
+        .as_object()
+        .and_then(|obj| obj.get("inputs"))
+        .and_then(|v| v.as_array())
+    {
+        for (i, var) in in_vars.iter().enumerate() {
+            if let Some(val) = arr.get(i) {
+                let var_name = format!("{}", var);
+                bindings.insert(var_name, val.clone());
+            }
+        }
+    }
+    bindings
+}
+
+/// Bind an :in clause variable to a WHERE constraint on a datom value column.
+///
+/// Encodes the JSON value as BYTEA with the appropriate type tag and adds
+/// the constraint to match `alias.v` and `alias.value_type_tag`.
+fn bind_input_value(
+    alias: &str,
+    value: &serde_json::Value,
+    builder: &mut SqlBuilder<'_>,
+) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => {
+            // Check if it looks like a keyword (starts with ':')
+            if let Some(stripped) = s.strip_prefix(':') {
+                let bytes = stripped.as_bytes().to_vec();
+                let param = builder.bind_bytea(bytes);
+                Some(format!(
+                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::KEYWORD
+                ))
+            } else {
+                let bytes = s.as_bytes().to_vec();
+                let param = builder.bind_bytea(bytes);
+                Some(format!(
+                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::STRING
+                ))
+            }
+        }
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                let bytes = i.to_le_bytes().to_vec();
+                let param = builder.bind_bytea(bytes);
+                Some(format!(
+                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::LONG
+                ))
+            } else if let Some(f) = n.as_f64() {
+                let bytes = f.to_le_bytes().to_vec();
+                let param = builder.bind_bytea(bytes);
+                Some(format!(
+                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::DOUBLE
+                ))
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Bool(b) => {
+            let bytes = vec![if *b { 1u8 } else { 0u8 }];
+            let param = builder.bind_bytea(bytes);
+            Some(format!(
+                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                tag = type_tag::BOOLEAN
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Bind an :in clause variable to a WHERE constraint on an entity column.
+///
+/// For entity-position variables, the bound value must be an integer entity ID.
+fn bind_input_entity(
+    alias: &str,
+    value: &serde_json::Value,
+    builder: &mut SqlBuilder<'_>,
+) -> Option<String> {
+    if let Some(i) = value.as_i64() {
+        let param = builder.bind_bigint(i);
+        Some(format!("{alias}.e = {param}"))
+    } else {
+        None
+    }
+}
+
 /// Execute a Datalog query and return results as JSON
 ///
 /// Supports temporal options via the inputs JSON parameter:
@@ -105,11 +205,18 @@ pub fn mentat_query(
     let parsed_query = mentat_core::parse_query(query)?;
 
     let temporal = parse_temporal_options(&inputs.0);
+    let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
     let has_aggregates = find_spec_has_aggregates(&parsed_query.find_spec);
     let find_vars = extract_find_variables(&parsed_query.find_spec);
 
     let mut builder = SqlBuilder::new();
-    let sql_query = build_sql_from_datalog(&parsed_query, &find_vars, &mut builder, &temporal)?;
+    let sql_query = build_sql_from_datalog(
+        &parsed_query,
+        &find_vars,
+        &mut builder,
+        &temporal,
+        &input_bindings,
+    )?;
 
     let params = builder.params;
     let results = Spi::connect(|client| {
@@ -420,6 +527,7 @@ fn build_sql_from_datalog(
     find_vars: &[String],
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
+    input_bindings: &HashMap<String, serde_json::Value>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Separate clause types
     let mut pattern_clauses = Vec::new();
@@ -491,6 +599,7 @@ fn build_sql_from_datalog(
             builder,
             temporal,
             &rule_cte_info,
+            input_bindings,
         )?
     };
 
@@ -539,6 +648,7 @@ fn build_sql_from_datalog(
                 &mut arm_builder,
                 temporal,
                 &rule_cte_info,
+                input_bindings,
             )?;
 
             let offset = builder.params.len();
@@ -895,6 +1005,7 @@ fn build_extended_pattern_query(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     rule_cte_info: &Option<RuleCteInfo>,
+    input_bindings: &HashMap<String, serde_json::Value>,
 ) -> Result<(String, HashMap<String, (String, &'static str)>), Box<dyn std::error::Error + Send + Sync>> {
     // Track variable bindings to datom table aliases
     let mut var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
@@ -1065,6 +1176,38 @@ fn build_extended_pattern_query(
     for fj in fts_joins {
         joins.push(fj.from_fragment.clone());
         where_clauses.extend(fj.where_parts.iter().cloned());
+    }
+
+    // Apply :in clause input bindings as WHERE constraints
+    for (var_name, value) in input_bindings {
+        if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
+            let constraint = match *col {
+                "v" => bind_input_value(alias, value, builder),
+                "e" => bind_input_entity(alias, value, builder),
+                "a" => {
+                    // Attribute column: bind as bigint
+                    if let Some(i) = value.as_i64() {
+                        let param = builder.bind_bigint(i);
+                        Some(format!("{alias}.a = {param}"))
+                    } else {
+                        None
+                    }
+                }
+                "tx" => {
+                    // Transaction column: bind as bigint
+                    if let Some(i) = value.as_i64() {
+                        let param = builder.bind_bigint(i);
+                        Some(format!("{alias}.tx = {param}"))
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(c) = constraint {
+                where_clauses.push(c);
+            }
+        }
     }
 
     // Handle NOT clauses as NOT EXISTS subqueries
