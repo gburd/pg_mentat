@@ -170,3 +170,8 @@ fixtures/**/*.db
 
 # Benchmark results (generated data)
 benchmarks/results/*/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
