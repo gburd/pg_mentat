@@ -133,7 +133,8 @@ SELECT mentat_transact('[
   [:db/retract 100 :person/age 31]
 ]');
 
--- Retract all facts about an entity (coming soon - use manual retractions for now)
+-- Retract all facts about an entity
+SELECT mentat_transact('[[:db/retractEntity 100]]');
 ```
 
 ---
@@ -248,7 +249,7 @@ SELECT mentat_query('
  [?e :person/name _]]
 ', '{}');
 
--- Coming soon: sum, avg, min, max, median
+-- Also supported: sum, avg, min, max
 ```
 
 ### Ordering and Limiting
@@ -854,7 +855,7 @@ pg_mentat is designed to be compatible with Datomic/Mentat query syntax with the
 1. **SQL-first**: Use PostgreSQL SQL functions, not embedded API
 2. **Transaction format**: Same EDN format
 3. **Query format**: Same Datalog syntax
-4. **Pull patterns**: Basic support (no nesting yet)
+4. **Pull patterns**: Full support (recursive pulls, reverse lookups, limits, defaults, wildcards)
 5. **Rules**: Fully supported with recursion
 
 ---

@@ -231,6 +231,10 @@ fn parse_input_bindings(
 ///
 /// Encodes the JSON value as BYTEA with the appropriate type tag and adds
 /// the constraint to match `alias.v` and `alias.value_type_tag`.
+///
+/// Also supports lookup ref arrays (e.g., `[":person/email", "alice@example.com"]`)
+/// for ref-type attribute values. The lookup ref is resolved to an entity ID
+/// and encoded as a ref value (i64 little-endian bytes with type tag 0).
 fn bind_input_value(
     alias: &str,
     value: &serde_json::Value,
@@ -282,13 +286,26 @@ fn bind_input_value(
                 tag = type_tag::BOOLEAN
             ))
         }
+        serde_json::Value::Array(arr) => {
+            // Lookup ref in value position: [":person/email", "alice@example.com"]
+            // Resolve to entity ID and bind as ref value (i64 LE bytes, tag=0).
+            let eid = resolve_lookup_ref_to_eid(arr)?;
+            let bytes = eid.to_le_bytes().to_vec();
+            let param = builder.bind_bytea(bytes);
+            Some(format!(
+                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                tag = type_tag::REF
+            ))
+        }
         _ => None,
     }
 }
 
 /// Bind an :in clause variable to a WHERE constraint on an entity column.
 ///
-/// For entity-position variables, the bound value must be an integer entity ID.
+/// For entity-position variables, the bound value must be an integer entity ID
+/// or a lookup ref array like `[":person/email", "alice@example.com"]`.
+/// Lookup refs are resolved eagerly against mentat.datoms.
 fn bind_input_entity(
     alias: &str,
     value: &serde_json::Value,
@@ -297,8 +314,81 @@ fn bind_input_entity(
     if let Some(i) = value.as_i64() {
         let param = builder.bind_bigint(i);
         Some(format!("{alias}.e = {param}"))
+    } else if let Some(arr) = value.as_array() {
+        // Lookup ref: [":person/email", "alice@example.com"]
+        let eid = resolve_lookup_ref_to_eid(arr)?;
+        let param = builder.bind_bigint(eid);
+        Some(format!("{alias}.e = {param}"))
     } else {
         None
+    }
+}
+
+/// Resolve a lookup ref JSON array to an entity ID.
+///
+/// The array must have exactly 2 elements: a keyword string (attribute ident
+/// starting with ':') and a value. The attribute must have a unique constraint.
+///
+/// Returns the resolved entity ID, or None if the lookup ref is malformed
+/// or cannot be resolved.
+fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value]) -> Option<i64> {
+    if arr.len() != 2 {
+        return None;
+    }
+
+    // First element must be a keyword string (e.g., ":person/email")
+    let attr_str = arr[0].as_str()?;
+    if !attr_str.starts_with(':') {
+        return None;
+    }
+
+    // Resolve the attribute ident to an entid via cache
+    let attr_entid = crate::cache::get_cache().resolve_ident(attr_str)?;
+
+    // Encode the lookup value
+    let (v_bytes, v_type_tag) = encode_json_value_for_lookup(&arr[1])?;
+
+    // Query for the entity with this unique attribute value
+    Spi::get_one_with_args::<i64>(
+        "SELECT e FROM mentat.datoms \
+         WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
+         LIMIT 1",
+        &[
+            DatumWithOid::from(attr_entid),
+            DatumWithOid::from(v_bytes),
+            DatumWithOid::from(v_type_tag),
+        ],
+    )
+    .ok()
+    .flatten()
+}
+
+/// Encode a JSON value into (bytes, type_tag) for lookup ref resolution.
+///
+/// Supports the same value types as bind_input_value: strings, integers,
+/// doubles, booleans, and keywords (strings starting with ':').
+fn encode_json_value_for_lookup(value: &serde_json::Value) -> Option<(Vec<u8>, i16)> {
+    match value {
+        serde_json::Value::String(s) => {
+            if let Some(stripped) = s.strip_prefix(':') {
+                Some((stripped.as_bytes().to_vec(), type_tag::KEYWORD))
+            } else {
+                Some((s.as_bytes().to_vec(), type_tag::STRING))
+            }
+        }
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some((i.to_le_bytes().to_vec(), type_tag::LONG))
+            } else if let Some(f) = n.as_f64() {
+                Some((f.to_le_bytes().to_vec(), type_tag::DOUBLE))
+            } else {
+                None
+            }
+        }
+        serde_json::Value::Bool(b) => {
+            Some((vec![if *b { 1u8 } else { 0u8 }], type_tag::BOOLEAN))
+        }
+        _ => None,
     }
 }
 
@@ -1167,7 +1257,7 @@ fn append_order_by(
 fn append_limit(sql: String, limit: &Limit, find_spec: &FindSpec) -> String {
     match limit {
         Limit::Fixed(n) => format!("{} LIMIT {}", sql, n),
-        Limit::None => {
+        Limit::Unlimited => {
             if find_spec.is_unit_limited() {
                 format!("{} LIMIT 1", sql)
             } else {
@@ -1948,7 +2038,12 @@ fn pred_arg_to_sql(
         }
         FnArg::EntidOrInteger(i) => Ok(format!("'{}'", i)),
         FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("'{}'", f.into_inner())),
-        FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(format!("'{}'", s.as_ref())),
+        FnArg::Constant(NonIntegerConstant::Text(s)) => {
+            // SECURITY: Escape single quotes to prevent SQL injection
+            // PostgreSQL escapes ' as ''
+            let escaped = s.as_ref().replace('\'', "''");
+            Ok(format!("'{}'", escaped))
+        }
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(format!("'{}'", b)),
         _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type. \
                   Supported types: variables (?x), integers, floats, strings, and booleans.".into()),

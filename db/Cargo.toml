@@ -21,6 +21,7 @@ petgraph = "0.8.3"
 serde = { version = "1.0.228", optional = true }
 serde_json = { version = "1.0.149", optional = true }
 serde_derive = { version = "1.0.228", optional = true }
+tabwriter = "1.4.1"
 
 [dependencies.rusqlite]
 version = "0.38.0"
@@ -41,10 +42,5 @@ path = "../db-traits"
 [dependencies.mentat_sql]
 path = "../sql"
 
-# TODO: This should be in dev-dependencies.
-[dependencies.tabwriter]
-version = "1.4.1"
-
 [dev-dependencies]
 env_logger = "0.11.9"
-#tabwriter = { version = "1.2.1" }

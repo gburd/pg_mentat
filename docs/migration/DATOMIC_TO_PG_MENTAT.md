@@ -39,7 +39,7 @@ pg_mentat is designed as a drop-in replacement for many Datomic use cases. It br
 | BigInt, BigDec | ✅ | ✅ | ❌ (use long/double) |
 | **Serialization** |
 | EDN | ✅ | ✅ | ✅ |
-| Transit | ✅ | ✅ | 🚧 In progress |
+| Transit | ✅ | ✅ | ✅ Complete (JSON & MessagePack) |
 | **Architecture** |
 | Peer library | ✅ | ✅ | ❌ (client-server only) |
 | Client API | ❌ | ✅ | ✅ (via mentatd) |

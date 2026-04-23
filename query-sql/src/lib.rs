@@ -669,7 +669,7 @@ impl QueryFragment for SelectQuery {
         }
 
         match self.limit {
-            Limit::None => (),
+            Limit::Unlimited => (),
             Limit::Fixed(limit) => {
                 // Guaranteed to be non-negative: u64.
                 out.push_sql(" LIMIT ");
@@ -683,7 +683,7 @@ impl QueryFragment for SelectQuery {
         }
 
         match self.offset {
-            Offset::None => (),
+            Offset::Unlimited => (),
             Offset::Fixed(offset) => {
                 // Guaranteed to be non-negative: u64.
                 out.push_sql(" OFFSET ");
@@ -930,8 +930,8 @@ mod tests {
             ],
             group_by: vec![],
             order: vec![],
-            limit: Limit::None,
-            offset: Offset::None,
+            limit: Limit::Unlimited,
+            offset: Offset::Unlimited,
             ctes: vec![],
         };
 

@@ -1,289 +1,240 @@
-# Project Mentat -> pg_mentat
+# pg_mentat
 
-## PostgreSQL Migration In Progress (~90% Complete)
+A Datomic-compatible Datalog query engine as a PostgreSQL extension.
 
-**Branch:** `claude`
-**Last updated:** 2026-03-07
+pg_mentat brings the power of [Datomic](https://docs.datomic.com/)'s immutable, time-aware, Datalog-based data model to PostgreSQL. Store data as Entity-Attribute-Value-Transaction (EAVT) tuples and query it with Datalog -- all through standard SQL function calls.
 
-This repository is migrating Mentat from SQLite to PostgreSQL. The original
-SQLite implementation remains on the `master` branch.
+Based on Mozilla's [Mentat](https://github.com/mozilla/mentat) project, pg_mentat reimplements the core as a [pgrx](https://github.com/pgcentralfoundation/pgrx) PostgreSQL extension with a companion HTTP daemon (`mentatd`) for remote access.
 
-### What's New
+## Features
 
-**pg_mentat** -- PostgreSQL extension (via pgrx) that brings Mentat's Datalog
-query capabilities to PostgreSQL. Stores datoms in a proper relational schema
-with four covering indexes (EAVT, AEVT, AVET, VAET), full-text search via
-tsvector, and time-travel queries.
-
-**mentatd** -- Standalone HTTP server that speaks the Datomic wire protocol,
-translating client requests to PostgreSQL queries through the pg_mentat
-extension.
-
-**Architecture:**
-
-```
-Datomic Client -> mentatd (HTTP/EDN) -> PostgreSQL (pg_mentat extension) -> Datoms
-```
-
-### Migration Status
-
-✅ **Complete:**
-- Extension schema: tables, indexes, constraints, bootstrap data
-- EDN custom type: text I/O, operators, type predicates
-- Extension functions: mentat_transact, mentat_query, mentat_pull, mentat_entity, mentat_schema
-- mentatd server: HTTP endpoints, connection pooling, EDN protocol
-- Test migration: 38 pgrx tests migrated to src/lib.rs
-- Nix flake: reproducible development environment
-- Compilation: Clean build with 0 errors
-
-⏳ **In Progress:**
-- Test execution: Blocked by local environment, GitHub Actions workflow ready
-
-⏸️ **Pending:**
-- Test validation: Awaiting clean environment execution
-- Bug fixes: Based on test results
-- Missing types: ref, double, instant, uuid, bytes (5 of 9 EDN types)
-
-See [IMPLEMENTATION_SUMMARY.md](IMPLEMENTATION_SUMMARY.md) and [PHASE_STATUS.md](PHASE_STATUS.md) for detailed status.
-
----
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Schema definition (value types, cardinality, uniqueness) | Complete | All Datomic schema attributes supported |
+| Transactions (assert, retract, retractEntity) | Complete | EDN transaction format |
+| Lookup refs in transactions and queries | Complete | `[:person/email "alice@example.com"]` |
+| Datalog queries with `:find`, `:where`, `:in` | Complete | Relations, tuples, collections, scalars |
+| Rules engine (recursive) | Complete | Transitive closure, graph traversal |
+| Aggregates | Complete | `count`, `sum`, `avg`, `min`, `max` |
+| Predicates and functions | Complete | `>`, `<`, `>=`, `<=`, `=`, `!=`, `ground`, `get-else` |
+| OR / NOT clauses | Complete | Composable query constraints |
+| Full-text search with scoring | Complete | PostgreSQL `tsvector` + BM25 ranking |
+| Pull API | Complete | Recursive pulls, reverse lookups, limits, defaults, wildcards |
+| Time travel (as-of, since, history) | Complete | Immutable audit trail |
+| Cardinality many | Complete | Multi-valued attributes with set semantics |
+| Entity and schema introspection | Complete | `mentat_entity()`, `mentat_schema()` |
+| mentatd HTTP daemon | Complete | EDN + Transit wire formats, connection pooling, caching |
+| Value types | Complete | string, long, double, boolean, instant, keyword, ref, uuid, bytes |
 
 ## Quick Start
 
-### With Nix (Recommended)
-
-The project provides a Nix flake with all dependencies pre-configured.
+### Docker (fastest)
 
 ```bash
-# Enter development shell
-nix develop
-
-# Install and initialize cargo-pgrx
-setup-pgrx
-
-# Run all 38 tests
-test-pg16
-
-# Build the extension
-build-extension
-
-# Install to local PostgreSQL
-install-extension
+docker build -t pg_mentat .
+docker run -d --name pg_mentat -p 5432:5432 pg_mentat
+psql -h localhost -U postgres
 ```
 
-See [NIX_SETUP.md](NIX_SETUP.md) for full details.
-
-### Without Nix
+### With Nix
 
 ```bash
-# Install system dependencies (Fedora)
-sudo dnf install -y postgresql-server-devel postgresql-private-devel \
-    clang-devel llvm-devel openssl-devel
+nix develop
+cd pg_mentat
+cargo pgrx run pg16
+```
 
-# Install Rust toolchain
-rustup toolchain install 1.90.0
-rustup default 1.90.0
+### From source
 
-# Install cargo-pgrx
+Requires Rust 1.88+, PostgreSQL 13-18, and [cargo-pgrx](https://github.com/pgcentralfoundation/pgrx):
+
+```bash
 cargo install --locked cargo-pgrx --version '~0.17'
 cargo pgrx init --pg16=$(which pg_config)
-
-# Build and test
 cd pg_mentat
-cargo pgrx test pg16
+cargo pgrx install --release
 ```
 
-### Using the Extension
+Then in PostgreSQL:
 
 ```sql
 CREATE EXTENSION pg_mentat;
+```
 
--- Initialize schema
-SELECT mentat.initialize_schema();
+## Usage
 
--- Define attributes
-SELECT mentat.mentat_transact('[
+### Define a schema
+
+```sql
+SELECT mentat_transact('[
   {:db/ident :person/name
    :db/valueType :db.type/string
    :db/cardinality :db.cardinality/one}
+  {:db/ident :person/email
+   :db/valueType :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/unique :db.unique/identity}
+  {:db/ident :person/friends
+   :db/valueType :db.type/ref
+   :db/cardinality :db.cardinality/many}
 ]');
-
--- Query
-SELECT mentat.mentat_query(
-  '[:find ?e ?name :where [?e :person/name ?name]]',
-  '{}'::jsonb
-);
-
--- Schema introspection
-SELECT mentat.mentat_schema();
 ```
 
----
+### Transact data
 
-## About Project Mentat
+```sql
+SELECT mentat_transact('[
+  {:db/id "alice"
+   :person/name "Alice"
+   :person/email "alice@example.com"}
+  {:db/id "bob"
+   :person/name "Bob"
+   :person/email "bob@example.com"
+   :person/friends "alice"}
+]');
+```
 
-Project Mentat is a persistent, embedded knowledge base. It draws heavily on
-[DataScript](https://github.com/tonsky/datascript) and
-[Datomic](http://datomic.com).
+### Query with Datalog
 
-This project was started by Mozilla, but
-[is no longer being developed or actively maintained by them](https://mail.mozilla.org/pipermail/firefox-dev/2018-September/006780.html).
-[Their repository](https://github.com/mozilla/mentat) was marked read-only.
-[This fork](https://github.com/qpdb/mentat) is an attempt to revive and
-continue that work. We owe the team at Mozilla our thanks for the inspiration
-and the code.
+```sql
+SELECT mentat_query('
+  [:find ?name ?email
+   :where
+   [?e :person/name ?name]
+   [?e :person/email ?email]]
+', '{}');
+```
 
-[Original SQLite Documentation](https://docs.rs/mentat)
+### Pull entities
 
----
+```sql
+-- Pull specific attributes
+SELECT mentat_pull('[:person/name :person/email]', 42);
 
-## Repository Structure
+-- Pull with nested refs
+SELECT mentat_pull('[* {:person/friends [:person/name]}]', 42);
 
-### New PostgreSQL Crates
+-- Reverse lookups: who lists this entity as a friend?
+SELECT mentat_pull('[:person/name :person/_friends]', 42);
 
-#### `pg_mentat/`
+-- With limits and defaults
+SELECT mentat_pull('[(:person/friends :limit 5) (:person/bio :default "N/A")]', 42);
+```
 
-PostgreSQL extension built with pgrx. Implements the storage layer and query
-execution as PostgreSQL extension functions:
+### Time travel
 
-- Custom `EdnValue` PostgreSQL type with text I/O
-- Extension functions: `mentat_transact()`, `mentat_query()`, `mentat_pull()`,
-  `mentat_entity()`, `mentat_schema()`
-- Schema with EAVT/AEVT/AVET/VAET indexes
-- Full-text search via tsvector/GIN indexes
-- 38 inline pgrx tests
+```sql
+-- See the database as of transaction 100
+SELECT mentat_query('
+  [:find ?name :where [?e :person/name ?name]]
+', '{"asOf": 100}');
 
-#### `mentatd/`
+-- Full history with assertion/retraction flags
+SELECT mentat_query('
+  [:find ?e ?name ?tx ?added
+   :where [?e :person/name ?name ?tx ?added]]
+', '{"history": true}');
+```
 
-HTTP server that speaks the Datomic wire protocol. Translates Datomic client
-requests to PostgreSQL queries via pg_mentat. Uses axum for HTTP and
-deadpool-postgres for connection pooling.
+### Rules
 
-### Original Mentat Crates
+```sql
+-- Recursive graph traversal
+SELECT mentat_query('
+  [:find ?boss-name
+   :in $ ?employee-name
+   :where
+   [?e :person/name ?employee-name]
+   (reports-to ?e ?boss)
+   [?boss :person/name ?boss-name]]
+  :rules [
+   [(reports-to ?e ?boss) [?e :employee/manager ?boss]]
+   [(reports-to ?e ?boss)
+    [?e :employee/manager ?mid]
+    (reports-to ?mid ?boss)]]
+', '{"employee-name": "Dave"}');
+```
 
-| Crate | Purpose |
-|-------|---------|
-| `edn` | EDN parser using rust-peg |
-| `core` / `core-traits` | Fundamental data structures (ValueType, TypedValue) |
-| `db` / `db-traits` | Core storage logic (originally SQLite) |
-| `query-algebrizer` | Translates parsed Datalog to algebraic query representation |
-| `query-projector` | Projects query variables into output data structures |
-| `query-sql` | Abstract SQL representation |
-| `sql` / `sql-traits` | SQL text generation |
-| `transaction` | Transaction processing |
-| `tolstoy` | Sync protocol (work in progress) |
-| `tools/cli` | Command-line interface |
+See [EXAMPLES.md](EXAMPLES.md) for comprehensive usage examples including e-commerce catalogs, social networks, and project management patterns.
 
----
+## Architecture
 
-## Testing
+pg_mentat consists of two components:
 
-### pg_mentat Extension
+```
+Datomic Client --> mentatd (HTTP/EDN) --> PostgreSQL (pg_mentat extension) --> Datoms
+```
 
-38 pgrx tests defined inline in `pg_mentat/src/lib.rs`:
+**pg_mentat** (PostgreSQL extension) -- Implements the core Datalog engine as SQL functions (`mentat_transact`, `mentat_query`, `mentat_pull`, `mentat_entity`, `mentat_schema`). Data is stored in PostgreSQL tables (`mentat.datoms`, `mentat.schema`, `mentat.transactions`) with four covering indexes (EAVT, AEVT, AVET, VAET), full-text search via tsvector/GIN, and serializable isolation for consistency. Built with [pgrx](https://github.com/pgcentralfoundation/pgrx).
 
-| Category | Count | Description |
-|----------|-------|-------------|
-| EDN Types | 5 | Boolean, integer, string, vector, map roundtrips |
-| Queries | 11 | Rel, scalar, tuple, coll, inputs, multi-clause, not, or, order, limit |
-| Time-Travel | 7 | As-of, since, history, retraction, temporal queries |
-| Rules | 8 | Simple, recursive, multi-clause, predicates, negation, aggregation |
-| Full-Text | 7 | Basic FTS, multi-term, scoring, special chars, phrase search |
+**mentatd** (HTTP daemon) -- Provides a Datomic-compatible HTTP API for remote clients. Connects to PostgreSQL via `tokio-postgres`, supports EDN and Transit wire formats, connection pooling via `deadpool`, LRU query caching, and Prometheus metrics. Built with [Axum](https://github.com/tokio-rs/axum).
+
+### Data model
+
+All data is stored as immutable EAVT (Entity-Attribute-Value-Transaction) datoms:
+
+- **Entity** (E): 64-bit integer identifier
+- **Attribute** (A): Schema-defined keyword (`:person/name`, `:order/total`)
+- **Value** (V): Typed value (string, long, ref, boolean, double, instant, keyword, uuid, bytes)
+- **Transaction** (Tx): Transaction ID when the datom was asserted
+- **Added**: Boolean flag (true = assertion, false = retraction)
+
+Retractions never delete data -- they record that a fact is no longer current. This provides a complete audit trail and enables time-travel queries.
+
+## SQL Function Reference
+
+| Function | Description |
+|----------|-------------|
+| `mentat_transact(edn TEXT)` | Process EDN transactions (assert, retract, retractEntity) |
+| `mentat_query(query TEXT, inputs JSONB)` | Execute Datalog queries |
+| `mentat_pull(pattern TEXT, entity_id BIGINT)` | Pull entity attributes by pattern |
+| `mentat_entity(entity_id BIGINT)` | Get all attributes of an entity as JSON |
+| `mentat_schema()` | Return current schema as JSON |
+
+## PostgreSQL Compatibility
+
+pg_mentat supports PostgreSQL 13 through 18 via pgrx feature flags:
 
 ```bash
-# Run all tests (requires Nix or manual pgrx setup)
+cargo pgrx install --release --features pg16  # default
+cargo pgrx install --release --features pg17
+```
+
+## Development
+
+### Running tests
+
+```bash
 cd pg_mentat
 cargo pgrx test pg16
 ```
 
-### mentatd Server
+### Project structure
 
-- 12 unit tests (protocol-level, pass without PostgreSQL)
-- 21 integration tests (require running PostgreSQL)
-
-```bash
-cd mentatd
-cargo test          # unit tests
-cargo test --all    # all tests (needs PostgreSQL)
+```
+pg_mentat/              PostgreSQL extension (pgrx)
+mentatd/                HTTP daemon (Axum)
+edn/                    EDN parser (rust-peg)
+core/ + core-traits/    Fundamental types (ValueType, TypedValue)
+db/ + db-traits/        Core storage logic
+query-algebrizer/       Datalog to algebraic query compilation
+query-projector/        Query result projection
+query-pull/             Pull API implementation
+query-sql/              SQL generation
+sql/ + sql-traits/      SQL text generation and abstraction
+transaction/            Transaction processing
+tools/cli/              Command-line interface
+tools/pg_mentat_cli/    PostgreSQL-specific CLI
 ```
 
-### Original Mentat
+## History
 
-415 core tests for the SQLite implementation:
-
-```bash
-cargo test --all
-```
-
----
-
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [CURRENT_STATUS.md](CURRENT_STATUS.md) | Detailed status with component breakdown |
-| [NIX_SETUP.md](NIX_SETUP.md) | Nix development environment guide |
-| [QUICK_START.md](QUICK_START.md) | Getting started for new developers |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
-| [TEST_MIGRATION_COMPLETE.md](TEST_MIGRATION_COMPLETE.md) | Test restructuring details |
-| [HONEST_STATUS.md](HONEST_STATUS.md) | Validator audit findings |
-| [pg_mentat/README.md](pg_mentat/README.md) | Extension-specific docs |
-
----
-
-## Motivation
-
-Mentat is a flexible relational (not key-value, not document-oriented) store
-that makes it easy to describe, grow, and reuse your domain schema.
-
-By abstracting away the storage schema and by exposing change listeners outside
-the database (not via triggers), we hope to make domain schemas stable, and
-allow both the data store itself and embedding applications to use better
-architectures, meeting performance goals in a way that allows future evolution.
-
-For more on the design philosophy, see the comparisons to
-[DataScript](https://github.com/tonsky/datascript),
-[Datomic](http://datomic.com), and
-[SQLite](https://www.sqlite.org/) in the original project documentation.
-
----
-
-## Database Dependencies
-
-### PostgreSQL (Claude Branch)
-
-pg_mentat requires PostgreSQL 14 or higher. It uses:
-
-- BTREE and GIN indexes
-- tsvector/tsquery for full-text search
-- SERIALIZABLE isolation level for consistency
-- Standard types (BIGINT, TEXT, BYTEA, TIMESTAMPTZ, BOOLEAN)
-- Custom EdnValue type via pgrx
-
-Development requires:
-
-- cargo-pgrx 0.17+
-- PostgreSQL development headers
-- LLVM/Clang for bindgen
-- Linux (recommended; macOS ARM64 has known pgrx linking issues)
-
-### SQLite (Master Branch)
-
-The original implementation uses SQLite 3.8.0+ with partial indices and FTS4.
-
----
+pg_mentat is derived from [Mozilla Mentat](https://github.com/mozilla/mentat), an embedded Datalog database originally backed by SQLite. This project was started by Mozilla but is [no longer maintained by them](https://mail.mozilla.org/pipermail/firefox-dev/2018-September/006780.html). This fork replaces the storage layer with PostgreSQL, adds a Datomic-compatible HTTP daemon, and reimplements the query engine as a PostgreSQL extension for production use.
 
 ## Contributing
 
-Please note that this project is released with a Contributor Code of Conduct.
-By participating in this project you agree to abide by its terms.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on environment setup,
-coding standards, testing requirements, and pull request process.
-
----
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on environment setup, coding standards, testing requirements, and pull request process.
 
 ## License
 
-Project Mentat is licensed under the Apache License v2.0. See the `LICENSE`
-file for details.
+Apache-2.0. See [LICENSE](LICENSE) for details.

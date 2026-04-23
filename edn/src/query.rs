@@ -586,14 +586,14 @@ impl std::fmt::Display for Element {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Limit {
-    None,
+    Unlimited,
     Fixed(u64),
     Variable(Variable),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Offset {
-    None,
+    Unlimited,
     Fixed(u64),
     Variable(Variable),
 }
@@ -1097,8 +1097,8 @@ impl ParsedQuery {
             with: with.unwrap_or_default(),
             in_vars: in_vars.unwrap_or_default(),
             in_sources: BTreeSet::default(),
-            limit: limit.unwrap_or(Limit::None),
-            offset: offset.unwrap_or(Offset::None),
+            limit: limit.unwrap_or(Limit::Unlimited),
+            offset: offset.unwrap_or(Offset::Unlimited),
             where_clauses: where_clauses.ok_or("expected :where")?,
             order,
             distinct,

@@ -296,7 +296,7 @@ fn simplify_limit_and_offset(mut query: AlgebraicQuery) -> Result<AlgebraicQuery
                 }
             }
         }
-        Limit::None => None,
+        Limit::Unlimited => None,
         Limit::Fixed(_) => None,
     };
 
@@ -331,7 +331,7 @@ fn simplify_limit_and_offset(mut query: AlgebraicQuery) -> Result<AlgebraicQuery
                 }
             }
         }
-        Offset::None => None,
+        Offset::Unlimited => None,
         Offset::Fixed(_) => None,
     };
 
@@ -416,8 +416,8 @@ impl FindQuery {
             with: BTreeSet::default(),
             in_vars: BTreeSet::default(),
             in_sources: BTreeSet::default(),
-            limit: Limit::None,
-            offset: Offset::None,
+            limit: Limit::Unlimited,
+            offset: Offset::Unlimited,
             where_clauses,
             order: None,
             distinct: false,

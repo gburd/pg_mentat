@@ -167,3 +167,6 @@ build/version.rs
 # Database fixtures (binary)
 fixtures/*.db
 fixtures/**/*.db
+
+# Benchmark results (generated data)
+benchmarks/results/*/

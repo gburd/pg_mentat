@@ -222,6 +222,7 @@ pub mod pg_test {
 #[pg_schema]
 mod tests {
     use pgrx::prelude::*;
+    use pgrx::datum::DatumWithOid;
 
     // ============================================================================
     // Test Helper Functions
@@ -1703,6 +1704,44 @@ mod tests {
         );
     }
 
+    /// Test that string predicates with quotes are properly escaped (SQL injection prevention).
+    #[pg_test]
+    fn test_pg_predicate_string_with_quotes() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"O''Brien\"]
+                 [:db/add \"p2\" :person/name \"Alice\"]
+                 [:db/add \"p3\" :person/name \"Bob\"]]
+            '::TEXT)",
+        )
+        .expect("Failed to insert test data");
+
+        // Test that string predicate with quotes works correctly
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query('
+                [:find ?name
+                 :where
+                 [?p :person/name ?name]
+                 [(= ?name \"O''Brien\")]]'::TEXT, '{}'::jsonb)::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(results.len(), 1, "Should find O'Brien");
+        assert_eq!(
+            results[0].as_array().unwrap()[0].as_str().unwrap(),
+            "O'Brien",
+            "Name with quote should match correctly"
+        );
+    }
+
     #[pg_test]
     fn test_pg_rule_bind() {
         setup_test_db().expect("Failed to setup test db");
@@ -2037,7 +2076,7 @@ mod tests {
              :db/cardinality :db.cardinality/one}
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(schema_tx)],
         )
@@ -2052,7 +2091,7 @@ mod tests {
         ]"#;
 
         let tx_result =
-            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
                 .expect("Data transaction failed")
                 .expect("Transaction returned NULL");
 
@@ -2092,7 +2131,7 @@ mod tests {
         // Retract the entire entity
         let retract_tx = format!(r#"[[:db/retractEntity {}]]"#, alice_eid);
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(retract_tx.as_str())],
         )
@@ -2169,7 +2208,7 @@ mod tests {
              :db/cardinality :db.cardinality/one}
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(schema_tx)],
         )
@@ -2185,7 +2224,7 @@ mod tests {
         ]"#;
 
         let tx_result =
-            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
                 .expect("Data transaction failed")
                 .expect("Transaction returned NULL");
 
@@ -2244,16 +2283,20 @@ mod tests {
         );
 
         // Verify the ref attribute is correctly decoded (this is the critical test!)
-        let friend_ref = pull_json[":person/friend"]
+        // With map spec [* {:person/friend [*]}], the ref is followed and sub-pulled
+        let friend_obj = pull_json[":person/friend"]
+            .as_object()
+            .expect(":person/friend should be decoded as object via map spec");
+        let friend_ref = friend_obj[":db/id"]
             .as_i64()
-            .expect(":person/friend should be decoded as integer entity ID");
+            .expect(":person/friend :db/id should be an integer entity ID");
         assert_eq!(
             friend_ref, alice_eid,
             "Pull should decode ref type correctly with type tag 0 (not tag 5)"
         );
 
         // Test 3: Verify ref is stored with correct type tag in database
-        let type_tag_result = Spi::get_one::<i16>(
+        let type_tag_result = Spi::get_one_with_args::<i16>(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = $1 AND a = (SELECT entid FROM mentat.schema WHERE ident = ':person/friend')
              AND added = true",
@@ -2265,6 +2308,70 @@ mod tests {
         assert_eq!(
             type_tag_result, 0,
             "Ref values should be stored with type tag 0 in database"
+        );
+    }
+
+    #[pg_test]
+    fn test_ref_round_trip_entity() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with ref attribute
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(
+                r#"[
+                {:db/ident :item/name
+                 :db/valueType :db.type/string
+                 :db/cardinality :db.cardinality/one}
+                {:db/ident :item/link
+                 :db/valueType :db.type/ref
+                 :db/cardinality :db.cardinality/one}
+            ]"#,
+            )],
+        )
+        .expect("Schema transaction failed");
+
+        // Transact entities with a ref between them
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(
+                r#"[
+                {:db/id "target" :item/name "Target"}
+                {:db/id "source" :item/name "Source" :item/link "target"}
+            ]"#,
+            )],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let tempids = tx_json["tempids"].as_object().expect("Missing tempids");
+        let target_eid = tempids["target"].as_i64().expect("Missing target tempid");
+        let source_eid = tempids["source"].as_i64().expect("Missing source tempid");
+
+        // Test: mentat_entity should correctly decode ref (type_tag=0) as an integer
+        let entity_result = Spi::get_one::<String>(
+            &format!("SELECT mentat_entity({})", source_eid),
+        )
+        .expect("Entity query failed")
+        .expect("Entity returned NULL");
+
+        let entity_json: serde_json::Value =
+            serde_json::from_str(&entity_result).expect("Failed to parse entity result");
+
+        assert_eq!(
+            entity_json[":item/name"].as_str(),
+            Some("Source"),
+            "Entity should return the name"
+        );
+        let link_ref = entity_json[":item/link"]
+            .as_i64()
+            .expect(":item/link should be decoded as integer entity ID (type_tag=0)");
+        assert_eq!(
+            link_ref, target_eid,
+            "Entity should decode ref correctly with type tag 0"
         );
     }
 
@@ -2291,7 +2398,7 @@ mod tests {
              :db/cardinality :db.cardinality/one}
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(schema_tx)],
         )
@@ -2306,7 +2413,7 @@ mod tests {
         ]"#;
 
         let tx_result =
-            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
                 .expect("Data transaction failed")
                 .expect("Transaction returned NULL");
 
@@ -2321,7 +2428,7 @@ mod tests {
             [:db/add [:person/email "alice@example.com"] :person/age 30]
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(update_tx)],
         )
@@ -2362,7 +2469,7 @@ mod tests {
              :db/unique :db.unique/identity}
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(schema_tx)],
         )
@@ -2373,7 +2480,7 @@ mod tests {
             [:db/add [:person/email "nobody@example.com"] :person/email "new@example.com"]
         ]"#;
 
-        let result = Spi::run_with_args::<String>(
+        let result = Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(bad_tx)],
         );
@@ -2396,7 +2503,7 @@ mod tests {
              :db/cardinality :db.cardinality/one}
         ]"#;
 
-        Spi::run_with_args::<String>(
+        Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(schema_tx)],
         )
@@ -2411,7 +2518,7 @@ mod tests {
             [:db/add [:person/name "Alice"] :person/name "Bob"]
         ]"#;
 
-        let result = Spi::run_with_args::<String>(
+        let result = Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(bad_tx)],
         );
@@ -2419,6 +2526,138 @@ mod tests {
         assert!(
             result.is_err(),
             "Lookup ref with non-unique attribute should fail"
+        );
+    }
+
+    // ============================================================================
+    // Lookup Ref in Query :in Bindings Tests
+    // ============================================================================
+
+    #[pg_test]
+    fn test_lookup_ref_in_query_entity_input() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with a unique email attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+            {:db/ident :person/age
+             :db/valueType :db.type/long
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create an entity
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"
+             :person/email "alice@example.com"
+             :person/age 30}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed");
+
+        // Use lookup ref as :in binding for entity position
+        // Query: find the name of the person with email "alice@example.com"
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :in ?person
+                  :where [?person :person/name ?name]]'::TEXT,
+                '{\"inputs\": [[ \":person/email\", \"alice@example.com\"]]}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query with lookup ref input failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse query result");
+        let name = json["result"].as_str().expect("Expected string result");
+
+        assert_eq!(
+            name, "Alice",
+            "Lookup ref in :in binding should resolve to the correct entity"
+        );
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_in_query_value_input() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with unique email and ref attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+            {:db/ident :person/friend
+             :db/valueType :db.type/ref
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create two entities: Alice and Bob, with Bob being Alice's friend
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"
+             :person/email "alice@example.com"}
+            {:db/id "bob"
+             :person/name "Bob"
+             :person/email "bob@example.com"
+             :person/friend "alice"}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed");
+
+        // Use lookup ref in value position: find who has Alice as a friend
+        // The :in variable ?alice binds to a value-position (ref type) via lookup ref
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :in ?alice
+                  :where [?e :person/friend ?alice]
+                         [?e :person/name ?name]]'::TEXT,
+                '{\"inputs\": [[ \":person/email\", \"alice@example.com\"]]}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query with lookup ref value input failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse query result");
+        let name = json["result"].as_str().expect("Expected string result");
+
+        assert_eq!(
+            name, "Bob",
+            "Lookup ref in value-position :in binding should find referencing entity"
         );
     }
 
@@ -3809,6 +4048,396 @@ mod tests {
             ":db/ident",
             "Both should return :db/ident"
         );
+    }
+
+    // ============================================================================
+    // EDN Type Round-Trip Tests (CRITICAL for v1.0)
+    // ============================================================================
+
+    #[pg_test]
+    fn test_double_type_round_trip() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with double attribute
+        let schema_tx = r#"[
+            {:db/ident :measurement/value
+             :db/valueType :db.type/double
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Test transact with double value
+        let data_tx = r#"[
+            {:db/id "m1"
+             :measurement/value 3.14159}
+            {:db/id "m2"
+             :measurement/value 2.71828}
+            {:db/id "m3"
+             :measurement/value 0.0}
+            {:db/id "m4"
+             :measurement/value -1.5}
+        ]"#;
+
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)::TEXT",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let m1_eid = tx_json["tempids"]["m1"]
+            .as_i64()
+            .expect("Missing m1 tempid");
+
+        // Test query filtering on double
+        let query_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e ?val
+                  :where [?e :measurement/value ?val]
+                         [(> ?val 3.0)]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected array");
+
+        assert_eq!(results.len(), 1, "Should find one value > 3.0");
+        let val = results[0][1].as_f64().expect("Value should be double");
+        assert!((val - 3.14159).abs() < 0.00001, "Double value should match");
+
+        // Test pull API returns correct format
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[:measurement/value]', {})::TEXT",
+            m1_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+        let pull_val = pull_json["measurement/value"]
+            .as_f64()
+            .expect("Pull should return double");
+        assert!((pull_val - 3.14159).abs() < 0.00001, "Pull double value should match");
+
+        // Test entity API returns correct format
+        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", m1_eid))
+            .expect("Entity failed")
+            .expect("Entity returned NULL");
+
+        let entity_json: serde_json::Value =
+            serde_json::from_str(&entity_result).expect("Failed to parse entity result");
+        let entity_val = entity_json["measurement/value"]
+            .as_f64()
+            .expect("Entity should return double");
+        assert!(
+            (entity_val - 3.14159).abs() < 0.00001,
+            "Entity double value should match"
+        );
+    }
+
+    #[pg_test]
+    fn test_instant_type_round_trip() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with instant attribute
+        let schema_tx = r#"[
+            {:db/ident :event/timestamp
+             :db/valueType :db.type/instant
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Test transact with instant value (RFC3339 format)
+        let data_tx = r#"[
+            {:db/id "e1"
+             :event/timestamp "2024-01-15T10:30:00Z"}
+            {:db/id "e2"
+             :event/timestamp "2024-01-15T14:45:00Z"}
+            {:db/id "e3"
+             :event/timestamp "1970-01-01T00:00:00Z"}
+        ]"#;
+
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)::TEXT",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let e1_eid = tx_json["tempids"]["e1"]
+            .as_i64()
+            .expect("Missing e1 tempid");
+
+        // Test query filtering on instant
+        let query_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e ?ts
+                  :where [?e :event/timestamp ?ts]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected array");
+
+        assert_eq!(results.len(), 3, "Should find all three timestamps");
+        let ts = results[0][1].as_str().expect("Timestamp should be string");
+        assert!(
+            ts.contains("2024-01-15") || ts.contains("1970-01-01"),
+            "Timestamp should be in ISO format"
+        );
+
+        // Test pull API returns correct format
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[:event/timestamp]', {})::TEXT",
+            e1_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+        let pull_ts = pull_json["event/timestamp"]
+            .as_str()
+            .expect("Pull should return instant as string");
+        assert!(
+            pull_ts.contains("2024-01-15T10:30:00"),
+            "Pull instant should match"
+        );
+
+        // Test entity API returns correct format
+        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", e1_eid))
+            .expect("Entity failed")
+            .expect("Entity returned NULL");
+
+        let entity_json: serde_json::Value =
+            serde_json::from_str(&entity_result).expect("Failed to parse entity result");
+        let entity_ts = entity_json["event/timestamp"]
+            .as_str()
+            .expect("Entity should return instant as string");
+        assert!(
+            entity_ts.contains("2024-01-15T10:30:00"),
+            "Entity instant should match"
+        );
+    }
+
+    #[pg_test]
+    fn test_uuid_type_round_trip() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with uuid attribute
+        let schema_tx = r#"[
+            {:db/ident :session/id
+             :db/valueType :db.type/uuid
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Test transact with uuid value
+        let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let data_tx = format!(
+            r#"[
+            {{:db/id "s1"
+             :session/id "{}"}}
+            {{:db/id "s2"
+             :session/id "123e4567-e89b-12d3-a456-426614174000"}}
+        ]"#,
+            test_uuid
+        );
+
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)::TEXT",
+            &[DatumWithOid::from(data_tx.as_str())],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let s1_eid = tx_json["tempids"]["s1"]
+            .as_i64()
+            .expect("Missing s1 tempid");
+
+        // Test query filtering on uuid
+        let query_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e ?id
+                  :where [?e :session/id ?id]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected array");
+
+        assert_eq!(results.len(), 2, "Should find both UUIDs");
+        let uuid_val = results[0][1].as_str().expect("UUID should be string");
+        assert!(
+            uuid_val == test_uuid || uuid_val == "123e4567-e89b-12d3-a456-426614174000",
+            "UUID should match one of the inserted values"
+        );
+
+        // Test pull API returns correct format
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[:session/id]', {})::TEXT",
+            s1_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+        let pull_uuid = pull_json["session/id"]
+            .as_str()
+            .expect("Pull should return UUID as string");
+        assert_eq!(pull_uuid, test_uuid, "Pull UUID should match");
+
+        // Test entity API returns correct format
+        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", s1_eid))
+            .expect("Entity failed")
+            .expect("Entity returned NULL");
+
+        let entity_json: serde_json::Value =
+            serde_json::from_str(&entity_result).expect("Failed to parse entity result");
+        let entity_uuid = entity_json["session/id"]
+            .as_str()
+            .expect("Entity should return UUID as string");
+        assert_eq!(entity_uuid, test_uuid, "Entity UUID should match");
+    }
+
+    #[pg_test]
+    fn test_bytes_type_round_trip() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with bytes attribute
+        let schema_tx = r#"[
+            {:db/ident :file/data
+             :db/valueType :db.type/bytes
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Test transact with bytes value (base64 encoded)
+        // "Hello, World!" in base64
+        let test_bytes_b64 = "SGVsbG8sIFdvcmxkIQ==";
+        let data_tx = format!(
+            r#"[
+            {{:db/id "f1"
+             :file/data "{}"}}
+            {{:db/id "f2"
+             :file/data "AQIDBA=="}}
+        ]"#,
+            test_bytes_b64
+        );
+
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)::TEXT",
+            &[DatumWithOid::from(data_tx.as_str())],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let f1_eid = tx_json["tempids"]["f1"]
+            .as_i64()
+            .expect("Missing f1 tempid");
+
+        // Test query returns bytes
+        let query_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e ?data
+                  :where [?e :file/data ?data]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected array");
+
+        assert_eq!(results.len(), 2, "Should find both byte arrays");
+        let bytes_val = results[0][1].as_str().expect("Bytes should be string (base64)");
+        assert!(
+            bytes_val == test_bytes_b64 || bytes_val == "AQIDBA==",
+            "Bytes should match one of the inserted values (base64 encoded)"
+        );
+
+        // Test pull API returns correct format
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[:file/data]', {})::TEXT",
+            f1_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+        let pull_bytes = pull_json["file/data"]
+            .as_str()
+            .expect("Pull should return bytes as base64 string");
+        assert_eq!(pull_bytes, test_bytes_b64, "Pull bytes should match");
+
+        // Test entity API returns correct format
+        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", f1_eid))
+            .expect("Entity failed")
+            .expect("Entity returned NULL");
+
+        let entity_json: serde_json::Value =
+            serde_json::from_str(&entity_result).expect("Failed to parse entity result");
+        let entity_bytes = entity_json["file/data"]
+            .as_str()
+            .expect("Entity should return bytes as base64 string");
+        assert_eq!(entity_bytes, test_bytes_b64, "Entity bytes should match");
     }
 
     // ============================================================================

@@ -386,8 +386,8 @@ fn value_to_edn(
             }
             Ok(if bytes[0] != 0 { "true" } else { "false" }.to_string())
         }
-        2 | 5 => {
-            // long or ref (both i64)
+        0 | 2 => {
+            // ref or long (both i64)
             if bytes.len() != 8 {
                 return Err(
                     format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
@@ -437,7 +437,7 @@ fn value_to_edn(
                 format!(":{}", s)
             })
         }
-        9 => {
+        10 => {
             // uuid
             if bytes.len() != 16 {
                 return Err(format!(":db.error/data-corruption Invalid UUID: expected 16 bytes, got {}", bytes.len()).into());
@@ -450,8 +450,8 @@ fn value_to_edn(
         }
         _ => Err(format!(
             ":db.error/unsupported-type Unsupported type tag: {}. \
-             Known tags: 1=boolean, 2=long/ref, 3=double, 4=instant, 7=string, \
-             8=keyword, 9=uuid, 11=bytes.",
+             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
+             8=keyword, 10=uuid, 11=bytes.",
             type_tag
         ).into()),
     }

@@ -8,11 +8,11 @@
 // CONDITIONS OF ANY KIND, either express or implied. See the License for the
 // specific language governing permissions and limitations under the License.
 
-use enum_set::EnumSet;
+use enumset::EnumSet;
 
 use crate::ValueType;
 
-pub trait EnumSetExtensions<T: ::enum_set::CLike + Clone> {
+pub trait EnumSetExtensions<T: ::enumset::EnumSetType + Clone> {
     /// Return a set containing both `x` and `y`.
     fn of_both(x: T, y: T) -> EnumSet<T>;
 
@@ -21,7 +21,7 @@ pub trait EnumSetExtensions<T: ::enum_set::CLike + Clone> {
     fn with(&self, y: T) -> EnumSet<T>;
 }
 
-impl<T: ::enum_set::CLike + Clone> EnumSetExtensions<T> for EnumSet<T> {
+impl<T: ::enumset::EnumSetType + Clone> EnumSetExtensions<T> for EnumSet<T> {
     /// Return a set containing both `x` and `y`.
     fn of_both(x: T, y: T) -> Self {
         let mut o = EnumSet::new();
@@ -119,16 +119,16 @@ impl ValueTypeSet {
     }
 
     pub fn is_subset(self, other: ValueTypeSet) -> bool {
-        self.0.is_subset(&other.0)
+        self.0.is_subset(other.0)
     }
 
     /// Returns true if `self` and `other` contain no items in common.
     pub fn is_disjoint(self, other: ValueTypeSet) -> bool {
-        self.0.is_disjoint(&other.0)
+        self.0.is_disjoint(other.0)
     }
 
     pub fn contains(self, vt: ValueType) -> bool {
-        self.0.contains(&vt)
+        self.0.contains(vt)
     }
 
     pub fn is_empty(self) -> bool {
@@ -139,7 +139,7 @@ impl ValueTypeSet {
         self.0.len() == 1
     }
 
-    pub fn iter(self) -> ::enum_set::Iter<ValueType> {
+    pub fn iter(self) -> ::enumset::EnumSetIter<ValueType> {
         self.0.iter()
     }
 }
@@ -158,7 +158,7 @@ impl ValueTypeSet {
 
 impl IntoIterator for ValueTypeSet {
     type Item = ValueType;
-    type IntoIter = ::enum_set::Iter<ValueType>;
+    type IntoIter = ::enumset::EnumSetIter<ValueType>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
@@ -188,11 +188,11 @@ mod tests {
     fn test_enum_set_extensions() {
         let set = EnumSet::new();
         let set_with_long = set.with(ValueType::Long);
-        assert!(set_with_long.contains(&ValueType::Long));
-        assert!(!set.contains(&ValueType::Long)); // Original unchanged
+        assert!(set_with_long.contains(ValueType::Long));
+        assert!(!set.contains(ValueType::Long)); // Original unchanged
 
         let both = EnumSet::of_both(ValueType::Long, ValueType::String);
-        assert!(both.contains(&ValueType::Long));
-        assert!(both.contains(&ValueType::String));
+        assert!(both.contains(ValueType::Long));
+        assert!(both.contains(ValueType::String));
     }
 }

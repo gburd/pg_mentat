@@ -650,7 +650,13 @@ fn pull_forward_attribute(
         let v_bytes: Vec<u8> = row.get(2)?.ok_or("Missing value")?;
         let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
 
-        let decoded = decode_typed_value(&v_bytes, v_type_tag)?;
+        // Datomic returns {:db/id N} for ref attributes in simple pulls.
+        let decoded = if v_type_tag == type_tag::REF {
+            let ref_id = decode_ref_id(&v_bytes)?;
+            json!({":db/id": ref_id})
+        } else {
+            decode_typed_value(&v_bytes, v_type_tag)?
+        };
         insert_value(result_map, output_key, decoded, &cardinality);
         count += 1;
     }
@@ -865,10 +871,10 @@ fn pull_recursive(
     if cardinality == "one" {
         let ref_id = ref_ids[0];
         if visited.contains(&ref_id) {
-            // Cycle detected: return stub.
+            // Cycle detected: return just {:db/id N} per Datomic behavior.
             result_map.insert(
                 output_key.to_string(),
-                json!({":db/id": ref_id, "_cycle": true}),
+                json!({":db/id": ref_id}),
             );
         } else {
             let was_new = visited.insert(ref_id);
@@ -893,7 +899,8 @@ fn pull_recursive(
         let mut arr = Vec::new();
         for ref_id in &ref_ids {
             if visited.contains(ref_id) {
-                arr.push(json!({":db/id": *ref_id, "_cycle": true}));
+                // Cycle detected: return just {:db/id N} per Datomic behavior.
+                arr.push(json!({":db/id": *ref_id}));
             } else {
                 let was_new = visited.insert(*ref_id);
                 let mut sub_map = serde_json::Map::new();
@@ -1442,11 +1449,13 @@ mod tests {
                 "result should contain :person/friend"
             );
 
-            // Check that a cycle marker appears somewhere in the result
+            // Verify that the recursive chain terminates with a {:db/id N} stub
+            // (Datomic returns just {:db/id N} for cycles, no extra markers)
             let json_str = serde_json::to_string(&json_val).unwrap();
+            // The chain A->B->C->A should show A's :db/id as a leaf stub
             assert!(
-                json_str.contains("_cycle"),
-                "result should contain _cycle marker: {}",
+                json_str.contains(":db/id"),
+                "result should contain :db/id references: {}",
                 json_str
             );
         }
@@ -1461,9 +1470,16 @@ mod tests {
 
         if let Some(JsonB(json_val)) = result {
             let json_str = serde_json::to_string(&json_val).unwrap();
+            // Verify chain terminates (has nested :db/id stubs)
             assert!(
-                json_str.contains("_cycle"),
-                "unbounded pull should contain _cycle marker: {}",
+                json_str.contains(":db/id"),
+                "unbounded pull should contain :db/id stubs for cycles: {}",
+                json_str
+            );
+            // Verify no _cycle markers (Datomic-compatible behavior)
+            assert!(
+                !json_str.contains("_cycle"),
+                "should not contain non-standard _cycle markers: {}",
                 json_str
             );
         }
@@ -1551,10 +1567,16 @@ mod tests {
 
         if let Some(JsonB(json_val)) = result {
             let json_str = serde_json::to_string(&json_val).unwrap();
-            // Should contain cycle markers for the circular references
+            // Verify chain terminates with {:db/id N} stubs (Datomic-compatible)
             assert!(
-                json_str.contains("_cycle"),
-                "many-cardinality result should contain _cycle markers: {}",
+                json_str.contains(":db/id"),
+                "many-cardinality result should contain :db/id stubs: {}",
+                json_str
+            );
+            // Verify no _cycle markers (Datomic-compatible behavior)
+            assert!(
+                !json_str.contains("_cycle"),
+                "should not contain non-standard _cycle markers: {}",
                 json_str
             );
         }

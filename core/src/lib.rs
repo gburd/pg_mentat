@@ -9,7 +9,7 @@
 // specific language governing permissions and limitations under the License.
 
 extern crate chrono;
-extern crate enum_set;
+extern crate enumset;
 extern crate indexmap;
 extern crate ordered_float;
 extern crate uuid;

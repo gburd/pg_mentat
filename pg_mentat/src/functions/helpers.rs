@@ -204,7 +204,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
 }
 
 /// Helper to decode BYTEA values based on type tag
-/// Type tags: 1=boolean, 2=long, 3=double, 4=instant, 5=ref, 7=string, 8=keyword, 9=uuid, 11=bytes
+/// Type tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, 8=keyword, 10=uuid, 11=bytes
 fn decode_typed_value(
     bytes: &[u8],
     type_tag: i16,
@@ -218,8 +218,8 @@ fn decode_typed_value(
             }
             Ok(json!(bytes[0] != 0))
         }
-        2 | 5 => {
-            // long or ref (both i64 little-endian)
+        0 | 2 => {
+            // ref or long (both i64 little-endian)
             if bytes.len() != 8 {
                 return Err(
                     format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
@@ -272,7 +272,7 @@ fn decode_typed_value(
                 format!(":{}", s)
             }))
         }
-        9 => {
+        10 => {
             // uuid (16 bytes)
             if bytes.len() != 16 {
                 return Err(
@@ -287,8 +287,8 @@ fn decode_typed_value(
         }
         _ => Err(format!(
             ":db.error/unsupported-type Unsupported type tag: {}. \
-             Known tags: 1=boolean, 2=long/ref, 3=double, 4=instant, 7=string, \
-             8=keyword, 9=uuid, 11=bytes.",
+             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
+             8=keyword, 10=uuid, 11=bytes.",
             type_tag
         ).into()),
     }

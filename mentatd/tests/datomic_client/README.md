@@ -1,194 +1,182 @@
-# Datomic Client Testing
+# Datomic Client Compatibility Tests
 
-This directory contains scripts and instructions for testing mentatd with an actual Datomic client.
+This directory contains automated tests that validate mentatd against the
+official Datomic Peer API (`datomic.api`).  The tests use
+[Leiningen](https://leiningen.org/) as the test runner and
+`clojure.test` assertions.
+
+## Directory layout
+
+```
+mentatd/tests/datomic_client/
+  project.clj                          Leiningen project (deps, test paths)
+  test/
+    datomic_compat/
+      core_test.clj                    Core compatibility suite
+      real_client_test.clj             Extended real-client tests
+  test_queries.clj                     Legacy REPL-oriented manual tests
+  test_client.sh                       Shell-based protocol tests (curl/EDN)
+  compatibility_report.md              API coverage matrix and known limitations
+  README.md                            This file
+```
 
 ## Prerequisites
 
-1. Datomic Free or Pro JAR files
-2. Java Runtime Environment (JRE 8 or later)
-3. Running mentatd server
-4. PostgreSQL database
+- Java 17+ (Temurin recommended)
+- [Leiningen](https://leiningen.org/) 2.11+
+- A running mentatd server connected to a PostgreSQL instance with pg_mentat
+  installed
 
-## Setup
+## Running locally
 
-### 1. Download Datomic
-
-Download Datomic Free from [Datomic Downloads](https://www.datomic.com/get-datomic.html):
+### 1. Start mentatd
 
 ```bash
-# Extract Datomic
-unzip datomic-free-0.9.5697.zip
-cd datomic-free-0.9.5697
-```
-
-### 2. Start mentatd
-
-```bash
-# In terminal 1
-cd /Users/gregburd/src/mentat/mentatd
+cd mentatd
 export DATABASE_URL="postgresql://localhost:5432/mentat"
 cargo run
 ```
 
-### 3. Run Test Client
+### 2. Run the Clojure tests
 
 ```bash
-# In terminal 2
-cd tests/datomic_client
+cd mentatd/tests/datomic_client
+
+# All tests
+lein test
+
+# Only the core suite
+lein test datomic-compat.core-test
+
+# Only the extended real-client suite
+lein test datomic-compat.real-client-test
+```
+
+The default mentatd URI is `datomic:free://localhost:8080/test-db`.  Override
+it by setting the `MENTATD_URI` environment variable:
+
+```bash
+export MENTATD_URI="datomic:free://myhost:9090/my-db"
+lein test
+```
+
+### 3. Run the shell protocol tests
+
+These tests use `curl` to exercise the mentatd HTTP/EDN protocol directly
+without a Datomic client library:
+
+```bash
+cd mentatd/tests/datomic_client
+export MENTATD_URL="http://localhost:8080"
 ./test_client.sh
 ```
 
-## Test Scripts
+## CI/CD
 
-### `test_client.sh` - Basic Connection Test
+The GitHub Actions workflow `.github/workflows/datomic_compat_test.yml` runs
+both the shell and Clojure tests automatically:
 
-Tests basic connectivity:
-- Connect to mentatd on localhost:8080
-- Create database
-- List databases
-- Execute simple query
-- Transact data
-- Delete database
+- **Trigger**: Push to `main`, `claude`, or `develop` branches; PRs targeting
+  `main` or `claude`; manual dispatch.
+- **Matrix**: PostgreSQL 15 and 16.
+- **Steps**:
+  1. Build mentatd (`cargo build --release`).
+  2. Start a PostgreSQL service container.
+  3. Start mentatd with a test config.
+  4. Run `test_client.sh` (shell protocol tests).
+  5. Run `lein test` (Clojure compatibility tests).
+  6. Generate a GitHub step summary with results.
 
-### `test_queries.clj` - Comprehensive Query Tests
+## Test suites
 
-Clojure script testing:
-- Schema installation
-- Entity creation
-- Datalog queries
-- Pull API
-- History queries
-- Transaction functions
+### `core_test.clj`
 
-### `test_java_client.java` - Java Client Test
+Validates the most critical Datomic API operations using a single shared
+database (`:once` fixture):
 
-Java program demonstrating:
-- Datomic Peer API usage
-- Connection management
-- Query execution
-- Transaction handling
-- Error handling
+| Category     | Tests                                                |
+|--------------|------------------------------------------------------|
+| Connection   | connect, create/delete database                      |
+| Schema       | attribute installation, queryable schema             |
+| Transactions | map-form, :db/add, :db/retract, retractEntity       |
+| Queries      | find-all, input params, aggregates                   |
+| Pull API     | wildcard, specific attributes                        |
+| Entity API   | lazy entity map, attribute access                    |
+| Time-travel  | history, as-of                                       |
 
-## Running Tests
+### `real_client_test.clj`
 
-### Basic Shell Script Test
+Extended tests where each `deftest` creates and destroys its own database
+(`with-fresh-db`) for full isolation.  Covers:
 
-```bash
-./test_client.sh
+1. Connection lifecycle (create, connect, delete, nonexistent DB)
+2. Schema definition (string attrs, unique identity, cardinality-many)
+3. Transactions (map form, list form, retract, retractEntity, tempids, multi-entity)
+4. Queries (basic, single binding, input params, multi-input, collection input, aggregates, min/max, rules)
+5. Pull API (wildcard, specific attrs, missing entity, :default, :limit, :as, nested refs, reverse refs, pull-many)
+6. Lookup refs (in query, in pull, in transaction)
+7. Entity API (basic, keys, touch)
+8. Time-travel (as-of, since, history, basis-t)
+9. Error handling (invalid attribute, syntax error, empty tx, empty results, duplicate unique identity / upsert)
+
+### `test_client.sh`
+
+Shell-based protocol tests that send EDN requests via `curl`:
+
+- Health check, list databases, connect, query, transact
+- Error cases (invalid op, missing fields, bad UUID, nonexistent DB)
+- Create/delete database round-trip
+
+### `test_queries.clj`
+
+Legacy REPL-oriented test script.  Retained for ad-hoc manual testing in a
+Datomic REPL:
+
+```clojure
+;; In a Datomic REPL:
+(load-file "test_queries.clj")
+(run-all-tests)
 ```
 
-Expected output:
-```
-Testing mentatd with Datomic client...
-1. Connecting to mentatd at localhost:8080
-2. Creating database: test_db
-3. Listing databases
-4. Querying database
-5. Transacting data
-6. Cleaning up
+## Compatibility report
 
-Test Results:
-✓ Connection successful
-✓ Database created
-✓ Query executed
-✓ Transaction committed
-```
+See [compatibility_report.md](compatibility_report.md) for:
 
-### Clojure REPL Test
-
-```bash
-cd datomic-free-0.9.5697
-bin/repl
-
-# In REPL:
-(load-file "../tests/datomic_client/test_queries.clj")
-(run-tests)
-```
-
-### Java Client Test
-
-```bash
-javac -cp datomic-free-0.9.5697/lib/datomic-free-0.9.5697.jar test_java_client.java
-java -cp .:datomic-free-0.9.5697/lib/* TestDatomicClient
-```
-
-## Protocol Compatibility
-
-### Supported Operations
-
-- ✓ `connect` - Database connection
-- ✓ `db` - Database handle
-- ✓ `q` - Datalog query
-- ✓ `transact` - Write transactions
-- ✓ `create-database` - Database creation
-- ✓ `delete-database` - Database deletion
-- ✓ `list-databases` - Database enumeration
-
-### Partial Support
-
-- ⚠ `pull` - Basic pull patterns
-- ⚠ `entity` - Entity API
-- ⚠ `history` - Time-travel queries
-
-### Not Yet Supported
-
-- ✗ Transaction functions
-- ✗ Excision
-- ✗ Index range queries
-- ✗ Seek datoms
-
-## Test Results
-
-Document your test results here:
-
-### Test Run: [Date]
-
-**Environment:**
-- mentatd version: 0.1.0
-- Datomic version: [version]
-- PostgreSQL version: [version]
-
-**Results:**
-- [ ] Basic connection
-- [ ] Database creation
-- [ ] Query execution
-- [ ] Transaction commit
-- [ ] Pull API
-- [ ] History queries
-
-**Issues Found:**
-- [List any issues or incompatibilities]
-
-**Notes:**
-- [Additional observations]
+- Full API coverage matrix (supported / partial / unsupported)
+- Protocol details and response format differences
+- Known limitations and workarounds
 
 ## Troubleshooting
 
 ### Connection refused
 
-Ensure mentatd is running:
+Ensure mentatd is running and listening on the expected port:
+
 ```bash
 curl http://localhost:8080/health
 ```
 
 ### Invalid response format
 
-Check mentatd logs:
+Enable debug logging in mentatd:
+
 ```bash
 RUST_LOG=debug cargo run
 ```
 
-### Transaction failures
+### Leiningen dependency resolution failures
 
-Verify PostgreSQL connection:
+Clear the local Maven cache and re-fetch:
+
 ```bash
-psql $DATABASE_URL -c "SELECT version();"
+rm -rf ~/.m2/repository/com/datomic
+lein deps
 ```
 
-## Contributing
+### Transaction failures
 
-When adding new test cases:
-1. Document the test in this README
-2. Include expected vs actual behavior
-3. Note any protocol differences from Datomic
-4. Add error handling examples
+Verify the PostgreSQL connection and that pg_mentat is installed:
+
+```bash
+psql "$DATABASE_URL" -c "SELECT mentat.mentat_query('[:find ?e :where [?e :db/ident :db/ident]]', '{}'::jsonb);"
+```

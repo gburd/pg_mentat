@@ -9,7 +9,7 @@
 // specific language governing permissions and limitations under the License.
 
 extern crate chrono;
-extern crate enum_set;
+extern crate enumset;
 extern crate indexmap;
 extern crate ordered_float;
 #[macro_use]
@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use bytes::Bytes;
 use indexmap::IndexMap;
 
-use enum_set::EnumSet;
+use enumset::{EnumSet, EnumSetType};
 
 use ordered_float::OrderedFloat;
 
@@ -271,7 +271,7 @@ impl Default for Attribute {
 
 /// The attribute of each Mentat assertion has a :db/valueType constraining the value to a
 /// particular set.  Mentat recognizes the following :db/valueType values.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+#[derive(EnumSetType, Debug, Hash, Ord, PartialOrd)]
 #[repr(u32)]
 pub enum ValueType {
     Ref,
@@ -302,15 +302,6 @@ impl ValueType {
     }
 }
 
-impl ::enum_set::CLike for ValueType {
-    fn to_u32(&self) -> u32 {
-        *self as u32
-    }
-
-    unsafe fn from_u32(v: u32) -> ValueType {
-        ::std::mem::transmute(v)
-    }
-}
 
 impl ValueType {
     pub fn into_keyword(self) -> Keyword {

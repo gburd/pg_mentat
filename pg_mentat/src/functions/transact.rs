@@ -82,7 +82,10 @@ fn value_type_name(value: &edn::Value) -> &'static str {
         edn::Value::Nil => "nil",
         edn::Value::Boolean(_) => "boolean",
         edn::Value::Integer(_) => "integer",
-        edn::Value::Float(_) => "float",
+        edn::Value::BigInteger(_) => "biginteger",
+        edn::Value::Float(_) => "float/double",
+        edn::Value::Instant(_) => "instant",
+        edn::Value::Uuid(_) => "uuid",
         edn::Value::Text(_) => "text/string",
         edn::Value::Keyword(_) => "keyword",
         edn::Value::PlainSymbol(_) => "symbol",
@@ -285,10 +288,10 @@ fn execute_transaction_body(
     // undoes the schema writes too, preventing stale schema from persisting
     // without corresponding data.
     let has_schema_changes = !schema_builders.is_empty();
-    if has_schema_changes {
-        Spi::run("SAVEPOINT schema_install")?;
-    }
 
+    // Install schema attributes (if any). In pgrx tests, we rely on the
+    // outer transaction for atomicity. In production, the extension function
+    // call is already wrapped in a transaction by PostgreSQL.
     install_schema_attributes(&schema_builders)?;
 
     // --- Pass 2: Parse ALL assertions and insert datoms ---
@@ -513,11 +516,8 @@ fn execute_transaction_body(
 
     match datom_result {
         Ok(datom_count) => {
-            // All datoms inserted successfully -- release the savepoint to
-            // commit schema + datoms atomically.
-            if has_schema_changes {
-                Spi::run("RELEASE SAVEPOINT schema_install")?;
-            }
+            // All datoms inserted successfully. PostgreSQL's transaction
+            // management will commit schema + datoms atomically.
 
             // Build TxReport response
             let tempids_json: Vec<String> = tempid_map
@@ -534,11 +534,10 @@ fn execute_transaction_body(
             ))
         }
         Err(e) => {
-            // Datom insertion failed -- rollback the savepoint so schema
-            // changes are undone too, then invalidate the cache since we
-            // may have populated it during install_schema_attributes.
+            // Datom insertion failed. PostgreSQL will automatically roll back
+            // the entire transaction (including schema changes). Invalidate
+            // caches in case they were populated during schema installation.
             if has_schema_changes {
-                let _ = Spi::run("ROLLBACK TO SAVEPOINT schema_install");
                 crate::cache::get_cache().invalidate();
                 crate::functions::query::clear_stmt_cache();
             }
@@ -935,6 +934,17 @@ fn encode_value(
         edn::Value::Boolean(b) => Ok((vec![if *b { 1 } else { 0 }], 1)), // boolean = 1
         edn::Value::Integer(i) => Ok((i.to_le_bytes().to_vec(), 2)),     // long = 2
         edn::Value::Text(ref s) => Ok((s.as_bytes().to_vec(), 7)),       // string = 7
+        edn::Value::Float(f) => {
+            let val: f64 = f.into_inner();
+            Ok((val.to_le_bytes().to_vec(), 3)) // double = 3
+        }
+        edn::Value::Instant(dt) => {
+            let micros = dt.timestamp_micros();
+            Ok((micros.to_le_bytes().to_vec(), 4)) // instant = 4
+        }
+        edn::Value::Uuid(u) => {
+            Ok((u.as_bytes().to_vec(), 10)) // uuid = 10
+        }
         edn::Value::Keyword(kw) => {
             // Store keyword without leading colon, using slash separator
             // e.g., :person/name -> "person/name"
@@ -948,7 +958,7 @@ fn encode_value(
         }
         other => Err(format!(
             ":db.error/unsupported-value-type Cannot encode value of type {} (value: {}). \
-             Supported types: boolean, integer (long), string, keyword. \
+             Supported types: boolean, integer (long), double (float), instant, uuid, string, keyword. \
              For ref values, use an entity ID, tempid string, or keyword ident.",
             value_type_name(other), other
         ).into()),

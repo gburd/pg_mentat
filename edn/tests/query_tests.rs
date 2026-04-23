@@ -268,7 +268,7 @@ fn can_parse_limit() {
     assert!(parse_query(zero_invalid).is_err());
 
     let none = "[:find ?x :where [?x :foo/baz ?y]]";
-    assert_eq!(parse_query(none).unwrap().limit, Limit::None);
+    assert_eq!(parse_query(none).unwrap().limit, Limit::Unlimited);
 
     let one = "[:find ?x :where [?x :foo/baz ?y] :limit 1]";
     assert_eq!(parse_query(one).unwrap().limit, Limit::Fixed(1));

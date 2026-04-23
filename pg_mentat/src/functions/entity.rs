@@ -61,8 +61,7 @@ pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error 
 
 /// Decode BYTEA value based on type tag
 /// Type tags match the encoding in transact.rs:
-/// 1=boolean, 2=long, 7=string, 8=keyword
-/// TODO: Add support for ref, instant, double, uuid, bytes when needed
+/// 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, 8=keyword, 10=uuid, 11=bytes
 fn decode_value(
     bytes: &[u8],
     type_tag: i16,
@@ -76,11 +75,11 @@ fn decode_value(
             }
             Ok(json!(bytes[0] != 0))
         }
-        2 => {
-            // long
+        0 | 2 => {
+            // ref or long (both i64 little-endian)
             if bytes.len() != 8 {
                 return Err(format!(
-                    ":db.error/data-corruption Invalid long value: expected 8 bytes, got {}. \
+                    ":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}. \
                      The datoms table may contain corrupted data.",
                     bytes.len()
                 ).into());
@@ -89,6 +88,32 @@ fn decode_value(
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
             ]);
             Ok(json!(val))
+        }
+        3 => {
+            // double (f64 little-endian)
+            if bytes.len() != 8 {
+                return Err(format!(
+                    ":db.error/data-corruption Invalid double value: expected 8 bytes, got {}.",
+                    bytes.len()
+                ).into());
+            }
+            let val = f64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]);
+            Ok(json!(val))
+        }
+        4 => {
+            // instant (i64 microseconds since epoch, little-endian)
+            if bytes.len() != 8 {
+                return Err(format!(
+                    ":db.error/data-corruption Invalid instant value: expected 8 bytes, got {}.",
+                    bytes.len()
+                ).into());
+            }
+            let micros = i64::from_le_bytes([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            ]);
+            Ok(json!(micros))
         }
         7 => {
             // string
@@ -100,11 +125,32 @@ fn decode_value(
             let s = String::from_utf8(bytes.to_vec())?;
             Ok(json!(format!(":{}", s)))
         }
+        10 => {
+            // uuid (16 bytes)
+            if bytes.len() != 16 {
+                return Err(format!(
+                    ":db.error/data-corruption Invalid UUID value: expected 16 bytes, got {}.",
+                    bytes.len()
+                ).into());
+            }
+            let uuid_str = format!(
+                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5],
+                bytes[6], bytes[7],
+                bytes[8], bytes[9],
+                bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+            );
+            Ok(json!(uuid_str))
+        }
+        11 => {
+            // raw bytes - return as hex string
+            Ok(json!(hex::encode(bytes)))
+        }
         _ => Err(format!(
             ":db.error/unsupported-type Unsupported value type tag: {}. \
-             Known tags: 1=boolean, 2=long, 7=string, 8=keyword. \
-             Tags 0=ref, 3=double, 4=instant, 10=uuid, 11=bytes are not yet \
-             implemented in mentat_entity. Use mentat_pull for full type support.",
+             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
+             8=keyword, 10=uuid, 11=bytes.",
             type_tag
         )
         .into()),

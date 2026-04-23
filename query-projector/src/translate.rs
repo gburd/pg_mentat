@@ -311,7 +311,7 @@ fn table_for_computed(computed: ComputedTable, alias: TableAlias) -> TableOrSubq
                         // Each arm simply turns into a subquery.
                         // The SQL translation will stuff "UNION" between each arm.
                         let projection = Projection::Columns(columns);
-                        cc_to_select_query(projection, cc, false, vec![], None, Limit::None, Offset::None)
+                        cc_to_select_query(projection, cc, false, vec![], None, Limit::Unlimited, Offset::Unlimited)
                   }).collect(),
                 alias)
         }
@@ -333,8 +333,8 @@ fn empty_query() -> SelectQuery {
         group_by: vec![],
         constraints: vec![],
         order: vec![],
-        limit: Limit::None,
-        offset: Offset::None,
+        limit: Limit::Unlimited,
+        offset: Offset::Unlimited,
         ctes: vec![],
     }
 }
@@ -380,7 +380,7 @@ fn cc_to_select_query(
         limit
     };
     let offset = if cc.empty_because.is_some() {
-        Offset::None
+        Offset::Unlimited
     } else {
         offset
     };
@@ -410,8 +410,8 @@ pub fn cc_to_exists(cc: ConjoiningClauses) -> SelectQuery {
             false,
             vec![],
             None,
-            Limit::None,
-            Offset::None,
+            Limit::Unlimited,
+            Offset::Unlimited,
         )
     }
 }
@@ -427,9 +427,9 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
     let order_by = inner.order;
     inner.order = vec![];
     let limit = inner.limit;
-    inner.limit = Limit::None;
+    inner.limit = Limit::Unlimited;
     let offset = inner.offset;
-    inner.offset = Offset::None;
+    inner.offset = Offset::Unlimited;
 
     use self::Projection::*;
 
@@ -477,7 +477,7 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
         constraints: vec![],
         group_by,
         order: match &limit {
-            &Limit::None => vec![],
+            &Limit::Unlimited => vec![],
             &Limit::Fixed(_) | &Limit::Variable(_) => order_by.clone(),
         },
         limit,
@@ -494,8 +494,8 @@ fn re_project(mut inner: SelectQuery, projection: Projection) -> SelectQuery {
         constraints: nullable,
         group_by: vec![],
         order: order_by,
-        limit: Limit::None,   // Any limiting comes from the internal query.
-        offset: Offset::None, // Any offset comes from the internal query.
+        limit: Limit::Unlimited,   // Any limiting comes from the internal query.
+        offset: Offset::Unlimited, // Any offset comes from the internal query.
         ctes: vec![],
     }
 }

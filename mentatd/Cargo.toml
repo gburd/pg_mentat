@@ -49,10 +49,19 @@ tracing = "0.1.42"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 hyper = "1.6.0"
 reqwest = { version = "0.12.14", features = ["json"] }
 tokio-test = "0.4.4"
 uuid = { version = "1.21.0", features = ["v4"] }
+
+[[bench]]
+name = "serialization"
+harness = false
+
+[[bench]]
+name = "cache"
+harness = false
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

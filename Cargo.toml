@@ -26,7 +26,7 @@ syncable = ["mentat_tolstoy", "tolstoy_traits", "mentat_db/syncable"]
 
 [workspace]
 members = [
-  "tools/cli",
+  "tools/cli", "tools/pg_mentat_cli",
   "ffi", "core", "core-traits","db", "db-traits", "edn", "public-traits", "query-algebrizer",
   "query-algebrizer-traits", "query-projector", "query-projector-traits","query-pull",
   "query-sql", "sql", "sql-traits", "tolstoy-traits", "tolstoy", "transaction",
