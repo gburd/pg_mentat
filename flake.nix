@@ -76,6 +76,9 @@
         buildEnv = {
           LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
           LLVM_CONFIG_PATH = "${pkgs.llvmPackages_18.libllvm.dev}/bin/llvm-config";
+          # Critical for bindgen: tell it where to find C standard library headers
+          # Use stdenv.cc.libc which has the complete glibc setup
+          BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.stdenv.cc.libc.dev}/include -isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [
             pkgs.llvmPackages_18.libllvm
             pkgs.llvmPackages_18.libclang
