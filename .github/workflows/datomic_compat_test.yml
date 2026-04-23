@@ -1,0 +1,154 @@
+name: Datomic Compatibility Tests
+
+on:
+  push:
+    branches: [main, claude, develop]
+    paths:
+      - 'mentatd/**'
+      - 'pg_mentat/**'
+      - '.github/workflows/datomic_compat_test.yml'
+  pull_request:
+    branches: [main, claude]
+    paths:
+      - 'mentatd/**'
+      - 'pg_mentat/**'
+      - '.github/workflows/datomic_compat_test.yml'
+  workflow_dispatch:
+
+jobs:
+  datomic-compat:
+    name: Datomic Client Compatibility
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pg-version: [15, 16]
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg-version }}
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+          POSTGRES_DB: mentat_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # -- Rust / mentatd build --
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            mentatd/target
+          key: cargo-mentatd-${{ runner.os }}-${{ hashFiles('mentatd/Cargo.lock') }}
+          restore-keys: cargo-mentatd-${{ runner.os }}-
+
+      - name: Build mentatd
+        working-directory: mentatd
+        run: cargo build --release
+
+      - name: Create mentatd config
+        working-directory: mentatd
+        run: |
+          cat > mentatd.toml <<'EOF'
+          [server]
+          host = "127.0.0.1"
+          port = 8080
+
+          [database]
+          host = "localhost"
+          port = 5432
+          database = "mentat_test"
+          user = "postgres"
+          password = "postgres"
+          EOF
+          # Strip leading whitespace from heredoc
+          sed -i 's/^          //' mentatd.toml
+
+      - name: Start mentatd
+        working-directory: mentatd
+        env:
+          RUST_LOG: info
+        run: |
+          ./target/release/mentatd &
+          MENTATD_PID=$!
+          echo "MENTATD_PID=$MENTATD_PID" >> "$GITHUB_ENV"
+          # Wait for mentatd to be ready
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
+              echo "mentatd is ready"
+              break
+            fi
+            echo "Waiting for mentatd... ($i/30)"
+            sleep 2
+          done
+          curl -f http://127.0.0.1:8080/health || { echo "mentatd failed to start"; exit 1; }
+
+      # -- Shell-based protocol tests --
+
+      - name: Run shell protocol tests
+        working-directory: mentatd/tests/datomic_client
+        env:
+          MENTATD_URL: http://127.0.0.1:8080
+        run: |
+          chmod +x test_client.sh
+          ./test_client.sh
+
+      # -- Clojure / Leiningen tests --
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Leiningen
+        uses: DeLaGuardo/setup-clojure@master
+        with:
+          lein: 2.11.2
+
+      - name: Cache Leiningen dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: lein-${{ runner.os }}-${{ hashFiles('mentatd/tests/datomic_client/project.clj') }}
+          restore-keys: lein-${{ runner.os }}-
+
+      - name: Run Clojure compatibility tests
+        working-directory: mentatd/tests/datomic_client
+        env:
+          MENTATD_URI: "datomic:free://localhost:8080/test-db"
+        run: lein test
+
+      # -- Cleanup --
+
+      - name: Stop mentatd
+        if: always()
+        run: kill "$MENTATD_PID" || true
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "## Datomic Compatibility Test Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Date**: $(date -u)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit**: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PostgreSQL**: ${{ matrix.pg-version }}" >> "$GITHUB_STEP_SUMMARY"

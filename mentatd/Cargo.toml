@@ -34,6 +34,13 @@ toml = "0.8.20"
 # EDN parsing (from workspace)
 edn = { path = "../edn" }
 
+# Caching
+lru = "0.12"
+
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.5"
+
 # Utilities
 thiserror = "2.0.18"
 anyhow = "1.0.95"

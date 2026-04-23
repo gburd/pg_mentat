@@ -1,9 +1,8 @@
 pub mod parser;
 pub mod serializer;
+pub mod transit_serializer;
 
-use edn::symbols::Keyword;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -71,11 +70,14 @@ pub enum Response {
 
 #[derive(Debug, Clone)]
 pub enum ResponseValue {
+    Nil,
     String(String),
     Boolean(bool),
     Integer(i64),
-    List(Vec<String>),
-    Map(BTreeMap<String, String>),
+    Keyword(String),
+    List(Vec<ResponseValue>),
+    Vector(Vec<ResponseValue>),
+    Map(Vec<(ResponseValue, ResponseValue)>),
 }
 
 #[derive(Debug, Clone)]

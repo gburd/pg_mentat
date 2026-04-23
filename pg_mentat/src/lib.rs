@@ -3,7 +3,8 @@ use pgrx::prelude::*;
 pgrx::pg_module_magic!();
 
 // Initialize the mentat schema during CREATE EXTENSION
-extension_sql!(r#"
+extension_sql!(
+    r#"
     CREATE SCHEMA IF NOT EXISTS mentat;
 
     -- Define enum types
@@ -119,10 +120,12 @@ extension_sql!(r#"
         RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
     END; $$ LANGUAGE plpgsql;
 "#,
-name = "bootstrap_schema",
+    name = "bootstrap_schema",
 );
 
 mod cache;
+#[cfg(any(test, feature = "pg_test"))]
+mod cache_tests;
 mod functions;
 mod operators;
 mod planner;
@@ -198,6 +201,8 @@ mod mentat {
     pub use crate::functions::query::*;
     #[allow(unused_imports)]
     pub use crate::functions::schema::*;
+    #[allow(unused_imports)]
+    pub use crate::functions::stats::*;
     #[allow(unused_imports)]
     pub use crate::functions::transact::*;
 }
@@ -1434,6 +1439,270 @@ mod tests {
         assert_eq!(results.len(), 2, "Expected 2 results (admin and moderator)");
     }
 
+    // ============================================================================
+    // OR Clause Edge Case Tests
+    // ============================================================================
+
+    /// OR-only query (no base patterns): each branch independently produces
+    /// results that are unioned together with set deduplication.
+    #[pg_test]
+    fn test_pg_or_only_no_base_patterns() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Query schema attributes using OR with no shared base patterns
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e
+                  :where
+                  (or [?e :db/ident :db/ident]
+                      [?e :db/ident :db/doc])]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(results.len(), 2, "Expected 2 results from OR-only query");
+    }
+
+    /// OR with variable bindings: ?name must be consistently bound across
+    /// branches so that the UNION columns align.
+    #[pg_test]
+    fn test_pg_or_variable_binding_consistency() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"role-attr\" :db/ident :person/role]
+                 [:db/add \"role-attr\" :db/valueType :db.type/string]
+                 [:db/add \"role-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/role \"admin\"]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/role \"user\"]]
+            '::TEXT)",
+        )
+        .expect("Failed to insert test data");
+
+        // The shared ?p variable binds consistently across OR branches
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query('
+                [:find ?name
+                 :where
+                 [?p :person/name ?name]
+                 (or [?p :person/role \"admin\"]
+                     [?p :person/role \"user\"])]'::TEXT, '{}'::jsonb)::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results.len(),
+            2,
+            "Expected 2 results with consistent variable binding"
+        );
+
+        let names: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"), "Should contain Alice");
+        assert!(names.contains(&"Bob"), "Should contain Bob");
+    }
+
+    /// OR with AND branches: (or (and [?e :a1 v1] [?e :a2 v2]) [?e :a3 v3])
+    #[pg_test]
+    fn test_pg_or_with_and_branches() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"role-attr\" :db/ident :person/role]
+                 [:db/add \"role-attr\" :db/valueType :db.type/string]
+                 [:db/add \"role-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 25]
+                 [:db/add \"p1\" :person/role \"admin\"]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 30]
+                 [:db/add \"p2\" :person/role \"user\"]
+                 [:db/add \"p3\" :person/name \"Charlie\"]
+                 [:db/add \"p3\" :person/age 35]
+                 [:db/add \"p3\" :person/role \"moderator\"]]
+            '::TEXT)",
+        )
+        .expect("Failed to insert test data");
+
+        // OR with AND: match (admin AND name=Alice) OR (moderator)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query('
+                [:find ?name
+                 :where
+                 [?p :person/name ?name]
+                 (or (and [?p :person/role \"admin\"]
+                          [?p :person/name \"Alice\"])
+                     [?p :person/role \"moderator\"])]'::TEXT, '{}'::jsonb)::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results.len(),
+            2,
+            "Expected 2 results: Alice (admin) and Charlie (moderator)"
+        );
+
+        let names: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"), "Should contain Alice (via and-branch)");
+        assert!(
+            names.contains(&"Charlie"),
+            "Should contain Charlie (via simple branch)"
+        );
+    }
+
+    /// OR deduplication: when both branches match the same entity, the result
+    /// set should contain it only once (Datalog set semantics).
+    #[pg_test]
+    fn test_pg_or_deduplication() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // :db/ident attribute has entid 1; querying for it by two different
+        // values that both resolve to the same entity should deduplicate.
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?e
+                  :where
+                  (or [?e :db/ident :db/ident]
+                      [?e :db/ident :db/ident])]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results.len(),
+            1,
+            "Duplicate results from OR branches should be deduplicated"
+        );
+    }
+
+    /// OR with multiple find variables: verify column alignment across branches.
+    #[pg_test]
+    fn test_pg_or_multiple_find_vars() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"status-attr\" :db/ident :person/status]
+                 [:db/add \"status-attr\" :db/valueType :db.type/string]
+                 [:db/add \"status-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/status \"active\"]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/status \"inactive\"]]
+            '::TEXT)",
+        )
+        .expect("Failed to insert test data");
+
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query('
+                [:find ?name ?status
+                 :where
+                 [?p :person/name ?name]
+                 [?p :person/status ?status]
+                 (or [?p :person/status \"active\"]
+                     [?p :person/status \"inactive\"])]'::TEXT, '{}'::jsonb)::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results.len(),
+            2,
+            "Expected 2 results with multiple find variables"
+        );
+
+        // Verify each row has 2 columns with correct types
+        for row in results {
+            let row_arr = row.as_array().expect("Row should be array");
+            assert_eq!(row_arr.len(), 2, "Each row should have 2 columns");
+            assert!(row_arr[0].is_string(), "Name should be a string");
+            assert!(row_arr[1].is_string(), "Status should be a string");
+        }
+    }
+
+    /// OR that matches nothing in one branch: only the matching branch
+    /// should contribute results.
+    #[pg_test]
+    fn test_pg_or_one_branch_empty() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"role-attr\" :db/ident :person/role]
+                 [:db/add \"role-attr\" :db/valueType :db.type/string]
+                 [:db/add \"role-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/role \"admin\"]]
+            '::TEXT)",
+        )
+        .expect("Failed to insert test data");
+
+        // Second branch matches nothing (no "superadmin" role exists)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query('
+                [:find ?name
+                 :where
+                 [?p :person/name ?name]
+                 (or [?p :person/role \"admin\"]
+                     [?p :person/role \"superadmin\"])]'::TEXT, '{}'::jsonb)::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+
+        let results = json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results.len(),
+            1,
+            "Only the matching branch should produce results"
+        );
+        assert_eq!(
+            results[0].as_array().unwrap()[0].as_str().unwrap(),
+            "Alice"
+        );
+    }
+
     #[pg_test]
     fn test_pg_rule_bind() {
         setup_test_db().expect("Failed to setup test db");
@@ -1744,5 +2013,1936 @@ mod tests {
         let results = json["results"].as_array().expect("Expected array");
 
         assert_eq!(results.len(), 0, "Empty query should return no results");
+    }
+
+    // ============================================================================
+    // Retract Entity Test
+    // ============================================================================
+
+    #[pg_test]
+    fn test_db_retract_entity() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/age
+             :db/valueType :db.type/long
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create entity with multiple attributes
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"
+             :person/age 30
+             :person/email "alice@example.com"}
+        ]"#;
+
+        let tx_result =
+            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+                .expect("Data transaction failed")
+                .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let tempids = tx_json["tempids"].as_object().expect("Missing tempids");
+        let alice_eid = tempids["alice"].as_i64().expect("Missing alice tempid");
+
+        // Verify entity exists with all attributes
+        let query_before = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?name ?age ?email
+                      :where
+                      [?e :person/name ?name]
+                      [?e :person/age ?age]
+                      [?e :person/email ?email]
+                      [(= ?e {})]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_before_json: serde_json::Value =
+            serde_json::from_str(&query_before).expect("Failed to parse query result");
+        let results_before = query_before_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            results_before.len(),
+            1,
+            "Expected one result before retraction"
+        );
+
+        // Retract the entire entity
+        let retract_tx = format!(r#"[[:db/retractEntity {}]]"#, alice_eid);
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(retract_tx.as_str())],
+        )
+        .expect("Retract entity transaction failed");
+
+        // Verify entity no longer has any attributes
+        let query_after = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?name
+                      :where
+                      [?e :person/name ?name]
+                      [(= ?e {})]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_after_json: serde_json::Value =
+            serde_json::from_str(&query_after).expect("Failed to parse query result");
+        let results_after = query_after_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            results_after.len(),
+            0,
+            "Expected no results after retractEntity"
+        );
+
+        // Verify retractions are recorded in history
+        let history_query = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find (count ?a)
+                      :where
+                      [?e ?a _ _ false]
+                      [(= ?e {})]]'::TEXT,
+                    '{{\"history\": true}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("History query failed")
+        .expect("History query returned NULL");
+
+        let history_json: serde_json::Value =
+            serde_json::from_str(&history_query).expect("Failed to parse history result");
+        let retraction_count = history_json["result"]
+            .as_i64()
+            .expect("Expected retraction count");
+
+        assert_eq!(
+            retraction_count, 3,
+            "Expected 3 retractions (name, age, email)"
+        );
+    }
+
+    // ============================================================================
+    // Type Tag Consistency Test (Critical Bug Fix)
+    // ============================================================================
+
+    #[pg_test]
+    fn test_ref_type_tag_consistency() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with ref attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/friend
+             :db/valueType :db.type/ref
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Transact two entities where one references the other
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"}
+            {:db/id "bob"
+             :person/name "Bob"
+             :person/friend "alice"}
+        ]"#;
+
+        let tx_result =
+            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+                .expect("Data transaction failed")
+                .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
+        let tempids = tx_json["tempids"].as_object().expect("Missing tempids");
+        let alice_eid = tempids["alice"].as_i64().expect("Missing alice tempid");
+        let bob_eid = tempids["bob"].as_i64().expect("Missing bob tempid");
+
+        // Test 1: Query the ref value - should return alice's entity ID
+        let query_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?friend :where [?e :person/name \"Bob\"] [?e :person/friend ?friend]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let query_results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(query_results.len(), 1, "Expected exactly one result");
+        let friend_eid = query_results[0][0]
+            .as_i64()
+            .expect("Friend should be integer");
+        assert_eq!(
+            friend_eid, alice_eid,
+            "Query should return Alice's entity ID as Bob's friend"
+        );
+
+        // Test 2: Pull Bob's entity - should include :person/friend with correct entity ID
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[* {{:person/friend [*]}}]', {})",
+            bob_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+
+        // Verify Bob's data
+        assert_eq!(
+            pull_json[":db/id"].as_i64(),
+            Some(bob_eid),
+            "Pull should return Bob's entity ID"
+        );
+        assert_eq!(
+            pull_json[":person/name"].as_str(),
+            Some("Bob"),
+            "Pull should return Bob's name"
+        );
+
+        // Verify the ref attribute is correctly decoded (this is the critical test!)
+        let friend_ref = pull_json[":person/friend"]
+            .as_i64()
+            .expect(":person/friend should be decoded as integer entity ID");
+        assert_eq!(
+            friend_ref, alice_eid,
+            "Pull should decode ref type correctly with type tag 0 (not tag 5)"
+        );
+
+        // Test 3: Verify ref is stored with correct type tag in database
+        let type_tag_result = Spi::get_one::<i16>(
+            "SELECT value_type_tag FROM mentat.datoms
+             WHERE e = $1 AND a = (SELECT entid FROM mentat.schema WHERE ident = ':person/friend')
+             AND added = true",
+            &[DatumWithOid::from(bob_eid)],
+        )
+        .expect("Type tag query failed")
+        .expect("No type tag found");
+
+        assert_eq!(
+            type_tag_result, 0,
+            "Ref values should be stored with type tag 0 in database"
+        );
+    }
+
+    // ============================================================================
+    // Lookup Ref Tests
+    // ============================================================================
+
+    #[pg_test]
+    fn test_lookup_ref_in_transaction() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with a unique email attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+            {:db/ident :person/age
+             :db/valueType :db.type/long
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create an entity with a unique email
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"
+             :person/email "alice@example.com"
+             :person/age 25}
+        ]"#;
+
+        let tx_result =
+            Spi::get_one::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+                .expect("Data transaction failed")
+                .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Use lookup ref to update Alice's age via her unique email
+        let update_tx = r#"[
+            [:db/add [:person/email "alice@example.com"] :person/age 30]
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(update_tx)],
+        )
+        .expect("Lookup ref transaction failed");
+
+        // Verify the update happened on the correct entity
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?age .
+                      :where
+                      [{} :person/age ?age]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let age = query_json["result"]
+            .as_i64()
+            .expect("Age should be integer");
+
+        assert_eq!(age, 30, "Lookup ref should have updated Alice's age to 30");
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_not_found() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with unique email
+        let schema_tx = r#"[
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Try to use lookup ref for non-existent entity - should fail
+        let bad_tx = r#"[
+            [:db/add [:person/email "nobody@example.com"] :person/email "new@example.com"]
+        ]"#;
+
+        let result = Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(bad_tx)],
+        );
+
+        assert!(
+            result.is_err(),
+            "Lookup ref for non-existent entity should fail"
+        );
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_non_unique_attribute_fails() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema WITHOUT unique constraint
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create an entity
+        Spi::run("SELECT mentat_transact('[[:db/add \"p1\" :person/name \"Alice\"]]'::TEXT)")
+            .expect("Data transaction failed");
+
+        // Try to use lookup ref with non-unique attribute - should fail
+        let bad_tx = r#"[
+            [:db/add [:person/name "Alice"] :person/name "Bob"]
+        ]"#;
+
+        let result = Spi::run_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(bad_tx)],
+        );
+
+        assert!(
+            result.is_err(),
+            "Lookup ref with non-unique attribute should fail"
+        );
+    }
+
+    // ============================================================================
+    // Transaction Isolation Tests (CRITICAL FIX - Marco Slot Review)
+    // ============================================================================
+
+    #[pg_test]
+    fn test_transaction_rollback_on_error() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema
+        let schema_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('[
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :person/age :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
+            ]')::TEXT"
+        );
+        assert!(schema_result.is_ok(), "Schema transaction should succeed");
+
+        // Count initial datoms
+        let initial_count =
+            Spi::get_one::<i64>("SELECT COUNT(*)::BIGINT FROM mentat.datoms WHERE added = true")
+                .expect("Count query failed")
+                .expect("Count returned NULL");
+
+        // Attempt transaction with invalid data (type mismatch on age)
+        // This should ROLLBACK completely, leaving no partial data
+        let bad_tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('[
+                {:db/id \"alice\" :person/name \"Alice\" :person/age 30}
+                {:db/id \"bob\" :person/name \"Bob\" :person/age \"thirty\"}
+            ]')::TEXT",
+        );
+
+        // Transaction should fail due to type mismatch
+        assert!(
+            bad_tx_result.is_err(),
+            "Transaction with invalid data type should fail"
+        );
+
+        // CRITICAL: Verify NO datoms were inserted (rollback worked)
+        let final_count =
+            Spi::get_one::<i64>("SELECT COUNT(*)::BIGINT FROM mentat.datoms WHERE added = true")
+                .expect("Count query failed")
+                .expect("Count returned NULL");
+
+        assert_eq!(
+            initial_count, final_count,
+            "Datom count unchanged after failed transaction proves ROLLBACK worked"
+        );
+
+        // Verify Alice was not partially inserted
+        let alice_check = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find (count ?e) . :where [?e :person/name \"Alice\"]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let alice_json: serde_json::Value =
+            serde_json::from_str(&alice_check).expect("Failed to parse query result");
+        let alice_count = alice_json["result"].as_i64().unwrap_or(0);
+
+        assert_eq!(alice_count, 0, "Alice should not exist after rollback");
+    }
+
+    #[pg_test]
+    fn test_transaction_commits_on_success() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema
+        Spi::get_one::<String>(
+            "SELECT mentat_transact('[
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]')::TEXT"
+        ).expect("Schema transaction should succeed");
+
+        // Valid transaction should commit fully
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_transact('[
+                {:db/id \"alice\" :person/name \"Alice\"}
+                {:db/id \"bob\" :person/name \"Bob\"}
+            ]')::TEXT",
+        )
+        .expect("Transaction should succeed")
+        .expect("Transaction returned NULL");
+
+        // Verify transaction report
+        let tx_report: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse transaction report");
+        assert!(tx_report["tx-id"].is_number(), "Should have tx-id");
+
+        // Verify both entities committed
+        let count_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find (count ?e) . :where [?e :person/name]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let count_json: serde_json::Value =
+            serde_json::from_str(&count_result).expect("Failed to parse count result");
+        let count = count_json["result"].as_i64().expect("Expected count");
+
+        assert_eq!(count, 2, "Both entities should be committed");
+    }
+
+    // ============================================================================
+    // :db/retract Comprehensive Tests
+    // ============================================================================
+
+    #[pg_test]
+    fn test_db_retract_specific_value() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Step 1: Add datoms with :db/add
+        let tx1_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Bob\"]
+                 [:db/add \"p1\" :person/age 25]
+                 [:db/add \"p1\" :person/status \"active\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction 1 failed")
+        .expect("Transaction 1 returned NULL");
+
+        let tx1_json: serde_json::Value =
+            serde_json::from_str(&tx1_result).expect("Failed to parse tx1 result");
+        let bob_eid = tx1_json["tempids"]["p1"]
+            .as_i64()
+            .expect("Missing p1 tempid");
+
+        // Verify all attributes are present before retraction
+        let query_before = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?status
+                      :where
+                      [{} :person/status ?status]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            bob_eid
+        ))
+        .expect("Query before retraction failed")
+        .expect("Query returned NULL");
+
+        let before_json: serde_json::Value =
+            serde_json::from_str(&query_before).expect("Failed to parse");
+        let results_before = before_json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results_before.len(),
+            1,
+            "Should find status before retraction"
+        );
+        assert_eq!(results_before[0][0].as_str().unwrap(), "active");
+
+        // Step 2: Retract a specific value with :db/retract
+        let retract_tx = format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/status \"active\"]]'::TEXT)::TEXT",
+            bob_eid
+        );
+        Spi::run(&retract_tx).expect("Retraction failed");
+
+        // Step 3: Normal query should NOT find the retracted datom
+        let query_after = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?status
+                      :where
+                      [{} :person/status ?status]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            bob_eid
+        ))
+        .expect("Query after retraction failed")
+        .expect("Query returned NULL");
+
+        let after_json: serde_json::Value =
+            serde_json::from_str(&query_after).expect("Failed to parse");
+        let results_after = after_json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            results_after.len(),
+            0,
+            "Should NOT find status after retraction"
+        );
+
+        // Non-retracted attributes should still be present
+        let name_query = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?name
+                      :where
+                      [{} :person/name ?name]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            bob_eid
+        ))
+        .expect("Name query failed")
+        .expect("Query returned NULL");
+
+        let name_json: serde_json::Value =
+            serde_json::from_str(&name_query).expect("Failed to parse");
+        let name_results = name_json["results"].as_array().expect("Expected array");
+        assert_eq!(
+            name_results.len(),
+            1,
+            "Non-retracted name should still be present"
+        );
+        assert_eq!(name_results[0][0].as_str().unwrap(), "Bob");
+
+        // Step 4: History query should show both assertion and retraction
+        let history_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?status ?tx ?added
+                      :where
+                      [{} :person/status ?status ?tx ?added]]'::TEXT,
+                    '{{\"history\": true}}' ::jsonb
+                )::TEXT",
+            bob_eid
+        ))
+        .expect("History query failed")
+        .expect("History query returned NULL");
+
+        let history_json: serde_json::Value =
+            serde_json::from_str(&history_result).expect("Failed to parse");
+        let history_results = history_json["results"].as_array().expect("Expected array");
+
+        assert_eq!(
+            history_results.len(),
+            2,
+            "History should contain both assertion and retraction"
+        );
+
+        let has_assertion = history_results
+            .iter()
+            .any(|row| row.as_array().unwrap()[2].as_bool().unwrap() == true);
+        let has_retraction = history_results
+            .iter()
+            .any(|row| row.as_array().unwrap()[2].as_bool().unwrap() == false);
+
+        assert!(
+            has_assertion,
+            "History should include the assertion (added=true)"
+        );
+        assert!(
+            has_retraction,
+            "History should include the retraction (added=false)"
+        );
+    }
+
+    // ============================================================================
+    // Cardinality-Many Tests
+    // ============================================================================
+
+    /// Helper: define a cardinality-many string attribute :person/tag
+    fn setup_cardinality_many_schema() {
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"name-attr\" :db/ident :person/name]
+                 [:db/add \"name-attr\" :db/valueType :db.type/string]
+                 [:db/add \"name-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"tag-attr\" :db/ident :person/tag]
+                 [:db/add \"tag-attr\" :db/valueType :db.type/string]
+                 [:db/add \"tag-attr\" :db/cardinality :db.cardinality/many]
+                 [:db/add \"friend-attr\" :db/ident :person/friends]
+                 [:db/add \"friend-attr\" :db/valueType :db.type/ref]
+                 [:db/add \"friend-attr\" :db/cardinality :db.cardinality/many]]
+            '::TEXT)",
+        )
+        .expect("Failed to setup cardinality-many schema");
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_multiple_values() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add multiple tags to one entity
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]
+                 [:db/add \"alice\" :person/tag \"smart\"]
+                 [:db/add \"alice\" :person/tag \"tall\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Query should return all three tags
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag
+                      :where
+                      [{} :person/tag ?tag]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have 3 tags for cardinality-many attribute"
+        );
+
+        let tags: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert!(tags.contains(&"friendly"), "Should contain 'friendly'");
+        assert!(tags.contains(&"smart"), "Should contain 'smart'");
+        assert!(tags.contains(&"tall"), "Should contain 'tall'");
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_across_transactions() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // First transaction: add initial tags
+        let tx1_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction 1 failed")
+        .expect("Transaction 1 returned NULL");
+
+        let tx1_json: serde_json::Value =
+            serde_json::from_str(&tx1_result).expect("Failed to parse tx1 result");
+        let alice_eid = tx1_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Second transaction: add more tags using entity ID
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/tag \"smart\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Transaction 2 failed");
+
+        // Third transaction: add yet another tag
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/tag \"tall\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Transaction 3 failed");
+
+        // Query should return all three tags from different transactions
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag
+                      :where
+                      [{} :person/tag ?tag]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            results.len(),
+            3,
+            "Should have 3 tags across multiple transactions"
+        );
+
+        let tags: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert!(tags.contains(&"friendly"), "Should contain 'friendly'");
+        assert!(tags.contains(&"smart"), "Should contain 'smart'");
+        assert!(tags.contains(&"tall"), "Should contain 'tall'");
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_retract_single_value() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add multiple tags
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]
+                 [:db/add \"alice\" :person/tag \"smart\"]
+                 [:db/add \"alice\" :person/tag \"tall\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Retract just one value
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/tag \"smart\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Retraction failed");
+
+        // Query should return only the two remaining tags
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag
+                      :where
+                      [{} :person/tag ?tag]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(results.len(), 2, "Should have 2 tags after retracting one");
+
+        let tags: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert!(
+            tags.contains(&"friendly"),
+            "Should still contain 'friendly'"
+        );
+        assert!(tags.contains(&"tall"), "Should still contain 'tall'");
+        assert!(
+            !tags.contains(&"smart"),
+            "Should NOT contain retracted 'smart'"
+        );
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_idempotent_assertion() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add a tag
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Assert the same value again -- should be idempotent (no duplicate)
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/tag \"friendly\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Idempotent assertion failed");
+
+        // Should still have exactly one "friendly" tag, not two
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag
+                      :where
+                      [{} :person/tag ?tag]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            results.len(),
+            1,
+            "Idempotent assertion should not create duplicates"
+        );
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_ref_type() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Create entities and add multiple ref values (friends)
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"bob\" :person/name \"Bob\"]
+                 [:db/add \"charlie\" :person/name \"Charlie\"]
+                 [:db/add \"alice\" :person/friends \"bob\"]
+                 [:db/add \"alice\" :person/friends \"charlie\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Query all friends of Alice
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?friend-name
+                      :where
+                      [{} :person/friends ?f]
+                      [?f :person/name ?friend-name]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let results = query_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(results.len(), 2, "Alice should have 2 friends");
+
+        let friend_names: Vec<&str> = results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert!(friend_names.contains(&"Bob"), "Should contain 'Bob'");
+        assert!(
+            friend_names.contains(&"Charlie"),
+            "Should contain 'Charlie'"
+        );
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_pull() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add entity with cardinality-many values
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]
+                 [:db/add \"alice\" :person/tag \"smart\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Pull should return cardinality-many as an array
+        let pull_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[:person/name :person/tag]', {})",
+            alice_eid
+        ))
+        .expect("Pull failed")
+        .expect("Pull returned NULL");
+
+        let pull_json: serde_json::Value =
+            serde_json::from_str(&pull_result).expect("Failed to parse pull result");
+
+        assert_eq!(
+            pull_json[":person/name"].as_str(),
+            Some("Alice"),
+            "Name should be a single string (cardinality one)"
+        );
+
+        let tags = pull_json[":person/tag"]
+            .as_array()
+            .expect("Tags should be an array (cardinality many)");
+
+        assert_eq!(tags.len(), 2, "Should have 2 tags");
+
+        let tag_strs: Vec<&str> = tags.iter().map(|t| t.as_str().unwrap()).collect();
+
+        assert!(tag_strs.contains(&"friendly"), "Should contain 'friendly'");
+        assert!(tag_strs.contains(&"smart"), "Should contain 'smart'");
+    }
+
+    #[pg_test]
+    fn test_cardinality_many_history() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add tags across transactions
+        let tx1_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction 1 failed")
+        .expect("Transaction 1 returned NULL");
+
+        let tx1_json: serde_json::Value =
+            serde_json::from_str(&tx1_result).expect("Failed to parse tx1 result");
+        let alice_eid = tx1_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/tag \"smart\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Transaction 2 failed");
+
+        // Retract one tag
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/tag \"friendly\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("Retraction failed");
+
+        // History should show all assertions and retractions
+        let history_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag ?added
+                      :where
+                      [{} :person/tag ?tag _ ?added]]'::TEXT,
+                    '{{\"history\": true}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("History query failed")
+        .expect("History query returned NULL");
+
+        let history_json: serde_json::Value =
+            serde_json::from_str(&history_result).expect("Failed to parse history result");
+        let results = history_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        // Should have: "friendly" added, "smart" added, "friendly" retracted = 3 entries
+        assert_eq!(
+            results.len(),
+            3,
+            "History should show 3 datoms (2 assertions + 1 retraction)"
+        );
+
+        let assertions: Vec<&str> = results
+            .iter()
+            .filter(|r| r.as_array().unwrap()[1].as_bool().unwrap())
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        let retractions: Vec<&str> = results
+            .iter()
+            .filter(|r| !r.as_array().unwrap()[1].as_bool().unwrap())
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert_eq!(assertions.len(), 2, "Should have 2 assertions");
+        assert!(
+            assertions.contains(&"friendly"),
+            "Assertions should include 'friendly'"
+        );
+        assert!(
+            assertions.contains(&"smart"),
+            "Assertions should include 'smart'"
+        );
+        assert_eq!(retractions.len(), 1, "Should have 1 retraction");
+        assert_eq!(
+            retractions[0], "friendly",
+            "Retraction should be 'friendly'"
+        );
+    }
+
+    #[pg_test]
+    fn test_cardinality_one_vs_many_semantics() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_cardinality_many_schema();
+
+        // Add entity with both cardinality-one (name) and cardinality-many (tag)
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/tag \"friendly\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Update cardinality-one (should replace) and add cardinality-many (should accumulate)
+        Spi::run(&format!(
+            "SELECT mentat_transact('
+                [[:db/add {} :person/name \"Alicia\"]
+                 [:db/add {} :person/tag \"smart\"]]
+            '::TEXT)",
+            alice_eid, alice_eid
+        ))
+        .expect("Update transaction failed");
+
+        // cardinality-one: name should be replaced
+        let name_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?name .
+                      :where
+                      [{} :person/name ?name]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Name query failed")
+        .expect("Name query returned NULL");
+
+        let name_json: serde_json::Value =
+            serde_json::from_str(&name_result).expect("Failed to parse name result");
+        assert_eq!(
+            name_json["result"].as_str(),
+            Some("Alicia"),
+            "Cardinality-one name should be replaced"
+        );
+
+        // cardinality-many: both tags should be present
+        let tag_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?tag
+                      :where
+                      [{} :person/tag ?tag]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Tag query failed")
+        .expect("Tag query returned NULL");
+
+        let tag_json: serde_json::Value =
+            serde_json::from_str(&tag_result).expect("Failed to parse tag result");
+        let tag_results = tag_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        assert_eq!(
+            tag_results.len(),
+            2,
+            "Cardinality-many should accumulate both tags"
+        );
+
+        let tags: Vec<&str> = tag_results
+            .iter()
+            .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
+            .collect();
+
+        assert!(tags.contains(&"friendly"), "Should still have 'friendly'");
+        assert!(tags.contains(&"smart"), "Should have new 'smart'");
+    }
+
+    // ============================================================================
+    // :db.fn/cas (Compare-And-Swap) Tests
+    // ============================================================================
+
+    #[pg_test]
+    fn test_cas_success_cardinality_one() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity with a name
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/age 25]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS: change name from "Alice" to "Alicia" (should succeed)
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/name \"Alice\" \"Alicia\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("CAS transaction should succeed");
+
+        // Verify the name was updated
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :where [{} :person/name ?name]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        assert_eq!(
+            query_json["result"].as_str(),
+            Some("Alicia"),
+            "CAS should have updated name to Alicia"
+        );
+
+        // Verify age was not affected
+        let age_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?age .
+                  :where [{} :person/age ?age]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Age query failed")
+        .expect("Age query returned NULL");
+
+        let age_json: serde_json::Value =
+            serde_json::from_str(&age_result).expect("Failed to parse age result");
+        assert_eq!(
+            age_json["result"].as_i64(),
+            Some(25),
+            "Age should not be affected by CAS on name"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_failure_wrong_old_value() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS with wrong old value: expect "Bob" but actual is "Alice"
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/name \"Bob\" \"Charlie\"]]'::TEXT)::TEXT",
+            alice_eid
+        ));
+
+        assert!(result.is_err(), "CAS should fail when old value doesn't match");
+
+        // Verify value was NOT changed
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :where [{} :person/name ?name]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        assert_eq!(
+            query_json["result"].as_str(),
+            Some("Alice"),
+            "Value should remain unchanged after failed CAS"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_nil_old_value_success() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity with name but no age
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS with nil old value: attribute doesn't exist yet (should succeed)
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/age nil 30]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("CAS with nil old value should succeed when attribute has no value");
+
+        // Verify the age was set
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?age .
+                  :where [{} :person/age ?age]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        assert_eq!(
+            query_json["result"].as_i64(),
+            Some(30),
+            "CAS with nil should have set age to 30"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_nil_old_value_failure() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity WITH an age already set
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/age 25]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS with nil old value should fail because age already exists
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/age nil 30]]'::TEXT)::TEXT",
+            alice_eid
+        ));
+
+        assert!(
+            result.is_err(),
+            "CAS with nil old value should fail when attribute already has a value"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_integer_values() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity with age 25
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/age 25]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS: change age from 25 to 26
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/age 25 26]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("CAS on integer should succeed");
+
+        // Verify age updated
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?age .
+                  :where [{} :person/age ?age]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        assert_eq!(
+            query_json["result"].as_i64(),
+            Some(26),
+            "CAS should have updated age to 26"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_rollback_on_failure() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]
+                 [:db/add \"alice\" :person/age 25]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Transaction with a valid add followed by a failing CAS
+        // The entire transaction should be rolled back
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[[:db/add {} :person/name \"Updated\"] \
+             [:db.fn/cas {} :person/age 999 30]]'::TEXT)::TEXT",
+            alice_eid, alice_eid
+        ));
+
+        assert!(result.is_err(), "Transaction with failing CAS should be rolled back");
+
+        // Verify name was NOT changed (rollback)
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :where [{} :person/name ?name]]'::TEXT,
+                '{{}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        assert_eq!(
+            query_json["result"].as_str(),
+            Some("Alice"),
+            "Name should remain unchanged after rolled-back CAS transaction"
+        );
+    }
+
+    #[pg_test]
+    fn test_cas_history_shows_retraction_and_assertion() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Create entity
+        let tx_result = Spi::get_one::<String>(
+            "SELECT mentat_transact('
+                [[:db/add \"alice\" :person/name \"Alice\"]]
+            '::TEXT)::TEXT",
+        )
+        .expect("Transaction failed")
+        .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // CAS: change name from Alice to Alicia
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db.fn/cas {} :person/name \"Alice\" \"Alicia\"]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("CAS should succeed");
+
+        // History should show both the original assertion and the CAS retraction+assertion
+        let history_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                '[:find ?name ?added
+                  :where [{} :person/name ?name _ ?added]]'::TEXT,
+                '{{\"history\": true}}' ::jsonb
+            )::TEXT",
+            alice_eid
+        ))
+        .expect("History query failed")
+        .expect("History query returned NULL");
+
+        let history_json: serde_json::Value =
+            serde_json::from_str(&history_result).expect("Failed to parse history result");
+        let results = history_json["results"]
+            .as_array()
+            .expect("Expected results array");
+
+        // Should have: "Alice" added (original), "Alice" retracted (CAS), "Alicia" added (CAS)
+        assert_eq!(
+            results.len(),
+            3,
+            "History should show 3 datoms: original assert, CAS retract, CAS assert"
+        );
+
+        let alice_added = results
+            .iter()
+            .any(|r| {
+                let row = r.as_array().unwrap();
+                row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(true)
+            });
+        let alice_retracted = results
+            .iter()
+            .any(|r| {
+                let row = r.as_array().unwrap();
+                row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(false)
+            });
+        let alicia_added = results
+            .iter()
+            .any(|r| {
+                let row = r.as_array().unwrap();
+                row[0].as_str() == Some("Alicia") && row[1].as_bool() == Some(true)
+            });
+
+        assert!(alice_added, "History should show Alice was asserted");
+        assert!(alice_retracted, "History should show Alice was retracted by CAS");
+        assert!(alicia_added, "History should show Alicia was asserted by CAS");
+    }
+
+    // ============================================================================
+    // Prepared Statement Cache Tests
+    // ============================================================================
+
+    #[pg_test]
+    fn test_stmt_cache_stats_initial() {
+        // Cache starts empty
+        let result = Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed")
+            .expect("Cache clear returned NULL");
+        assert_eq!(result, "ok");
+
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert_eq!(stats["size"], 0, "Cache should start empty after clear");
+        assert_eq!(stats["total_hits"], 0, "No hits after clear");
+    }
+
+    #[pg_test]
+    fn test_stmt_cache_populates_on_query() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Clear cache first
+        Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed");
+
+        // Run a query - should create a cache entry
+        Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?x ?ident :where [?x :db/ident ?ident]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert_eq!(stats["size"], 1, "Cache should have 1 entry after first query");
+        assert_eq!(stats["total_hits"], 0, "No hits yet (first execution was a miss)");
+    }
+
+    #[pg_test]
+    fn test_stmt_cache_hits_on_repeated_query() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Clear cache first
+        Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed");
+
+        let query = "SELECT mentat_query(
+            '[:find ?x ?ident :where [?x :db/ident ?ident]]'::TEXT,
+            '{}'::jsonb
+        )::TEXT";
+
+        // First execution: cache miss
+        Spi::get_one::<String>(query).expect("Query 1 failed");
+
+        // Second execution: cache hit
+        Spi::get_one::<String>(query).expect("Query 2 failed");
+
+        // Third execution: another cache hit
+        Spi::get_one::<String>(query).expect("Query 3 failed");
+
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert_eq!(stats["size"], 1, "Same query pattern should produce 1 cache entry");
+        assert_eq!(stats["total_hits"], 2, "Should have 2 cache hits (queries 2 and 3)");
+    }
+
+    #[pg_test]
+    fn test_stmt_cache_different_queries_separate_entries() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Clear cache first
+        Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed");
+
+        // Query 1: find ident
+        Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?ident . :where [1 :db/ident ?ident]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query 1 failed");
+
+        // Query 2: find valueType
+        Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?type . :where [1 :db/valueType ?type]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query 2 failed");
+
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert_eq!(stats["size"], 2, "Different queries should produce separate cache entries");
+    }
+
+    #[pg_test]
+    fn test_stmt_cache_clear_resets() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Run some queries to populate cache
+        Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?x ?ident :where [?x :db/ident ?ident]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        // Verify cache is non-empty
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert!(stats["size"].as_u64().expect("size should be int") > 0, "Cache should be non-empty");
+
+        // Clear and verify
+        Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed");
+
+        let stats_str = Spi::get_one::<String>("SELECT mentat_stmt_cache_stats()::TEXT")
+            .expect("Stats query failed")
+            .expect("Stats returned NULL");
+        let stats: serde_json::Value =
+            serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
+        assert_eq!(stats["size"], 0, "Cache should be empty after clear");
+        assert_eq!(stats["total_hits"], 0, "Hits should be zero after clear");
+    }
+
+    #[pg_test]
+    fn test_stmt_cache_correct_results_after_cache_hit() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Clear cache
+        Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
+            .expect("Cache clear failed");
+
+        let query = "SELECT mentat_query(
+            '[:find ?ident . :where [1 :db/ident ?ident]]'::TEXT,
+            '{}'::jsonb
+        )::TEXT";
+
+        // First execution (cache miss)
+        let result1_str = Spi::get_one::<String>(query)
+            .expect("Query 1 failed")
+            .expect("Query 1 returned NULL");
+        let result1: serde_json::Value =
+            serde_json::from_str(&result1_str).expect("Failed to parse result 1");
+
+        // Second execution (cache hit)
+        let result2_str = Spi::get_one::<String>(query)
+            .expect("Query 2 failed")
+            .expect("Query 2 returned NULL");
+        let result2: serde_json::Value =
+            serde_json::from_str(&result2_str).expect("Failed to parse result 2");
+
+        // Results should be identical
+        assert_eq!(result1, result2, "Cached query should produce identical results");
+        assert_eq!(
+            result1["result"].as_str().expect("Expected string result"),
+            ":db/ident",
+            "Both should return :db/ident"
+        );
+    }
+
+    // ============================================================================
+    // Error Message Quality Tests
+    // ============================================================================
+
+    /// Helper to run a SQL statement and return the error message string.
+    fn get_error_message(sql: &str) -> String {
+        match Spi::get_one::<String>(sql) {
+            Err(e) => format!("{e}"),
+            Ok(_) => panic!("Expected error from SQL: {sql}"),
+        }
+    }
+
+    #[pg_test]
+    fn test_error_invalid_transaction_not_vector() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        crate::cache::get_cache().invalidate();
+
+        let err = get_error_message(
+            "SELECT mentat_transact('42'::TEXT)"
+        );
+        assert!(
+            err.contains(":db.error/invalid-transaction"),
+            "Error should contain error code, got: {err}"
+        );
+        assert!(
+            err.contains("vector"),
+            "Error should mention 'vector', got: {err}"
+        );
+    }
+
+    #[pg_test]
+    fn test_error_attribute_not_found_includes_available() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        crate::cache::get_cache().invalidate();
+
+        let err = get_error_message(
+            "SELECT mentat_transact('[[:db/add \"t\" :nonexistent/attr \"val\"]]'::TEXT)"
+        );
+        assert!(
+            err.contains(":db.error/attribute-not-found"),
+            "Error should contain error code, got: {err}"
+        );
+        assert!(
+            err.contains("Available attributes") || err.contains("not found in schema"),
+            "Error should list available attributes or indicate schema lookup failure, got: {err}"
+        );
+    }
+
+    #[pg_test]
+    fn test_error_type_mismatch_is_descriptive() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+        crate::cache::get_cache().invalidate();
+
+        // :person/age is :db.type/long, so passing a string should fail
+        let err = get_error_message(
+            "SELECT mentat_transact('[[:db/add \"p\" :person/age \"not-a-number\"]]'::TEXT)"
+        );
+        assert!(
+            err.contains(":db.error/wrong-type-for-attribute"),
+            "Error should contain type mismatch error code, got: {err}"
+        );
+        assert!(
+            err.contains("person/age"),
+            "Error should mention the attribute name, got: {err}"
+        );
+        assert!(
+            err.contains("long"),
+            "Error should mention the expected type, got: {err}"
+        );
+    }
+
+    #[pg_test]
+    fn test_error_pull_pattern_not_vector() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        crate::cache::get_cache().invalidate();
+
+        let err = get_error_message(
+            "SELECT mentat_pull(':person/name'::TEXT, 1)"
+        );
+        assert!(
+            err.contains(":db.error/invalid-pull-pattern"),
+            "Error should contain pull pattern error code, got: {err}"
+        );
+        assert!(
+            err.contains("vector"),
+            "Error should suggest vector format, got: {err}"
+        );
+    }
+
+    #[pg_test]
+    fn test_error_unsupported_aggregate() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        crate::cache::get_cache().invalidate();
+
+        let err = get_error_message(
+            "SELECT mentat_query(
+                '[:find (median ?x) :where [?x :db/ident _]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT"
+        );
+        assert!(
+            err.contains(":db.error/unsupported-aggregate"),
+            "Error should contain aggregate error code, got: {err}"
+        );
+        assert!(
+            err.contains("count") || err.contains("sum"),
+            "Error should list valid aggregates, got: {err}"
+        );
+    }
+
+    #[pg_test]
+    fn test_error_batch_unknown_operation() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        crate::cache::get_cache().invalidate();
+
+        let err = get_error_message(
+            "SELECT mentat.batch('[[:bogus 123]]'::TEXT)::TEXT"
+        );
+        assert!(
+            err.contains(":db.error/unknown-batch-op") || err.contains(":db.error/invalid-batch-op"),
+            "Error should contain batch operation error code, got: {err}"
+        );
+        assert!(
+            err.contains(":query") || err.contains(":transact"),
+            "Error should list valid operations, got: {err}"
+        );
     }
 }

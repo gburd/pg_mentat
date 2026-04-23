@@ -6,9 +6,94 @@ use edn::query::{
 };
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use pgrx::spi::OwnedPreparedStatement;
 use pgrx::JsonB;
 use serde_json::json;
+use std::cell::RefCell;
 use std::collections::HashMap;
+
+// ============================================================================
+// Prepared Statement Cache
+// ============================================================================
+
+/// Cache entry storing a prepared statement and hit count for diagnostics.
+struct CacheEntry {
+    stmt: OwnedPreparedStatement,
+    hits: u64,
+}
+
+/// Thread-local prepared statement cache.
+///
+/// Uses the generated SQL string as the cache key. Since PostgreSQL backends
+/// are single-threaded, a `RefCell` is sufficient (no `Mutex` needed).
+/// `OwnedPreparedStatement` uses `SPI_keepplan` to persist the plan in
+/// `TopMemoryContext`, so it survives across SPI connection lifetimes.
+thread_local! {
+    static STMT_CACHE: RefCell<HashMap<String, CacheEntry>> = RefCell::new(HashMap::new());
+}
+
+/// Clear the prepared statement cache.
+/// Called when schema changes invalidate cached plans.
+pub fn clear_stmt_cache() {
+    STMT_CACHE.with(|cache| {
+        cache.borrow_mut().clear();
+    });
+}
+
+/// Execute a SQL query using the prepared statement cache.
+///
+/// If a prepared statement for the given SQL already exists in the cache,
+/// reuse it. Otherwise, prepare a new statement, cache it via `SPI_keepplan`,
+/// and execute it.
+///
+/// Returns the `SpiTupleTable` for the caller to iterate over.
+fn execute_cached_query<'a>(
+    client: &pgrx::spi::SpiClient<'a>,
+    sql: &str,
+    params: &[DatumWithOid<'_>],
+) -> Result<pgrx::spi::SpiTupleTable<'a>, pgrx::spi::SpiError> {
+    // Try to execute with a cached statement.
+    // The borrow of the RefCell is scoped to the closure and released
+    // before the SpiTupleTable is used (it references SPI memory, not the plan).
+    let cached_result: Option<Result<pgrx::spi::SpiTupleTable<'a>, _>> =
+        STMT_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if let Some(entry) = cache.get_mut(sql) {
+                entry.hits += 1;
+                // Execute using the cached prepared statement.
+                // SPI_execute_plan copies what it needs from the plan;
+                // the returned SpiTupleTable only references SPI memory context.
+                Some(client.select(&entry.stmt, None, params))
+            } else {
+                None
+            }
+        });
+
+    if let Some(result) = cached_result {
+        return result;
+    }
+
+    // Cache miss: prepare, execute, then cache the plan.
+    let arg_types: Vec<PgOid> = params.iter().map(|p| PgOid::from_untagged(p.oid())).collect();
+    let prepared = client.prepare(sql, &arg_types)?;
+
+    // Execute using the borrowed prepared statement (does not consume it).
+    let result = client.select(&prepared, None, params)?;
+
+    // Keep the plan (moves it to TopMemoryContext) and cache it.
+    let owned = prepared.keep();
+    STMT_CACHE.with(|cache| {
+        cache.borrow_mut().insert(
+            sql.to_string(),
+            CacheEntry {
+                stmt: owned,
+                hits: 0,
+            },
+        );
+    });
+
+    Ok(result)
+}
 
 /// Value type tags matching the encoding used in transact.rs and pull.rs:
 ///   0 = ref      (i64 entity ID, little-endian)
@@ -85,6 +170,33 @@ fn parse_temporal_options(inputs: &serde_json::Value) -> TemporalOption {
         }
         if let Some(history) = obj.get("history").and_then(|v| v.as_bool()) {
             opts.history = history;
+        }
+    }
+    opts
+}
+
+/// Pagination options parsed from the inputs JSON parameter.
+#[derive(Default)]
+struct PaginationOption {
+    /// If set, limit the number of result rows returned.
+    limit: Option<i64>,
+    /// If set, skip this many result rows before returning.
+    offset: Option<i64>,
+}
+
+/// Parse pagination options from the inputs JSON parameter.
+fn parse_pagination_options(inputs: &serde_json::Value) -> PaginationOption {
+    let mut opts = PaginationOption::default();
+    if let Some(obj) = inputs.as_object() {
+        if let Some(limit) = obj.get("limit").and_then(|v| v.as_i64()) {
+            if limit >= 0 {
+                opts.limit = Some(limit);
+            }
+        }
+        if let Some(offset) = obj.get("offset").and_then(|v| v.as_i64()) {
+            if offset >= 0 {
+                opts.offset = Some(offset);
+            }
         }
     }
     opts
@@ -196,6 +308,14 @@ fn bind_input_entity(
 /// - `{"asOf": <tx_id>}` - return datoms as of transaction tx_id
 /// - `{"since": <tx_id>}` - return datoms since transaction tx_id
 /// - `{"history": true}` - return all datom versions including retractions
+///
+/// Supports pagination via the inputs JSON parameter:
+/// - `{"limit": 1000}` - return at most 1000 results
+/// - `{"offset": 100}` - skip the first 100 results
+/// - `{"limit": 1000, "offset": 100}` - return results 101-1100
+///
+/// When both a Datalog `:limit` clause and an inputs `limit` are specified,
+/// the inputs `limit` takes precedence (it wraps the generated SQL).
 #[pg_extern]
 pub fn mentat_query(
     query: &str,
@@ -208,9 +328,10 @@ pub fn mentat_query(
     let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
     let has_aggregates = find_spec_has_aggregates(&parsed_query.find_spec);
     let find_vars = extract_find_variables(&parsed_query.find_spec);
+    let pagination = parse_pagination_options(&inputs.0);
 
     let mut builder = SqlBuilder::new();
-    let sql_query = build_sql_from_datalog(
+    let mut sql_query = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -218,11 +339,26 @@ pub fn mentat_query(
         &input_bindings,
     )?;
 
+    // Apply pagination from inputs JSON. This appends LIMIT/OFFSET to the
+    // generated SQL, overriding any Datalog :limit if both are present.
+    if let Some(limit) = pagination.limit {
+        // Remove any existing LIMIT clause (from Datalog :limit) to avoid
+        // a SQL syntax error from duplicate LIMIT. The generated SQL always
+        // uses uppercase " LIMIT " so we can search directly.
+        if let Some(pos) = sql_query.rfind(" LIMIT ") {
+            sql_query.truncate(pos);
+        }
+        sql_query.push_str(&format!(" LIMIT {}", limit));
+    }
+    if let Some(offset) = pagination.offset {
+        sql_query.push_str(&format!(" OFFSET {}", offset));
+    }
+
     let params = builder.params;
     let results = Spi::connect(|client| {
         let mut rows_json = Vec::new();
 
-        for row in client.select(&sql_query, None, &params)? {
+        for row in execute_cached_query(&client, &sql_query, &params)? {
             let mut row_values = Vec::new();
 
             for (idx, _var) in find_vars.iter().enumerate() {
@@ -245,6 +381,53 @@ pub fn mentat_query(
         format_find_response(&parsed_query.find_spec, &find_vars, results, has_aggregates);
 
     Ok(JsonB(response))
+}
+
+/// Return prepared statement cache statistics as JSON.
+///
+/// Returns: `{"size": <num_cached>, "total_hits": <total_reuse_count>,
+///            "entries": [{"sql": "...", "hits": N}, ...]}`
+#[pg_extern]
+pub fn mentat_stmt_cache_stats() -> JsonB {
+    let stats = STMT_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let entries: Vec<serde_json::Value> = cache
+            .iter()
+            .map(|(sql, entry)| {
+                let prefix: &str = if sql.len() > 120 {
+                    // Find a safe UTF-8 boundary at or before byte 120
+                    let mut end = 120;
+                    while end > 0 && !sql.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    &sql[..end]
+                } else {
+                    sql.as_str()
+                };
+                json!({
+                    "sql_prefix": prefix,
+                    "hits": entry.hits,
+                })
+            })
+            .collect();
+        let total_hits: u64 = cache.values().map(|e| e.hits).sum();
+        json!({
+            "size": cache.len(),
+            "total_hits": total_hits,
+            "entries": entries,
+        })
+    });
+    JsonB(stats)
+}
+
+/// Clear the prepared statement cache.
+///
+/// Should be called after schema changes (e.g., new attributes defined via
+/// `mentat_transact`) that may invalidate cached query plans.
+#[pg_extern]
+pub fn mentat_stmt_cache_clear() -> &'static str {
+    clear_stmt_cache();
+    "ok"
 }
 
 /// Format the query response based on the FindSpec variant.
@@ -507,7 +690,8 @@ fn bind_constant_value(
                 )))
             }
             NonIntegerConstant::BigInteger(_) => {
-                Err("BigInteger constants are not supported in query patterns".into())
+                Err(":db.error/unsupported-constant BigInteger constants are not supported \
+                     in query patterns. Use a regular integer (long) value instead.".into())
             }
         },
         PatternValuePlace::Variable(_) | PatternValuePlace::Placeholder => Ok(None),
@@ -565,7 +749,8 @@ fn build_sql_from_datalog(
                 extra_var_bindings.insert(var_name, expr);
             } else {
                 return Err(format!(
-                    "Where-function '{}' is not yet supported in query translation",
+                    ":db.error/unsupported-where-fn Where-function '{}' is not supported. \
+                     Supported functions: fulltext, *, +, -, /",
                     op_name
                 )
                 .into());
@@ -603,12 +788,20 @@ fn build_sql_from_datalog(
         )?
     };
 
-    // Handle OR-joins
+    // Handle OR-joins using Datalog union semantics.
+    //
+    // Each OR branch is compiled into an independent SQL query that includes
+    // the base pattern clauses (shared context) plus the branch-specific
+    // patterns.  The branches are combined with UNION (not UNION ALL) to
+    // provide set-semantic deduplication: the same tuple may be produced by
+    // multiple branches, and Datalog treats the result as a set.
     let (query_sql, has_union) = if or_joins.is_empty() {
         (base_sql, false)
     } else {
         if or_joins.len() > 1 {
-            return Err("Multiple OR-join clauses in a single query are not yet supported".into());
+            return Err(":db.error/unsupported-query Multiple OR-join clauses in a single query \
+                        are not yet supported. Combine conditions into a single (or ...) clause \
+                        or split into separate queries.".into());
         }
 
         let or_join = or_joins[0];
@@ -623,16 +816,26 @@ fn build_sql_from_datalog(
                         match c {
                             WhereClause::Pattern(p) => ps.push(p),
                             _ => return Err(
-                                "Non-pattern clauses inside (or (and ...)) are not yet supported"
+                                ":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
+                                 are supported inside (or (and ...)). Predicates and function calls \
+                                 inside OR branches are not yet supported."
                                     .into(),
                             ),
                         }
                     }
                     ps
                 }
-                _ => return Err("Non-pattern clauses inside (or ...) are not yet supported".into()),
+                _ => return Err(
+                    ":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
+                     are supported inside (or ...). Predicates and function calls inside OR \
+                     branches are not yet supported.".into()),
             };
 
+            // Each arm gets the base patterns plus its own patterns.
+            // This ensures variable bindings from the shared context
+            // (e.g. [?p :person/name ?name]) are correctly included in
+            // every branch, maintaining consistent bindings across the
+            // UNION.
             let mut combined: Vec<&edn::query::Pattern> = pattern_clauses.clone();
             combined.extend(arm_patterns);
 
@@ -651,6 +854,8 @@ fn build_sql_from_datalog(
                 input_bindings,
             )?;
 
+            // Remap $N parameter placeholders so they don't collide
+            // when we concatenate multiple arms into a single query.
             let offset = builder.params.len();
             let remapped = if offset > 0 {
                 remap_param_indices(&arm_sql, offset)
@@ -675,7 +880,11 @@ fn build_sql_from_datalog(
     // Append ORDER BY
     // For non-UNION queries, pass var_to_alias so numeric columns (e, a, tx)
     // are ordered numerically rather than lexicographically as TEXT.
-    let var_alias_ref = if has_union { None } else { Some(&base_var_to_alias) };
+    let var_alias_ref = if has_union {
+        None
+    } else {
+        Some(&base_var_to_alias)
+    };
     let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref);
 
     // Append LIMIT
@@ -702,17 +911,22 @@ fn build_fulltext_join(
     var_bindings: &mut HashMap<String, String>,
 ) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
     if wf.args.len() < 3 {
-        return Err("fulltext requires at least 3 arguments: (fulltext $ :attr \"term\")".into());
+        return Err(":db.error/fulltext-args fulltext requires at least 3 arguments: \
+                    (fulltext $ :attr \"search-term\"). Got only {} arguments. \
+                    Example: [(fulltext $ :person/bio \"engineer\") [[?e ?val]]]"
+            .replace("{}", &wf.args.len().to_string()).into());
     }
 
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
-        _ => return Err("fulltext second argument must be a keyword attribute".into()),
+        _ => return Err(":db.error/fulltext-args fulltext second argument must be a keyword \
+                        attribute (e.g. :person/bio). Format: (fulltext $ :attr \"term\")".into()),
     };
 
     let search_term = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
-        _ => return Err("fulltext third argument must be a string search term".into()),
+        _ => return Err(":db.error/fulltext-args fulltext third argument must be a string \
+                        search term. Format: (fulltext $ :attr \"search words\")".into()),
     };
 
     let fts_alias = format!("fts{}", fts_idx);
@@ -825,12 +1039,20 @@ fn build_where_fn_binding(
     };
 
     if wf.args.len() != 2 {
-        return Err(format!("Arithmetic function '{}' requires exactly 2 arguments", op).into());
+        return Err(format!(
+            ":db.error/fn-arity Arithmetic function '{}' requires exactly 2 arguments, got {}. \
+             Example: [({} ?x 2) ?result]",
+            op, wf.args.len(), op
+        ).into());
     }
 
     let result_var = match &wf.binding {
         Binding::BindScalar(v) => format!("{}", v),
-        _ => return Err(format!("Arithmetic function '{}' requires a scalar binding", op).into()),
+        _ => return Err(format!(
+            ":db.error/fn-binding Arithmetic function '{}' requires a scalar binding (single variable). \
+             Example: [({} ?x 2) ?result]",
+            op, op
+        ).into()),
     };
 
     let arg0 = fn_arg_to_numeric_placeholder(&wf.args[0]);
@@ -910,9 +1132,7 @@ fn append_order_by(
                     // Use column alias from the subquery wrapper
                     let is_numeric = var_to_alias
                         .and_then(|vta| vta.get(var_name.as_str()))
-                        .map_or(false, |(_, col)| {
-                            *col == "e" || *col == "a" || *col == "tx"
-                        });
+                        .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx");
                     if is_numeric {
                         order_parts.push(format!("_c{}::BIGINT {}", col_pos + 1, dir));
                     } else {
@@ -926,9 +1146,8 @@ fn append_order_by(
         if !order_parts.is_empty() {
             if has_numeric_order {
                 // Wrap in subquery with named columns so we can cast in ORDER BY
-                let col_aliases: Vec<String> = (1..=find_vars.len())
-                    .map(|i| format!("_c{}", i))
-                    .collect();
+                let col_aliases: Vec<String> =
+                    (1..=find_vars.len()).map(|i| format!("_c{}", i)).collect();
                 return format!(
                     "SELECT {cols} FROM ({inner}) AS _q({col_defs}) ORDER BY {order}",
                     cols = col_aliases.join(", "),
@@ -1006,7 +1225,10 @@ fn build_extended_pattern_query(
     temporal: &TemporalOption,
     rule_cte_info: &Option<RuleCteInfo>,
     input_bindings: &HashMap<String, serde_json::Value>,
-) -> Result<(String, HashMap<String, (String, &'static str)>), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<
+    (String, HashMap<String, (String, &'static str)>),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     // Track variable bindings to datom table aliases
     let mut var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
     let mut joins = Vec::new();
@@ -1139,17 +1361,40 @@ fn build_extended_pattern_query(
             let param = builder.bind_bigint(as_of_tx);
             where_clauses.push(format!("{alias}.tx <= {param}"));
 
-            // For as-of queries, ensure we only return the most recent datom
-            // for each (e, a) pair within the as-of window. This handles the
-            // case where cardinality-one attributes have multiple assertions
-            // without explicit retractions.
-            let param2 = builder.bind_bigint(as_of_tx);
-            where_clauses.push(format!(
-                "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
-                 WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                 AND newer.added = true \
-                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
-            ));
+            // For as-of queries on cardinality-one attributes, exclude datoms
+            // that have been superseded by a newer assertion within the as-of
+            // window.  Cardinality-many attributes must NOT be filtered this
+            // way because multiple values for the same (e, a) are valid.
+            //
+            // We check cardinality at query-compile time when the attribute is
+            // a known constant; when it is a variable we skip the filter
+            // entirely (cardinality-one correctness is still guaranteed by the
+            // explicit retraction inserted during transact).
+            let is_cardinality_many = match &pattern.attribute {
+                PatternNonValuePlace::Ident(kw) => {
+                    let ident_str = keyword_to_ident(kw);
+                    crate::cache::get_cache()
+                        .resolve_ident(&ident_str)
+                        .and_then(|entid| crate::cache::get_cache().get_attribute(entid))
+                        .map(|info| info.cardinality == "many")
+                        .unwrap_or(false)
+                }
+                PatternNonValuePlace::Entid(id) => crate::cache::get_cache()
+                    .get_attribute(*id)
+                    .map(|info| info.cardinality == "many")
+                    .unwrap_or(false),
+                _ => false, // variable or placeholder: skip filter (safe due to explicit retractions)
+            };
+
+            if !is_cardinality_many {
+                let param2 = builder.bind_bigint(as_of_tx);
+                where_clauses.push(format!(
+                    "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                     WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                     AND newer.added = true \
+                     AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                ));
+            }
         }
 
         if let Some(since_tx) = temporal.since {
@@ -1269,11 +1514,15 @@ fn build_extended_pattern_query(
     }
 
     if select_exprs.is_empty() {
-        return Err("No find variables could be resolved to pattern bindings".into());
+        return Err(":db.error/unresolved-vars No :find variables could be resolved to \
+                    pattern bindings. Ensure every variable in :find also appears in a :where \
+                    pattern. Example: [:find ?name :where [?e :person/name ?name]]".into());
     }
 
     if joins.is_empty() && fts_joins.is_empty() {
-        return Err("No where clauses produced any datom table joins".into());
+        return Err(":db.error/empty-where No :where clauses produced any datom table joins. \
+                    Ensure your query has at least one data pattern like [?e :attr ?v]. \
+                    Pure predicate or function-only queries are not supported.".into());
     }
 
     let distinct = if !has_aggregates && find_spec.requires_distinct() {
@@ -1336,7 +1585,12 @@ fn build_aggregate_select(
         "avg" => "AVG",
         "min" => "MIN",
         "max" => "MAX",
-        _ => return Err(format!("Unsupported aggregate function: {}", func_name).into()),
+        _ => return Err(format!(
+            ":db.error/unsupported-aggregate Unsupported aggregate function '{}'. \
+             Supported aggregates: count, sum, avg, min, max. \
+             Example: [:find (count ?e) :where [?e :person/name]]",
+            func_name
+        ).into()),
     };
 
     // Get the variable argument
@@ -1439,12 +1693,56 @@ fn resolve_var_refs(
 // ============================================================================
 
 /// Build a NOT EXISTS subquery from a NotJoin clause.
+///
+/// Validates groundedness: every variable used in the NOT clause must be bound
+/// in the outer query scope. An unbound variable in NOT produces semantically
+/// unsound results because NOT EXISTS would test against an uncorrelated
+/// subquery, effectively filtering out all rows or none.
 fn build_not_exists_subquery(
     not_join: &edn::query::NotJoin,
     outer_var_to_alias: &HashMap<String, (String, &'static str)>,
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Groundedness validation: collect all variables mentioned in the NOT
+    // clause and verify each one is bound in the outer scope.
+    let mut not_vars: Vec<String> = Vec::new();
+    for clause in &not_join.clauses {
+        if let WhereClause::Pattern(p) = clause {
+            if let PatternNonValuePlace::Variable(v) = &p.entity {
+                not_vars.push(format!("{}", v));
+            }
+            if let PatternNonValuePlace::Variable(v) = &p.attribute {
+                not_vars.push(format!("{}", v));
+            }
+            if let PatternValuePlace::Variable(v) = &p.value {
+                not_vars.push(format!("{}", v));
+            }
+            if let PatternNonValuePlace::Variable(v) = &p.tx {
+                not_vars.push(format!("{}", v));
+            }
+        }
+    }
+
+    let unbound: Vec<&String> = not_vars
+        .iter()
+        .filter(|v| !outer_var_to_alias.contains_key(v.as_str()))
+        .collect();
+
+    if !unbound.is_empty() {
+        // Deduplicate for error message clarity
+        let mut unique_unbound: Vec<&str> = unbound.iter().map(|s| s.as_str()).collect();
+        unique_unbound.sort();
+        unique_unbound.dedup();
+        return Err(format!(
+            ":db.error/unbound-variable-in-not Variables {} in (not ...) clause are not bound \
+             in the outer query. Every variable in a NOT clause must appear in a :where pattern \
+             before the NOT clause. Unbound variables in NOT produce semantically unsound results.",
+            unique_unbound.join(", ")
+        )
+        .into());
+    }
+
     let mut sub_joins = Vec::new();
     let mut sub_where = Vec::new();
 
@@ -1527,13 +1825,32 @@ fn build_not_exists_subquery(
                     let param = builder.bind_bigint(as_of_tx);
                     sub_where.push(format!("{alias}.tx <= {param}"));
 
-                    let param2 = builder.bind_bigint(as_of_tx);
-                    sub_where.push(format!(
-                        "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
-                         WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                         AND newer.added = true \
-                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
-                    ));
+                    // Only add NOT EXISTS for cardinality-one attributes
+                    let is_cardinality_many = match &p.attribute {
+                        PatternNonValuePlace::Ident(kw) => {
+                            let ident_str = keyword_to_ident(kw);
+                            crate::cache::get_cache()
+                                .resolve_ident(&ident_str)
+                                .and_then(|entid| crate::cache::get_cache().get_attribute(entid))
+                                .map(|info| info.cardinality == "many")
+                                .unwrap_or(false)
+                        }
+                        PatternNonValuePlace::Entid(id) => crate::cache::get_cache()
+                            .get_attribute(*id)
+                            .map(|info| info.cardinality == "many")
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+
+                    if !is_cardinality_many {
+                        let param2 = builder.bind_bigint(as_of_tx);
+                        sub_where.push(format!(
+                            "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                             WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                             AND newer.added = true \
+                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                        ));
+                    }
                 }
                 if let Some(since_tx) = temporal.since {
                     let param = builder.bind_bigint(since_tx);
@@ -1543,13 +1860,16 @@ fn build_not_exists_subquery(
                 sub_joins.push(format!("mentat.datoms {alias}"));
             }
             _ => {
-                return Err("Only pattern clauses are supported inside NOT".into());
+                return Err(":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
+                            are supported inside (not ...) / (not-join ...). Predicates and \
+                            function calls inside NOT are not yet supported.".into());
             }
         }
     }
 
     if sub_joins.is_empty() {
-        return Err("NOT clause must contain at least one pattern".into());
+        return Err(":db.error/empty-not NOT clause must contain at least one data pattern. \
+                    Example: (not [?e :person/retired true])".into());
     }
 
     Ok(format!(
@@ -1577,11 +1897,20 @@ fn build_predicate_clause(
         ">=" => ">=",
         "=" => "=",
         "!=" => "!=",
-        _ => return Err(format!("Unsupported predicate operator: {}", op).into()),
+        _ => return Err(format!(
+            ":db.error/unsupported-predicate Unsupported predicate operator '{}'. \
+             Supported operators: <, >, <=, >=, =, !=. \
+             Example: [(< ?age 30)]",
+            op
+        ).into()),
     };
 
     if pred.args.len() != 2 {
-        return Err(format!("Predicate '{}' requires exactly 2 arguments", op).into());
+        return Err(format!(
+            ":db.error/predicate-arity Predicate '{}' requires exactly 2 arguments, got {}. \
+             Example: [({} ?var value)]",
+            op, pred.args.len(), op
+        ).into());
     }
 
     let left = pred_arg_to_sql(&pred.args[0], var_to_alias)?;
@@ -1609,14 +1938,20 @@ fn pred_arg_to_sql(
                     Ok(format!("{}.{}", alias, col))
                 }
             } else {
-                Err(format!("Unbound variable in predicate: {}", var_name).into())
+                Err(format!(
+                    ":db.error/unbound-var Unbound variable '{}' in predicate. \
+                     Every variable used in a predicate must first appear in a :where pattern. \
+                     Add a pattern like [?e :some-attr {}] to bind it.",
+                    var_name, var_name
+                ).into())
             }
         }
         FnArg::EntidOrInteger(i) => Ok(format!("'{}'", i)),
         FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("'{}'", f.into_inner())),
         FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(format!("'{}'", s.as_ref())),
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(format!("'{}'", b)),
-        _ => Err("Unsupported predicate argument type".into()),
+        _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type. \
+                  Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
     }
 }
 
@@ -1654,20 +1989,35 @@ fn build_rule_ctes(
         let rule = rules
             .iter()
             .find(|r| r.name.0.as_str() == rule_name)
-            .ok_or_else(|| format!("No rule definition found for '{}'", rule_name))?;
+            .ok_or_else(|| {
+                let available_rules: Vec<&str> = rules.iter().map(|r| r.name.0.as_str()).collect();
+                format!(
+                    ":db.error/rule-not-found No rule definition found for '{}'. \
+                     Available rules: [{}]. Rules must be defined in the :with section of the query.",
+                    rule_name,
+                    available_rules.join(", ")
+                )
+            })?;
 
         // Determine the arity (number of arguments) from the first clause head
         let arity = if let Some(first_clause) = rule.clauses.first() {
             first_clause.head.args.len()
         } else {
-            return Err(format!("Rule '{}' has no clauses", rule_name).into());
+            return Err(format!(
+                ":db.error/empty-rule Rule '{}' has no clauses. Each rule must have at least one \
+                 clause with a head and body patterns.",
+                rule_name
+            ).into());
         };
 
         // Generate column names for the CTE: col0, col1, ...
         let cte_cols: Vec<String> = (0..arity).map(|i| format!("col{}", i)).collect();
         let cte_col_list = cte_cols.join(", ");
 
-        // Build UNION of each rule clause body
+        // Build UNION of each rule clause body.
+        // Use UNION (not UNION ALL) to eliminate duplicate rows across rule
+        // clauses, matching Datalog set-semantics. Multiple rule clauses may
+        // produce the same binding tuple, and the result should be a set.
         let mut union_parts = Vec::new();
         for clause in &rule.clauses {
             let clause_sql =
@@ -1675,7 +2025,7 @@ fn build_rule_ctes(
             union_parts.push(clause_sql);
         }
 
-        let cte_body = union_parts.join(" UNION ALL ");
+        let cte_body = union_parts.join(" UNION ");
 
         let is_recursive = rule.clauses.iter().any(|clause| {
             clause.body.iter().any(
@@ -1691,7 +2041,9 @@ fn build_rule_ctes(
 
         // Bind invocation arguments to CTE columns
         // The invocation (ancestor ?anc ?desc) binds ?anc -> ancestor.col0, ?desc -> ancestor.col1
-        static CTE_COLS: [&str; 8] = ["col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7"];
+        static CTE_COLS: [&str; 8] = [
+            "col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7",
+        ];
         for (i, arg) in invocation.args.iter().enumerate() {
             if let FnArg::Variable(v) = arg {
                 if i < CTE_COLS.len() {
@@ -1828,13 +2180,32 @@ fn build_rule_clause_sql(
                     let param = builder.bind_bigint(as_of);
                     where_parts.push(format!("{alias}.tx <= {param}"));
 
-                    let param2 = builder.bind_bigint(as_of);
-                    where_parts.push(format!(
-                        "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
-                         WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                         AND newer.added = true \
-                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
-                    ));
+                    // Only add NOT EXISTS for cardinality-one attributes
+                    let is_cardinality_many = match &p.attribute {
+                        PatternNonValuePlace::Ident(kw) => {
+                            let ident_str = keyword_to_ident(kw);
+                            crate::cache::get_cache()
+                                .resolve_ident(&ident_str)
+                                .and_then(|entid| crate::cache::get_cache().get_attribute(entid))
+                                .map(|info| info.cardinality == "many")
+                                .unwrap_or(false)
+                        }
+                        PatternNonValuePlace::Entid(id) => crate::cache::get_cache()
+                            .get_attribute(*id)
+                            .map(|info| info.cardinality == "many")
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+
+                    if !is_cardinality_many {
+                        let param2 = builder.bind_bigint(as_of);
+                        where_parts.push(format!(
+                            "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                             WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                             AND newer.added = true \
+                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                        ));
+                    }
                 }
                 if let Some(since) = temporal.since {
                     let param = builder.bind_bigint(since);
@@ -1872,7 +2243,9 @@ fn build_rule_clause_sql(
             }
             _ => {
                 return Err(
-                    "Only patterns and recursive rule invocations are supported in rule bodies"
+                    ":db.error/unsupported-rule-body Only data patterns and recursive rule \
+                     invocations are supported in rule bodies. Predicates and function calls \
+                     inside rule definitions are not yet supported."
                         .into(),
                 );
             }
@@ -1909,7 +2282,8 @@ fn build_rule_clause_sql(
     }
 
     if from_parts.is_empty() {
-        return Err("Rule clause body has no patterns".into());
+        return Err(":db.error/empty-rule-body Rule clause body has no data patterns. \
+                    Each rule clause must contain at least one pattern like [?e :attr ?v].".into());
     }
 
     let sql = if where_parts.is_empty() {

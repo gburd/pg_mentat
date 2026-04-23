@@ -18,13 +18,9 @@ use serde_json::json;
 /// -- Returns: entity ID or NULL
 /// ```
 #[pg_extern(schema = "mentat")]
-fn lookup_by_ident(
-    attr_ident: &str,
-    value: &str,
-) -> Option<i64> {
+fn lookup_by_ident(attr_ident: &str, value: &str) -> Option<i64> {
     // Resolve the attribute ident to entid
-    let attr_id = crate::cache::get_cache()
-        .resolve_ident(attr_ident)?;
+    let attr_id = crate::cache::get_cache().resolve_ident(attr_ident)?;
 
     // Query datoms for the entity with this value (string type tag = 7)
     let result = Spi::get_one_with_args::<i64>(
@@ -59,9 +55,7 @@ fn entity_attrs(entity_id: i64) -> JsonB {
 
         let mut idents = Vec::new();
 
-        for row in client
-            .select(query, None, &[DatumWithOid::from(entity_id)])?
-        {
+        for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
             if let Ok(Some(attr_id)) = row.get::<i64>(1) {
                 // Resolve entid to ident string
                 if let Some(ident) = crate::cache::get_cache().get_ident(attr_id) {
@@ -107,13 +101,10 @@ fn attribute_values(attr_ident: &str) -> JsonB {
 
         let mut values = Vec::new();
 
-        for row in client
-            .select(query, None, &[DatumWithOid::from(attr_id)])?
-        {
-            if let (Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
-                row.get::<Vec<u8>>(1),
-                row.get::<i16>(2)
-            ) {
+        for row in client.select(query, None, &[DatumWithOid::from(attr_id)])? {
+            if let (Ok(Some(value_bytes)), Ok(Some(type_tag))) =
+                (row.get::<Vec<u8>>(1), row.get::<i16>(2))
+            {
                 // Decode value based on type tag
                 if let Ok(decoded) = decode_typed_value(&value_bytes, type_tag) {
                     values.push(decoded);
@@ -153,14 +144,10 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     let retractions: Vec<(i64, Vec<u8>, i16)> = Spi::connect(|client| {
         let mut retract_list = Vec::new();
 
-        for row in client
-            .select(facts_query, None, &[DatumWithOid::from(entity_id)])?
-        {
-            if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
-                row.get::<i64>(1),
-                row.get::<Vec<u8>>(2),
-                row.get::<i16>(3)
-            ) {
+        for row in client.select(facts_query, None, &[DatumWithOid::from(entity_id)])? {
+            if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) =
+                (row.get::<i64>(1), row.get::<Vec<u8>>(2), row.get::<i16>(3))
+            {
                 retract_list.push((attr_id, value_bytes, type_tag));
             }
         }
@@ -169,7 +156,11 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     })?;
 
     if retractions.is_empty() {
-        return Err("Entity has no facts to retract".into());
+        return Err(format!(
+            ":db.error/nothing-to-retract Entity {} has no current facts to retract. \
+             The entity may not exist or all its facts have already been retracted.",
+            entity_id
+        ).into());
     }
 
     let count = retractions.len() as i64;
@@ -185,7 +176,11 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         // Resolve attribute ident
         let attr_ident = crate::cache::get_cache()
             .get_ident(*attr_id)
-            .ok_or_else(|| format!("Failed to resolve attribute {}", attr_id))?;
+            .ok_or_else(|| format!(
+                ":db.error/attribute-not-found Failed to resolve attribute entid {} to an ident. \
+                 The schema cache may be stale or the attribute was never defined.",
+                attr_id
+            ))?;
 
         // Decode value for EDN representation
         let value_repr = match decode_typed_value(value_bytes, *type_tag) {
@@ -196,9 +191,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         // Format as retraction: [:db/retract entity attr value]
         tx_data.push_str(&format!(
             "  [:db/retract {} {} {}]",
-            entity_id,
-            attr_ident,
-            value_repr
+            entity_id, attr_ident, value_repr
         ));
     }
 
@@ -220,7 +213,8 @@ fn decode_typed_value(
         1 => {
             // boolean
             if bytes.is_empty() {
-                return Err("Invalid boolean value: empty bytes".into());
+                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
+                            The datoms table may contain corrupted data.".into());
             }
             Ok(json!(bytes[0] != 0))
         }
@@ -228,7 +222,7 @@ fn decode_typed_value(
             // long or ref (both i64 little-endian)
             if bytes.len() != 8 {
                 return Err(
-                    format!("Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
+                    format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
                 );
             }
             let val = i64::from_le_bytes([
@@ -240,7 +234,7 @@ fn decode_typed_value(
             // double (f64 little-endian)
             if bytes.len() != 8 {
                 return Err(format!(
-                    "Invalid double value: expected 8 bytes, got {}",
+                    ":db.error/data-corruption Invalid double value: expected 8 bytes, got {}",
                     bytes.len()
                 )
                 .into());
@@ -254,7 +248,7 @@ fn decode_typed_value(
             // instant (i64 microseconds since epoch, little-endian)
             if bytes.len() != 8 {
                 return Err(format!(
-                    "Invalid instant value: expected 8 bytes, got {}",
+                    ":db.error/data-corruption Invalid instant value: expected 8 bytes, got {}",
                     bytes.len()
                 )
                 .into());
@@ -272,16 +266,18 @@ fn decode_typed_value(
         8 => {
             // keyword (UTF-8, prefixed with :)
             let s = String::from_utf8(bytes.to_vec())?;
-            Ok(json!(if s.starts_with(':') { s } else { format!(":{}", s) }))
+            Ok(json!(if s.starts_with(':') {
+                s
+            } else {
+                format!(":{}", s)
+            }))
         }
         9 => {
             // uuid (16 bytes)
             if bytes.len() != 16 {
-                return Err(format!(
-                    "Invalid UUID value: expected 16 bytes, got {}",
-                    bytes.len()
-                )
-                .into());
+                return Err(
+                    format!(":db.error/data-corruption Invalid UUID value: expected 16 bytes, got {}", bytes.len()).into(),
+                );
             }
             Ok(json!(hex::encode(bytes)))
         }
@@ -289,7 +285,12 @@ fn decode_typed_value(
             // bytes (raw)
             Ok(json!(hex::encode(bytes)))
         }
-        _ => Err(format!("Unsupported type tag: {}", type_tag).into()),
+        _ => Err(format!(
+            ":db.error/unsupported-type Unsupported type tag: {}. \
+             Known tags: 1=boolean, 2=long/ref, 3=double, 4=instant, 7=string, \
+             8=keyword, 9=uuid, 11=bytes.",
+            type_tag
+        ).into()),
     }
 }
 

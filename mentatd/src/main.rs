@@ -1,4 +1,6 @@
+pub mod cache;
 pub mod config;
+pub mod metrics;
 pub mod pool;
 pub mod protocol;
 pub mod server;
@@ -17,6 +19,8 @@ async fn main() -> anyhow::Result<()> {
 
     init_logging(&config.logging.level, &config.logging.format);
 
+    metrics::register_metrics();
+
     info!("Starting mentatd server");
     info!("Configuration:");
     info!("  Server: {}:{}", config.server.host, config.server.port);
@@ -25,6 +29,16 @@ async fn main() -> anyhow::Result<()> {
         mask_connection_string(&config.database.connection_string)
     );
     info!("  Pool size: {}", config.database.pool_size);
+    info!(
+        "  Query cache: {} (capacity: {}, TTL: {}s)",
+        if config.cache.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        config.cache.capacity,
+        config.cache.ttl_secs
+    );
 
     let pool = create_pool(
         &config.database.connection_string,
@@ -64,6 +78,7 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Server listening on http://{}", addr);
     info!("Health check: http://{}/health", addr);
+    info!("Metrics: http://{}/metrics", addr);
     info!("Ready to accept Datomic client connections");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

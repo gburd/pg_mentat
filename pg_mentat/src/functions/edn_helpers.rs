@@ -42,7 +42,8 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
     // Expect a vector of operations
     let ops = match value {
         edn::Value::Vector(v) => v,
-        _ => return Err("Batch document must be an EDN vector".into()),
+        _ => return Err(":db.error/invalid-batch Batch document must be an EDN vector of \
+                        operations. Example: [[:query ...] [:transact ...]]".into()),
     };
 
     let mut results = Vec::new();
@@ -54,22 +55,26 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
                 let op_type = &op_vec[0];
 
                 let result = match op_type {
-                    edn::Value::Keyword(kw) if kw.namespace() == Some("") => {
-                        match kw.name() {
-                            "query" => execute_query_op(&op_vec)?,
-                            "transact" => execute_transact_op(&op_vec)?,
-                            "pull" => execute_pull_op(&op_vec)?,
-                            "entity" => execute_entity_op(&op_vec)?,
-                            "schema" => execute_schema_op()?,
-                            other => return Err(format!("Unknown operation type: {}", other).into()),
-                        }
-                    }
-                    _ => return Err("Operation must start with a keyword".into()),
+                    edn::Value::Keyword(kw) if kw.namespace() == Some("") => match kw.name() {
+                        "query" => execute_query_op(&op_vec)?,
+                        "transact" => execute_transact_op(&op_vec)?,
+                        "pull" => execute_pull_op(&op_vec)?,
+                        "entity" => execute_entity_op(&op_vec)?,
+                        "schema" => execute_schema_op()?,
+                        other => return Err(format!(
+                            ":db.error/unknown-batch-op Unknown batch operation type: {}. \
+                             Valid operations: :query, :transact, :pull, :entity, :schema",
+                            other
+                        ).into()),
+                    },
+                    _ => return Err(":db.error/invalid-batch-op Each batch operation must start with \
+                                    a keyword (:query, :transact, :pull, :entity, :schema).".into()),
                 };
 
                 results.push(result);
             }
-            _ => return Err("Each operation must be a vector starting with a keyword".into()),
+            _ => return Err(":db.error/invalid-batch-op Each batch operation must be a vector \
+                            starting with a keyword. Example: [:query [:find ?e :where [?e :attr ?v]]]".into()),
         }
     }
 
@@ -77,9 +82,12 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
 }
 
 /// Helper: Execute a query operation
-fn execute_query_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
+fn execute_query_op(
+    op_vec: &[edn::Value],
+) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err("Query operation requires query pattern".into());
+        return Err(":db.error/batch-missing-arg Query operation requires a query pattern. \
+                    Example: [:query [:find ?e :where [?e :person/name]]]".into());
     }
 
     // Convert query EDN to string
@@ -103,9 +111,12 @@ fn execute_query_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::err
 }
 
 /// Helper: Execute a transact operation
-fn execute_transact_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
+fn execute_transact_op(
+    op_vec: &[edn::Value],
+) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err("Transact operation requires transaction data".into());
+        return Err(":db.error/batch-missing-arg Transact operation requires transaction data. \
+                    Example: [:transact [[:db/add \"new\" :person/name \"Alice\"]]]".into());
     }
 
     // Convert tx data to string
@@ -122,9 +133,12 @@ fn execute_transact_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::
 }
 
 /// Helper: Execute a pull operation
-fn execute_pull_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
+fn execute_pull_op(
+    op_vec: &[edn::Value],
+) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 3 {
-        return Err("Pull operation requires pattern and entity ID".into());
+        return Err(":db.error/batch-missing-arg Pull operation requires a pattern and entity ID. \
+                    Example: [:pull [:person/name :person/age] 100]".into());
     }
 
     // Get pattern string
@@ -133,7 +147,8 @@ fn execute_pull_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::erro
     // Get entity ID
     let entity_id = match &op_vec[2] {
         edn::Value::Integer(n) => *n,
-        _ => return Err("Pull entity ID must be an integer".into()),
+        _ => return Err(":db.error/batch-invalid-arg Pull entity ID must be an integer. \
+                        Example: [:pull [:person/name] 100]".into()),
     };
 
     // Execute pull
@@ -146,15 +161,19 @@ fn execute_pull_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::erro
 }
 
 /// Helper: Execute an entity operation
-fn execute_entity_op(op_vec: &[edn::Value]) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
+fn execute_entity_op(
+    op_vec: &[edn::Value],
+) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err("Entity operation requires entity ID".into());
+        return Err(":db.error/batch-missing-arg Entity operation requires an entity ID. \
+                    Example: [:entity 100]".into());
     }
 
     // Get entity ID
     let entity_id = match &op_vec[1] {
         edn::Value::Integer(n) => *n,
-        _ => return Err("Entity ID must be an integer".into()),
+        _ => return Err(":db.error/batch-invalid-arg Entity ID must be an integer. \
+                        Example: [:entity 100]".into()),
     };
 
     // Execute entity lookup
@@ -212,11 +231,9 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
             let mut entity_facts = Vec::new();
 
             for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
-                if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) = (
-                    row.get::<i64>(1),
-                    row.get::<Vec<u8>>(2),
-                    row.get::<i16>(3)
-                ) {
+                if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) =
+                    (row.get::<i64>(1), row.get::<Vec<u8>>(2), row.get::<i16>(3))
+                {
                     entity_facts.push((attr_id, value_bytes, type_tag));
                 }
             }
@@ -235,7 +252,11 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
             // Resolve attribute ident
             let attr_ident = crate::cache::get_cache()
                 .get_ident(attr_id)
-                .ok_or_else(|| format!("Failed to resolve attribute {}", attr_id))?;
+                .ok_or_else(|| format!(
+                    ":db.error/attribute-not-found Failed to resolve attribute entid {} to an ident. \
+                     The schema cache may be stale or the attribute was never defined.",
+                    attr_id
+                ))?;
 
             // Decode value to EDN representation
             let value_edn = value_to_edn(&value_bytes, type_tag)?;
@@ -352,19 +373,25 @@ fn export_all_edn() -> Result<String, Box<dyn std::error::Error + Send + Sync>> 
 }
 
 /// Helper: Convert BYTEA value to EDN string representation
-fn value_to_edn(bytes: &[u8], type_tag: i16) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+fn value_to_edn(
+    bytes: &[u8],
+    type_tag: i16,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
         1 => {
             // boolean
             if bytes.is_empty() {
-                return Err("Invalid boolean value: empty bytes".into());
+                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
+                            The datoms table may contain corrupted data.".into());
             }
             Ok(if bytes[0] != 0 { "true" } else { "false" }.to_string())
         }
         2 | 5 => {
             // long or ref (both i64)
             if bytes.len() != 8 {
-                return Err(format!("Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into());
+                return Err(
+                    format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
+                );
             }
             let val = i64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -374,7 +401,9 @@ fn value_to_edn(bytes: &[u8], type_tag: i16) -> Result<String, Box<dyn std::erro
         3 => {
             // double (f64)
             if bytes.len() != 8 {
-                return Err(format!("Invalid double: expected 8 bytes, got {}", bytes.len()).into());
+                return Err(
+                    format!(":db.error/data-corruption Invalid double: expected 8 bytes, got {}", bytes.len()).into(),
+                );
             }
             let val = f64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -384,7 +413,9 @@ fn value_to_edn(bytes: &[u8], type_tag: i16) -> Result<String, Box<dyn std::erro
         4 => {
             // instant (microseconds since epoch)
             if bytes.len() != 8 {
-                return Err(format!("Invalid instant: expected 8 bytes, got {}", bytes.len()).into());
+                return Err(
+                    format!(":db.error/data-corruption Invalid instant: expected 8 bytes, got {}", bytes.len()).into(),
+                );
             }
             let micros = i64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -400,12 +431,16 @@ fn value_to_edn(bytes: &[u8], type_tag: i16) -> Result<String, Box<dyn std::erro
         8 => {
             // keyword
             let s = String::from_utf8(bytes.to_vec())?;
-            Ok(if s.starts_with(':') { s } else { format!(":{}", s) })
+            Ok(if s.starts_with(':') {
+                s
+            } else {
+                format!(":{}", s)
+            })
         }
         9 => {
             // uuid
             if bytes.len() != 16 {
-                return Err(format!("Invalid UUID: expected 16 bytes, got {}", bytes.len()).into());
+                return Err(format!(":db.error/data-corruption Invalid UUID: expected 16 bytes, got {}", bytes.len()).into());
             }
             Ok(format!("#uuid \"{}\"", hex::encode(bytes)))
         }
@@ -413,12 +448,19 @@ fn value_to_edn(bytes: &[u8], type_tag: i16) -> Result<String, Box<dyn std::erro
             // bytes
             Ok(format!("#bytes \"{}\"", hex::encode(bytes)))
         }
-        _ => Err(format!("Unsupported type tag: {}", type_tag).into()),
+        _ => Err(format!(
+            ":db.error/unsupported-type Unsupported type tag: {}. \
+             Known tags: 1=boolean, 2=long/ref, 3=double, 4=instant, 7=string, \
+             8=keyword, 9=uuid, 11=bytes.",
+            type_tag
+        ).into()),
     }
 }
 
 /// Helper: Convert EDN value to JSON value
-fn edn_to_json(edn_val: &edn::Value) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
+fn edn_to_json(
+    edn_val: &edn::Value,
+) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     match edn_val {
         edn::Value::Nil => Ok(JsonValue::Null),
         edn::Value::Boolean(b) => Ok(json!(*b)),

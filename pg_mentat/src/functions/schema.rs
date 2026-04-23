@@ -32,15 +32,23 @@ pub fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>
 
         for row in client.select(query, None, &[])? {
             // Column indices are 1-based in pgrx
-            let entid: i64 = row.get(1)?.ok_or("Missing entid")?;
-            let ident: String = row.get(2)?.ok_or("Missing ident")?;
-            let value_type: String = row.get(3)?.ok_or("Missing value_type")?;
-            let cardinality: String = row.get(4)?.ok_or("Missing cardinality")?;
+            let entid: i64 = row.get(1)?.ok_or(
+                ":db.error/data-integrity Missing entid in mentat.schema row")?;
+            let ident: String = row.get(2)?.ok_or(
+                ":db.error/data-integrity Missing ident in mentat.schema row")?;
+            let value_type: String = row.get(3)?.ok_or(
+                ":db.error/data-integrity Missing value_type in mentat.schema row")?;
+            let cardinality: String = row.get(4)?.ok_or(
+                ":db.error/data-integrity Missing cardinality in mentat.schema row")?;
             let unique_constraint: Option<String> = row.get(5)?;
-            let indexed: bool = row.get(6)?.ok_or("Missing indexed")?;
-            let fulltext: bool = row.get(7)?.ok_or("Missing fulltext")?;
-            let component: bool = row.get(8)?.ok_or("Missing component")?;
-            let no_history: bool = row.get(9)?.ok_or("Missing no_history")?;
+            let indexed: bool = row.get(6)?.ok_or(
+                ":db.error/data-integrity Missing indexed in mentat.schema row")?;
+            let fulltext: bool = row.get(7)?.ok_or(
+                ":db.error/data-integrity Missing fulltext in mentat.schema row")?;
+            let component: bool = row.get(8)?.ok_or(
+                ":db.error/data-integrity Missing component in mentat.schema row")?;
+            let no_history: bool = row.get(9)?.ok_or(
+                ":db.error/data-integrity Missing no_history in mentat.schema row")?;
 
             let attr_info = json!({
                 "entid": entid,

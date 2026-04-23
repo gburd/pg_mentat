@@ -15,6 +15,9 @@ pub fn serialize_response(response: &Response) -> String {
 
 fn serialize_value(value: &ResponseValue, output: &mut String) {
     match value {
+        ResponseValue::Nil => {
+            output.push_str("nil");
+        }
         ResponseValue::String(s) => {
             write!(output, r#""{}""#, escape_string(s)).ok();
         }
@@ -24,24 +27,39 @@ fn serialize_value(value: &ResponseValue, output: &mut String) {
         ResponseValue::Integer(i) => {
             write!(output, "{}", i).ok();
         }
+        ResponseValue::Keyword(k) => {
+            output.push(':');
+            output.push_str(k);
+        }
         ResponseValue::List(items) => {
+            output.push('(');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    output.push(' ');
+                }
+                serialize_value(item, output);
+            }
+            output.push(')');
+        }
+        ResponseValue::Vector(items) => {
             output.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     output.push(' ');
                 }
-                write!(output, r#""{}""#, escape_string(item)).ok();
+                serialize_value(item, output);
             }
             output.push(']');
         }
-        ResponseValue::Map(map) => {
+        ResponseValue::Map(entries) => {
             output.push('{');
-            for (i, (k, v)) in map.iter().enumerate() {
+            for (i, (k, v)) in entries.iter().enumerate() {
                 if i > 0 {
                     output.push(' ');
                 }
-                write!(output, ":{} ", k).ok();
-                write!(output, r#""{}""#, escape_string(v)).ok();
+                serialize_value(k, output);
+                output.push(' ');
+                serialize_value(v, output);
             }
             output.push('}');
         }
@@ -85,7 +103,6 @@ fn escape_string(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::protocol::AnomalyCategory;
-    use std::collections::BTreeMap;
 
     #[test]
     fn test_serialize_string() {
@@ -106,23 +123,109 @@ mod tests {
     }
 
     #[test]
-    fn test_serialize_list() {
+    fn test_serialize_integer() {
         let response = Response::Success {
-            result: ResponseValue::List(vec!["db1".to_string(), "db2".to_string()]),
+            result: ResponseValue::Integer(42),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result 42}");
+    }
+
+    #[test]
+    fn test_serialize_nil() {
+        let response = Response::Success {
+            result: ResponseValue::Nil,
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result nil}");
+    }
+
+    #[test]
+    fn test_serialize_keyword() {
+        let response = Response::Success {
+            result: ResponseValue::Keyword("db/name".to_string()),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result :db/name}");
+    }
+
+    #[test]
+    fn test_serialize_vector_of_strings() {
+        let response = Response::Success {
+            result: ResponseValue::Vector(vec![
+                ResponseValue::String("db1".to_string()),
+                ResponseValue::String("db2".to_string()),
+            ]),
         };
         let output = serialize_response(&response);
         assert_eq!(output, r#"{:result ["db1" "db2"]}"#);
     }
 
     #[test]
-    fn test_serialize_map() {
-        let mut map = BTreeMap::new();
-        map.insert("connection-id".to_string(), "abc-123".to_string());
+    fn test_serialize_vector_of_mixed() {
         let response = Response::Success {
-            result: ResponseValue::Map(map),
+            result: ResponseValue::Vector(vec![
+                ResponseValue::Integer(10001),
+                ResponseValue::String("Alice".to_string()),
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, r#"{:result [10001 "Alice"]}"#);
+    }
+
+    #[test]
+    fn test_serialize_nested_vectors() {
+        let response = Response::Success {
+            result: ResponseValue::Vector(vec![
+                ResponseValue::Vector(vec![
+                    ResponseValue::Integer(10001),
+                    ResponseValue::String("Alice".to_string()),
+                ]),
+                ResponseValue::Vector(vec![
+                    ResponseValue::Integer(10002),
+                    ResponseValue::String("Bob".to_string()),
+                ]),
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, r#"{:result [[10001 "Alice"] [10002 "Bob"]]}"#);
+    }
+
+    #[test]
+    fn test_serialize_map() {
+        let response = Response::Success {
+            result: ResponseValue::Map(vec![(
+                ResponseValue::Keyword("connection-id".to_string()),
+                ResponseValue::String("abc-123".to_string()),
+            )]),
         };
         let output = serialize_response(&response);
         assert_eq!(output, r#"{:result {:connection-id "abc-123"}}"#);
+    }
+
+    #[test]
+    fn test_serialize_map_with_mixed_values() {
+        let response = Response::Success {
+            result: ResponseValue::Map(vec![
+                (
+                    ResponseValue::Keyword("tx-id".to_string()),
+                    ResponseValue::Integer(12345),
+                ),
+                (
+                    ResponseValue::Keyword("status".to_string()),
+                    ResponseValue::String("committed".to_string()),
+                ),
+                (
+                    ResponseValue::Keyword("tx-instant".to_string()),
+                    ResponseValue::Nil,
+                ),
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(
+            output,
+            r#"{:result {:tx-id 12345 :status "committed" :tx-instant nil}}"#
+        );
     }
 
     #[test]

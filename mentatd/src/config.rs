@@ -15,6 +15,8 @@ pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +44,38 @@ pub struct LoggingConfig {
     pub level: String,
     #[serde(default = "default_log_format")]
     pub format: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CacheConfig {
+    #[serde(default = "default_cache_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_cache_capacity")]
+    pub capacity: usize,
+    #[serde(default = "default_cache_ttl_secs")]
+    pub ttl_secs: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_cache_enabled(),
+            capacity: default_cache_capacity(),
+            ttl_secs: default_cache_ttl_secs(),
+        }
+    }
+}
+
+fn default_cache_enabled() -> bool {
+    true
+}
+
+fn default_cache_capacity() -> usize {
+    1000
+}
+
+fn default_cache_ttl_secs() -> u64 {
+    300
 }
 
 fn default_host() -> String {
@@ -108,6 +142,20 @@ impl Config {
                 level: std::env::var("RUST_LOG").unwrap_or_else(|_| default_log_level()),
                 format: std::env::var("LOG_FORMAT").unwrap_or_else(|_| default_log_format()),
             },
+            cache: CacheConfig {
+                enabled: std::env::var("MENTATD_CACHE_ENABLED")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(default_cache_enabled),
+                capacity: std::env::var("MENTATD_CACHE_CAPACITY")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(default_cache_capacity),
+                ttl_secs: std::env::var("MENTATD_CACHE_TTL")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(default_cache_ttl_secs),
+            },
         }
     }
 }
@@ -122,5 +170,8 @@ mod tests {
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
         assert_eq!(config.database.pool_size, 10);
+        assert!(config.cache.enabled);
+        assert_eq!(config.cache.capacity, 1000);
+        assert_eq!(config.cache.ttl_secs, 300);
     }
 }

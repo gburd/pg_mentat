@@ -76,6 +76,56 @@ fn keyword_to_unique(kw: &edn::symbols::Keyword) -> Option<&'static str> {
     }
 }
 
+/// Helper to describe an EDN value type for error messages.
+fn value_type_name(value: &edn::Value) -> &'static str {
+    match value {
+        edn::Value::Nil => "nil",
+        edn::Value::Boolean(_) => "boolean",
+        edn::Value::Integer(_) => "integer",
+        edn::Value::Float(_) => "float",
+        edn::Value::Text(_) => "text/string",
+        edn::Value::Keyword(_) => "keyword",
+        edn::Value::PlainSymbol(_) => "symbol",
+        edn::Value::NamespacedSymbol(_) => "namespaced symbol",
+        edn::Value::Vector(_) => "vector",
+        edn::Value::List(_) => "list",
+        edn::Value::Set(_) => "set",
+        edn::Value::Map(_) => "map",
+        _ => "unknown",
+    }
+}
+
+/// Retrieve available attribute idents from the cache for use in error messages.
+fn get_available_attributes_hint() -> String {
+    let cache = crate::cache::get_cache();
+    // We can't directly iterate the cache, so do a quick DB query
+    let result: Result<Vec<String>, _> = pgrx::spi::Spi::connect(|client| {
+        let mut idents = Vec::new();
+        let rows = client.select(
+            "SELECT ident FROM mentat.schema ORDER BY ident LIMIT 20",
+            None,
+            &[],
+        )?;
+        for row in rows {
+            if let Ok(Some(ident)) = row.get::<String>(1) {
+                idents.push(ident);
+            }
+        }
+        Ok::<_, pgrx::spi::SpiError>(idents)
+    });
+    match result {
+        Ok(idents) if !idents.is_empty() => {
+            let shown: Vec<&str> = idents.iter().map(|s| s.as_str()).collect();
+            if idents.len() >= 20 {
+                format!("Available attributes (first 20): {}", shown.join(", "))
+            } else {
+                format!("Available attributes: {}", shown.join(", "))
+            }
+        }
+        _ => "No schema attributes found. Did you forget to define schema with mentat_transact?".to_string(),
+    }
+}
+
 /// Process an EDN transaction and return a TxReport
 ///
 /// Accepts an EDN transaction like:
@@ -93,8 +143,26 @@ fn keyword_to_unique(kw: &edn::symbols::Keyword) -> Option<&'static str> {
 ///   Pass 1: Scan for schema definitions, allocate tempids, build pending ident map
 ///   Install: Write new schema to mentat.schema and mentat.idents
 ///   Pass 2: Parse all assertions using the now-resolvable idents, insert datoms
+///
+/// Transaction isolation: The entire transaction body executes inside a single
+/// SPI connection block. SPI manages the subtransaction boundary so that all
+/// reads and writes see a consistent snapshot. If any error occurs, SPI
+/// automatically rolls back the subtransaction, preventing partial schema or
+/// datom writes from persisting.
 #[pg_extern]
 pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    execute_transaction_body(edn_tx)
+}
+
+/// Internal function containing the actual transaction logic.
+///
+/// Runs within the caller's PostgreSQL transaction. Uses savepoints to ensure
+/// that schema installation and datom insertion are atomic: if Pass 2 (datom
+/// insertion) fails after schema was written in Pass 1, the savepoint rollback
+/// undoes the schema changes too.
+fn execute_transaction_body(
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Parse EDN transaction
     let value_and_span = parse::value(edn_tx)?;
     let value = value_and_span.without_spans();
@@ -102,14 +170,19 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
     // Validate it's a vector
     let entities = match value {
         edn::Value::Vector(ref vec) => vec,
-        _ => return Err("Transaction must be a vector of entities".into()),
+        _ => return Err(format!(
+            ":db.error/invalid-transaction Transaction must be a vector of entities, \
+             got {}. Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
+            value_type_name(&value)
+        ).into()),
     };
 
     // Allocate transaction ID
     let tx_id = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/tx')")
         .ok()
         .flatten()
-        .ok_or("Failed to allocate transaction ID")?;
+        .ok_or(":db.error/allocation-failed Failed to allocate transaction ID. \
+                Check that the 'db.part/tx' partition exists and has available IDs.")?;
 
     // Create transaction record and get the timestamp as microseconds since epoch
     let tx_instant_micros = Spi::get_one_with_args::<i64>(
@@ -119,7 +192,8 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
     )
     .ok()
     .flatten()
-    .ok_or("Failed to create transaction record")?;
+    .ok_or(":db.error/tx-creation-failed Failed to create transaction record. \
+             The mentat.transactions table may be missing or the insert failed.")?;
 
     // Insert :db/txInstant datom for this transaction
     let instant_bytes = tx_instant_micros.to_le_bytes().to_vec();
@@ -181,7 +255,8 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
                     Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                         .ok()
                         .flatten()
-                        .ok_or("Failed to allocate entity ID")?
+                        .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
+                         Check that the 'db.part/user' partition exists and has available IDs.")?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -204,6 +279,16 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
     // --- Install new schema attributes ---
     // This writes to mentat.idents and mentat.schema so that resolve_attribute()
     // will succeed for newly-defined attributes in Pass 2.
+    //
+    // Atomic schema installation: wrap schema install + datom insertion in a
+    // savepoint. If datom insertion (Pass 2) fails, the savepoint rollback
+    // undoes the schema writes too, preventing stale schema from persisting
+    // without corresponding data.
+    let has_schema_changes = !schema_builders.is_empty();
+    if has_schema_changes {
+        Spi::run("SAVEPOINT schema_install")?;
+    }
+
     install_schema_attributes(&schema_builders)?;
 
     // --- Pass 2: Parse ALL assertions and insert datoms ---
@@ -212,6 +297,149 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 
     for entity_value in entities {
         match entity_value {
+            // Handle :db/retractEntity - format: [:db/retractEntity entity-id]
+            edn::Value::Vector(ref entity_vec)
+                if entity_vec.len() == 2
+                    && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "retractEntity") =>
+            {
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+
+                // Query all current datoms for this entity
+                Spi::connect(|client| {
+                    let rows = client.select(
+                        "SELECT a, v, value_type_tag FROM mentat.datoms \
+                         WHERE e = $1 AND added = true",
+                        None,
+                        &[DatumWithOid::from(e)],
+                    )?;
+
+                    for row in rows {
+                        let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
+                        let v_bytes: Vec<u8> = row.get(2)?.ok_or("Missing value")?;
+                        let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
+
+                        pending_datoms.push(PendingDatom {
+                            e,
+                            a,
+                            v_bytes,
+                            v_type_tag,
+                            added: false,
+                        });
+                    }
+
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+                })?;
+            }
+            // Handle :db.fn/cas - format: [:db.fn/cas e a old-value new-value]
+            edn::Value::Vector(ref entity_vec)
+                if entity_vec.len() == 5
+                    && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "cas" && kw.namespace() == Some("db.fn")) =>
+            {
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+                let a = resolve_attribute(&entity_vec[2])?;
+                let old_edn = &entity_vec[3];
+                let new_edn = &entity_vec[4];
+
+                let is_ref = lookup_value_type(a).as_deref() == Some("ref");
+
+                // Get current value(s) for this (e, a) pair
+                let current_values: Vec<(Vec<u8>, i16)> = Spi::connect(|client| {
+                    let rows = client.select(
+                        "SELECT v, value_type_tag FROM mentat.datoms \
+                         WHERE e = $1 AND a = $2 AND added = true",
+                        None,
+                        &[DatumWithOid::from(e), DatumWithOid::from(a)],
+                    )?;
+
+                    let mut vals = Vec::new();
+                    for row in rows {
+                        let v_bytes: Vec<u8> = row.get(1)?.ok_or("Missing value")?;
+                        let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
+                        vals.push((v_bytes, v_type_tag));
+                    }
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(vals)
+                })?;
+
+                // Check cardinality -- CAS on cardinality-many with multiple values is an error
+                if let Some(attr_info) = lookup_attribute_info(a) {
+                    if attr_info.cardinality == "many" && current_values.len() > 1 {
+                        return Err(format!(
+                            ":db.fn/cas failed on entity {} attribute {}: \
+                             cardinality-many attribute has {} values; \
+                             CAS requires at most one existing value",
+                            e, a, current_values.len()
+                        ).into());
+                    }
+                }
+
+                let old_is_nil = matches!(old_edn, edn::Value::Nil);
+
+                // Encode old value for comparison (unless nil)
+                let old_encoded: Option<(Vec<u8>, i16)> = if old_is_nil {
+                    None
+                } else if is_ref {
+                    Some(encode_ref_value(old_edn, &mut tempid_map)?)
+                } else {
+                    Some(encode_value(old_edn)?)
+                };
+
+                // Compare current database state with expected old value
+                let cas_matches = if old_is_nil {
+                    // old-value is nil: expect no current value
+                    current_values.is_empty()
+                } else if let Some((ref old_bytes, old_tag)) = old_encoded {
+                    // old-value is not nil: expect exactly one matching value
+                    current_values.len() == 1
+                        && current_values[0].0 == *old_bytes
+                        && current_values[0].1 == old_tag
+                } else {
+                    false
+                };
+
+                if !cas_matches {
+                    // Build a human-readable description of the current value
+                    let current_desc = if current_values.is_empty() {
+                        "nil".to_string()
+                    } else {
+                        current_values
+                            .iter()
+                            .map(|(v, tag)| format_stored_value(v, *tag))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
+                    return Err(format!(
+                        ":db.fn/cas failed on entity {} attribute {}: expected {:?}, found {}",
+                        e, a, old_edn, current_desc
+                    ).into());
+                }
+
+                // CAS matched -- retract old value (if not nil) and assert new value
+                if !old_is_nil {
+                    if let Some((old_bytes, old_tag)) = old_encoded {
+                        pending_datoms.push(PendingDatom {
+                            e,
+                            a,
+                            v_bytes: old_bytes,
+                            v_type_tag: old_tag,
+                            added: false,
+                        });
+                    }
+                }
+
+                let (new_bytes, new_tag) = if is_ref {
+                    encode_ref_value(new_edn, &mut tempid_map)?
+                } else {
+                    encode_value(new_edn)?
+                };
+                pending_datoms.push(PendingDatom {
+                    e,
+                    a,
+                    v_bytes: new_bytes,
+                    v_type_tag: new_tag,
+                    added: true,
+                });
+            }
+            // Handle :db/add and :db/retract - format: [:db/add e a v] or [:db/retract e a v]
             edn::Value::Vector(ref entity_vec) if entity_vec.len() >= 4 => {
                 let op = match &entity_vec[0] {
                     edn::Value::Keyword(kw) if kw.name() == "add" => OpType::Add,
@@ -246,7 +474,8 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
                     Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                         .ok()
                         .flatten()
-                        .ok_or("Failed to allocate entity ID")?
+                        .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
+                         Check that the 'db.part/user' partition exists and has available IDs.")?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -277,18 +506,94 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         }
     }
 
-    // Validate and insert all datoms
+    // Validate and insert all datoms.
+    // If schema was installed (savepoint active), catch errors to rollback
+    // the savepoint before propagating.
+    let datom_result = insert_datoms(&pending_datoms, tx_id);
+
+    match datom_result {
+        Ok(datom_count) => {
+            // All datoms inserted successfully -- release the savepoint to
+            // commit schema + datoms atomically.
+            if has_schema_changes {
+                Spi::run("RELEASE SAVEPOINT schema_install")?;
+            }
+
+            // Build TxReport response
+            let tempids_json: Vec<String> = tempid_map
+                .iter()
+                .map(|(k, v)| format!("\"{}\":{}", k, v))
+                .collect();
+
+            Ok(format!(
+                "{{\"tx-id\":{},\"tx-instant\":{},\"tempids\":{{{}}},\"datoms-inserted\":{}}}",
+                tx_id,
+                tx_instant_micros,
+                tempids_json.join(","),
+                datom_count
+            ))
+        }
+        Err(e) => {
+            // Datom insertion failed -- rollback the savepoint so schema
+            // changes are undone too, then invalidate the cache since we
+            // may have populated it during install_schema_attributes.
+            if has_schema_changes {
+                let _ = Spi::run("ROLLBACK TO SAVEPOINT schema_install");
+                crate::cache::get_cache().invalidate();
+                crate::functions::query::clear_stmt_cache();
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Insert all pending datoms, validating constraints and handling cardinality
+/// semantics. Returns the number of datoms processed.
+fn insert_datoms(
+    pending_datoms: &[PendingDatom],
+    tx_id: i64,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let datom_count = pending_datoms.len();
-    for datom in &pending_datoms {
+    for datom in pending_datoms {
         // Only validate assertions (added=true), not retractions
         if datom.added {
-            validate_datom_constraints(datom, &pending_datoms)?;
+            validate_datom_constraints(datom, pending_datoms)?;
 
             // For cardinality-one attributes, automatically retract any existing
             // value before asserting the new one (Datomic upsert semantics).
+            // For cardinality-many attributes, allow multiple values - no retraction,
+            // but skip if the exact (e, a, v) triple already exists (idempotent).
             if let Some(attr_info) = lookup_attribute_info(datom.a) {
-                if attr_info.cardinality == "one" {
-                    retract_existing_cardinality_one(datom.e, datom.a, tx_id, &datom.v_bytes, datom.v_type_tag)?;
+                match attr_info.cardinality.as_str() {
+                    "one" => {
+                        retract_existing_cardinality_one(
+                            datom.e,
+                            datom.a,
+                            tx_id,
+                            &datom.v_bytes,
+                            datom.v_type_tag,
+                        )?;
+                    }
+                    "many" => {
+                        // For cardinality-many, check if this exact value already
+                        // exists. If so, skip inserting a duplicate (idempotent
+                        // assertion, matching Datomic semantics).
+                        if is_duplicate_cardinality_many(
+                            datom.e,
+                            datom.a,
+                            &datom.v_bytes,
+                            datom.v_type_tag,
+                        )? {
+                            continue;
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            ":db.error/invalid-cardinality Unknown cardinality '{}' for attribute entid {}. \
+                             Valid cardinalities are 'one' and 'many'. This may indicate schema corruption.",
+                            attr_info.cardinality, datom.a
+                        ).into());
+                    }
                 }
             }
         }
@@ -318,19 +623,7 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
         }
     }
 
-    // Build TxReport response
-    let tempids_json: Vec<String> = tempid_map
-        .iter()
-        .map(|(k, v)| format!("\"{}\":{}", k, v))
-        .collect();
-
-    Ok(format!(
-        "{{\"tx-id\":{},\"tx-instant\":{},\"tempids\":{{{}}},\"datoms-inserted\":{}}}",
-        tx_id,
-        tx_instant_micros,
-        tempids_json.join(","),
-        datom_count
-    ))
+    Ok(datom_count)
 }
 
 /// Collect schema-defining assertions for an entity.
@@ -471,10 +764,21 @@ fn install_schema_attributes(
     // Invalidate schema cache after schema changes
     crate::cache::get_cache().invalidate();
 
+    // Invalidate prepared statement cache since schema changes may
+    // alter query plans (e.g., new attributes change subquery results).
+    crate::functions::query::clear_stmt_cache();
+
     Ok(())
 }
 
-/// Resolve entity place (entid, tempid, or ident)
+/// Resolve entity place (entid, tempid, ident, or lookup ref)
+///
+/// Supports:
+///   - Integer: direct entity ID
+///   - Text: tempid string (allocate or reuse)
+///   - Keyword: resolve ident to entity ID
+///   - Vector (2 elements): lookup ref like `[:person/email "alice@example.com"]`
+///     The attribute must have a unique constraint (:db.unique/identity or :db.unique/value).
 fn resolve_entity_place(
     value: &edn::Value,
     tempid_map: &mut std::collections::BTreeMap<String, i64>,
@@ -489,7 +793,8 @@ fn resolve_entity_place(
                 let entid = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                     .ok()
                     .flatten()
-                    .ok_or("Failed to allocate entity ID")?;
+                    .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
+                         Check that the 'db.part/user' partition exists and has available IDs.")?;
                 tempid_map.insert(s.to_string(), entid);
                 Ok(entid)
             }
@@ -503,10 +808,82 @@ fn resolve_entity_place(
             )
             .ok()
             .flatten()
-            .ok_or("Failed to resolve ident")?;
+            .ok_or_else(|| format!(
+                ":db.error/ident-not-found Entity ident '{}' not found in mentat.idents. \
+                 Ensure this ident was previously defined via mentat_transact with :db/ident.",
+                ident_str
+            ))?;
             Ok(entid)
         }
-        _ => Err("Invalid entity place".into()),
+        edn::Value::Vector(ref vec) if vec.len() == 2 => {
+            // Lookup ref: [:attribute value]
+            // Example: [:person/email "alice@example.com"]
+            match &vec[0] {
+                edn::Value::Keyword(_) => {}
+                other => return Err(format!(
+                    ":db.error/invalid-lookup-ref Lookup ref first element must be a keyword attribute, \
+                     got {}. Expected format: [:attribute-keyword value]",
+                    value_type_name(other)
+                ).into()),
+            }
+
+            let a = resolve_attribute(&vec[0])?;
+
+            // Validate the attribute has a unique constraint
+            let attr_ident_display = crate::cache::get_cache()
+                .get_ident(a)
+                .unwrap_or_else(|| format!("entid:{}", a));
+            let attr_info = lookup_attribute_info(a)
+                .ok_or_else(|| format!(
+                    ":db.error/attribute-not-found Lookup ref attribute '{}' (entid {}) not found in schema. \
+                     {}",
+                    attr_ident_display, a, get_available_attributes_hint()
+                ))?;
+            if attr_info.unique_constraint.is_none() {
+                return Err(format!(
+                    ":db.error/lookup-ref-requires-unique Lookup ref attribute '{}' does not have \
+                     a unique constraint. Only attributes with :db.unique/identity or :db.unique/value \
+                     can be used in lookup refs. Add a unique constraint to the attribute definition, e.g.:\n  \
+                     [:db/add \"attr\" :db/unique :db.unique/identity]",
+                    attr_ident_display
+                ).into());
+            }
+
+            let (v_bytes, v_type_tag) = encode_value(&vec[1])?;
+
+            // Query for entity with this unique attribute value
+            let eid = Spi::get_one_with_args::<i64>(
+                "SELECT e FROM mentat.datoms \
+                 WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
+                 LIMIT 1",
+                &[
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(v_bytes),
+                    DatumWithOid::from(v_type_tag),
+                ],
+            )
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                let attr_ident_display = crate::cache::get_cache()
+                    .get_ident(a)
+                    .unwrap_or_else(|| format!("entid:{}", a));
+                format!(
+                    ":db.error/lookup-ref-not-found Lookup ref did not match any existing entity \
+                     for attribute '{}' with the given value. \
+                     Ensure an entity with this attribute value has been transacted.",
+                    attr_ident_display
+                )
+            })?;
+
+            Ok(eid)
+        }
+        other => Err(format!(
+            ":db.error/invalid-entity-place Invalid entity place: got {} (value: {}). \
+             Entity position must be an integer (entity ID), string (tempid), \
+             keyword (ident), or 2-element vector (lookup ref like [:attr value]).",
+            value_type_name(other), other
+        ).into()),
     }
 }
 
@@ -519,9 +896,19 @@ fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Erro
             let ident_str = format!("{}", kw);
             crate::cache::get_cache()
                 .resolve_ident(&ident_str)
-                .ok_or_else(|| format!("Failed to resolve attribute: {}", ident_str).into())
+                .ok_or_else(|| {
+                    let hint = get_available_attributes_hint();
+                    format!(
+                        ":db.error/attribute-not-found Attribute '{}' not found in schema. {}",
+                        ident_str, hint
+                    ).into()
+                })
         }
-        _ => Err("Invalid attribute".into()),
+        other => Err(format!(
+            ":db.error/invalid-attribute Invalid attribute: got {} (value: {}). \
+             Attribute position must be an integer (entid) or keyword (e.g. :person/name).",
+            value_type_name(other), other
+        ).into()),
     }
 }
 
@@ -533,12 +920,7 @@ fn try_resolve_attribute(value: &edn::Value) -> Option<i64> {
         edn::Value::Integer(i) => Some(*i),
         edn::Value::Keyword(kw) => {
             let ident_str = format!("{}", kw);
-            Spi::get_one_with_args::<i64>(
-                "SELECT mentat.resolve_ident($1)",
-                &[DatumWithOid::from(ident_str.as_str())],
-            )
-            .ok()
-            .flatten()
+            crate::cache::get_cache().resolve_ident(&ident_str)
         }
         _ => None,
     }
@@ -564,7 +946,12 @@ fn encode_value(
             };
             Ok((s.as_bytes().to_vec(), 8)) // keyword = 8
         }
-        _ => Err("Unsupported value type".into()),
+        other => Err(format!(
+            ":db.error/unsupported-value-type Cannot encode value of type {} (value: {}). \
+             Supported types: boolean, integer (long), string, keyword. \
+             For ref values, use an entity ID, tempid string, or keyword ident.",
+            value_type_name(other), other
+        ).into()),
     }
 }
 
@@ -606,38 +993,76 @@ fn validate_datom_constraints(
     all_pending: &[PendingDatom],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let attr_info = lookup_attribute_info(datom.a)
-        .ok_or_else(|| format!("Attribute {} not found in schema", datom.a))?;
+        .ok_or_else(|| {
+            let ident_name = crate::cache::get_cache()
+                .get_ident(datom.a)
+                .unwrap_or_else(|| format!("entid:{}", datom.a));
+            let hint = get_available_attributes_hint();
+            format!(
+                ":db.error/attribute-not-found Attribute {} (entid {}) not found in schema. \
+                 {} \
+                 If this is a new attribute, define it first with :db/ident, :db/valueType, \
+                 and :db/cardinality in the same or prior transaction.",
+                ident_name, datom.a, hint
+            )
+        })?;
 
     // 1. Type validation
     let expected_type_tag = value_type_to_tag(&attr_info.value_type);
     if datom.v_type_tag != expected_type_tag {
+        let ident_name = crate::cache::get_cache()
+            .get_ident(datom.a)
+            .unwrap_or_else(|| format!("entid:{}", datom.a));
+        let got_type_name = tag_to_value_type_name(datom.v_type_tag);
         return Err(format!(
-            "Type mismatch for attribute {}: expected type {} (tag {}), got tag {}",
-            datom.a, attr_info.value_type, expected_type_tag, datom.v_type_tag
+            ":db.error/wrong-type-for-attribute Type mismatch for attribute '{}': \
+             schema declares :db/valueType :db.type/{} (tag {}), but the asserted value \
+             has type {} (tag {}). Ensure the value matches the attribute's declared type.",
+            ident_name, attr_info.value_type, expected_type_tag,
+            got_type_name, datom.v_type_tag
         )
         .into());
     }
 
-    // 2. Cardinality validation (only for cardinality/one)
-    if attr_info.cardinality == "one" {
-        // Check within this transaction for multiple assertions of same (e, a)
-        let count_in_tx = all_pending
-            .iter()
-            .filter(|d| d.e == datom.e && d.a == datom.a && d.added)
-            .count();
+    // 2. Cardinality validation
+    match attr_info.cardinality.as_str() {
+        "one" => {
+            // For cardinality-one, check within this transaction for multiple assertions of same (e, a)
+            let count_in_tx = all_pending
+                .iter()
+                .filter(|d| d.e == datom.e && d.a == datom.a && d.added)
+                .count();
 
-        if count_in_tx > 1 {
+            if count_in_tx > 1 {
+                let ident_name = crate::cache::get_cache()
+                    .get_ident(datom.a)
+                    .unwrap_or_else(|| format!("entid:{}", datom.a));
+                return Err(format!(
+                    ":db.error/cardinality-violation Attribute '{}' has :db/cardinality :db.cardinality/one \
+                     but this transaction contains {} assertions for entity {}. \
+                     Cardinality-one attributes can only have a single value per entity. \
+                     Either remove duplicate assertions or change the attribute to :db.cardinality/many.",
+                    ident_name, count_in_tx, datom.e
+                )
+                .into());
+            }
+
+            // Note: existing values for cardinality-one attributes are handled by
+            // retract_existing_cardinality_one() during insertion, implementing
+            // Datomic's upsert semantics (automatically retract old, assert new).
+        }
+        "many" => {
+            // For cardinality-many, multiple values are allowed.
+            // No validation needed - just add new datoms without retracting existing ones.
+        }
+        _ => {
             return Err(format!(
-                "Cardinality violation: attribute {} has cardinality 'one' but transaction \
-                 contains {} assertions for entity {}",
-                datom.a, count_in_tx, datom.e
+                ":db.error/invalid-cardinality Unknown cardinality '{}' for attribute entid {}. \
+                 Valid cardinalities are 'one' and 'many'. This may indicate schema corruption.",
+                attr_info.cardinality, datom.a
             )
             .into());
         }
-
-        // Note: existing values for cardinality-one attributes are handled by
-        // retract_existing_cardinality_one() during insertion, implementing
-        // Datomic's upsert semantics (automatically retract old, assert new).
     }
 
     // 3. Unique constraint validation
@@ -645,19 +1070,18 @@ fn validate_datom_constraints(
         // Check within this transaction for duplicate values
         let dups_in_tx = all_pending
             .iter()
-            .filter(|d| {
-                d.a == datom.a
-                    && d.v_bytes == datom.v_bytes
-                    && d.e != datom.e
-                    && d.added
-            })
+            .filter(|d| d.a == datom.a && d.v_bytes == datom.v_bytes && d.e != datom.e && d.added)
             .count();
 
         if dups_in_tx > 0 {
+            let ident_name = crate::cache::get_cache()
+                .get_ident(datom.a)
+                .unwrap_or_else(|| format!("entid:{}", datom.a));
             return Err(format!(
-                "Unique constraint violation: attribute {} has unique constraint '{}' but \
-                 transaction contains duplicate value for different entities",
-                datom.a, unique_type
+                ":db.error/unique-conflict Unique constraint violation for attribute '{}' \
+                 (unique type: :db.unique/{}). This transaction asserts the same value for \
+                 {} different entities. Each value must belong to exactly one entity.",
+                ident_name, unique_type, dups_in_tx + 1
             )
             .into());
         }
@@ -686,10 +1110,15 @@ fn validate_datom_constraints(
 
         if let Some(existing_e) = existing_entity {
             if existing_e != datom.e {
+                let ident_name = crate::cache::get_cache()
+                    .get_ident(datom.a)
+                    .unwrap_or_else(|| format!("entid:{}", datom.a));
                 return Err(format!(
-                    "Unique constraint violation: attribute {} has unique constraint '{}' but \
-                     value already exists for entity {} (attempting to assert for entity {})",
-                    datom.a, unique_type, existing_e, datom.e
+                    ":db.error/unique-conflict Unique constraint violation for attribute '{}' \
+                     (unique type: :db.unique/{}). The asserted value already exists on entity {} \
+                     but is being asserted for entity {}. \
+                     To reassign the value, first retract it from entity {}.",
+                    ident_name, unique_type, existing_e, datom.e, existing_e
                 )
                 .into());
             }
@@ -720,10 +1149,9 @@ fn retract_existing_cardinality_one(
         )?;
 
         for row in rows {
-            if let (Ok(Some(v_bytes)), Ok(Some(type_tag))) = (
-                row.get::<Vec<u8>>(1),
-                row.get::<i16>(2),
-            ) {
+            if let (Ok(Some(v_bytes)), Ok(Some(type_tag))) =
+                (row.get::<Vec<u8>>(1), row.get::<i16>(2))
+            {
                 return Ok::<_, pgrx::spi::SpiError>(Some((v_bytes, type_tag)));
             }
         }
@@ -754,6 +1182,48 @@ fn retract_existing_cardinality_one(
     Ok(())
 }
 
+/// For cardinality-many attributes, check if the exact (e, a, v) triple already
+/// exists with added=true. If so, the assertion is idempotent and should be
+/// skipped to avoid duplicate datoms (matching Datomic semantics).
+fn is_duplicate_cardinality_many(
+    entity_id: i64,
+    attr_id: i64,
+    v_bytes: &[u8],
+    v_type_tag: i16,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let exists = Spi::get_one_with_args::<bool>(
+        "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+         WHERE e = $1 AND a = $2 AND v = $3 AND value_type_tag = $4 AND added = true)",
+        &[
+            DatumWithOid::from(entity_id),
+            DatumWithOid::from(attr_id),
+            DatumWithOid::from(v_bytes.to_vec()),
+            DatumWithOid::from(v_type_tag),
+        ],
+    )
+    .ok()
+    .flatten()
+    .unwrap_or(false);
+
+    Ok(exists)
+}
+
+/// Map a type tag back to a human-readable value type name (for error messages).
+fn tag_to_value_type_name(tag: i16) -> &'static str {
+    match tag {
+        0 => "ref",
+        1 => "boolean",
+        2 => "long",
+        3 => "double",
+        4 => "instant",
+        7 => "string",
+        8 => "keyword",
+        10 => "uuid",
+        11 => "bytes",
+        _ => "unknown",
+    }
+}
+
 /// Map value_type string to type tag (matches encoding in encode_value)
 fn value_type_to_tag(value_type: &str) -> i16 {
     match value_type {
@@ -778,4 +1248,53 @@ fn compute_value_hash(bytes: &[u8]) -> u64 {
     let mut hasher = DefaultHasher::new();
     bytes.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Format a stored value (bytes + type tag) into a human-readable string for error messages.
+fn format_stored_value(v_bytes: &[u8], type_tag: i16) -> String {
+    match type_tag {
+        0 => {
+            // ref: i64 LE
+            if v_bytes.len() == 8 {
+                let id = i64::from_le_bytes(v_bytes.try_into().unwrap());
+                format!("{}", id)
+            } else {
+                format!("<ref:{} bytes>", v_bytes.len())
+            }
+        }
+        1 => {
+            // boolean
+            if v_bytes.first() == Some(&1) {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
+        2 => {
+            // long: i64 LE
+            if v_bytes.len() == 8 {
+                let n = i64::from_le_bytes(v_bytes.try_into().unwrap());
+                format!("{}", n)
+            } else {
+                format!("<long:{} bytes>", v_bytes.len())
+            }
+        }
+        7 => {
+            // string: UTF-8
+            match std::str::from_utf8(v_bytes) {
+                Ok(s) => format!("\"{}\"", s),
+                Err(_) => format!("<string:{} bytes>", v_bytes.len()),
+            }
+        }
+        8 => {
+            // keyword: UTF-8
+            match std::str::from_utf8(v_bytes) {
+                Ok(s) => format!(":{}", s),
+                Err(_) => format!("<keyword:{} bytes>", v_bytes.len()),
+            }
+        }
+        _ => {
+            format!("<{}:{} bytes>", tag_to_value_type_name(type_tag), v_bytes.len())
+        }
+    }
 }
