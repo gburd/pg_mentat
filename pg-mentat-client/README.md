@@ -405,6 +405,133 @@ lein test-refresh
 - Use `pull-many` instead of multiple `pull` calls when fetching multiple entities
 - Batch transactions when possible
 
+## Batch Queries and Caching (Advanced)
+
+When using a mentatd server with caching support (via `client-cached` namespace), you can leverage db value caching for efficient batch operations:
+
+### Database Value Caching
+
+```clojure
+(require '[pg-mentat.client-cached :as mentat])
+
+;; Get a cached database snapshot
+(def conn (mentat/connect "http://localhost:8080"))
+(def db (mentat/db conn))
+;; => DatabaseValue with :db-id and :basis-t
+
+;; All queries on this db value see the same snapshot
+(mentat/q '[:find ?e :where [?e :person/name]] db)
+(mentat/q '[:find ?age :where [_ :person/age ?age]] db)
+;; Both queries guaranteed to see exact same db state
+```
+
+### Batch Query Execution
+
+Execute multiple queries in a single HTTP request:
+
+```clojure
+;; Execute multiple queries atomically on same snapshot
+(mentat/q-batch db
+  [{:query '[:find ?e ?name
+            :where [?e :person/name ?name]]
+    :args []}
+   {:query '[:find ?e
+            :in $ ?email
+            :where [?e :person/email ?email]]
+    :args ["alice@example.com"]}
+   {:query '[:find (count ?e)
+            :where [?e :person/age ?age]
+                   [(> ?age 25)]]
+    :args []}])
+;; => [[[10001 "Alice"] [10002 "Bob"]]  ; Results from query 1
+;;     [[10001]]                         ; Results from query 2
+;;     [2]]                              ; Results from query 3
+```
+
+### Batch Pull Operations
+
+Pull multiple entities efficiently:
+
+```clojure
+(mentat/pull-batch db
+  [{:pattern [:person/name :person/email]
+    :eid 10001}
+   {:pattern '[*]
+    :eid [:person/email "bob@example.com"]}
+   {:pattern [:person/name {:person/friends [:person/name]}]
+    :eid 10003}])
+;; => [{:person/name "Alice" :person/email "alice@example.com"}
+;;     {:db/id 10002 :person/name "Bob" ...}
+;;     {:person/name "Charlie" :person/friends [{:person/name "Alice"} ...]}]
+```
+
+### Snapshot Isolation
+
+Ensure consistent reads across multiple operations:
+
+```clojure
+(mentat/with-db conn
+  (fn [db]
+    ;; All operations here use the same db snapshot
+    (let [people (mentat/q '[:find ?e ?name
+                            :where [?e :person/name ?name]] db)
+          count (mentat/q '[:find (count ?e) .
+                           :where [?e :person/name]] db)
+          alice (mentat/pull db '[*] [:person/email "alice@example.com"])]
+      {:people people
+       :count count
+       :alice alice})))
+;; All three operations guaranteed to see same db state
+```
+
+### Transaction with Cached DB After
+
+```clojure
+;; Transactions return db-after with caching
+(let [tx-result (mentat/transact conn
+                  [{:db/id "new-person"
+                    :person/name "Diana"
+                    :person/email "diana@example.com"}])]
+  ;; Use db-after for immediate queries on new state
+  (when-let [db-after (:db-after tx-result)]
+    (mentat/q '[:find ?name
+               :where [?e :person/name ?name]] db-after)))
+;; Queries on db-after see transaction results immediately
+```
+
+### Connection Pooling for High Throughput
+
+```clojure
+;; Create a connection pool
+(def pool (mentat/connection-pool "http://localhost:8080" 10))
+
+;; Use connections from pool for parallel operations
+(require '[clojure.core.async :as async])
+
+(let [results (async/chan 100)]
+  ;; Launch parallel transactions
+  (doseq [i (range 100)]
+    (async/go
+      (mentat/with-connection pool
+        (fn [conn]
+          (let [tx (mentat/transact conn
+                     [{:db/id (str "person-" i)
+                       :person/name (str "Person " i)}])]
+            (async/>! results tx))))))
+
+  ;; Collect results
+  (dotimes [_ 100]
+    (async/<!! results)))
+```
+
+### Performance Best Practices with Caching
+
+1. **Use batch operations**: Combine multiple queries/pulls into single requests
+2. **Reuse db values**: Get db once, use for multiple read operations
+3. **Leverage caching**: Let mentatd cache db snapshots for consistent reads
+4. **Connection pooling**: Use multiple connections for parallel write operations
+5. **Minimize round trips**: Batch related operations together
+
 ## Differences from Datomic
 
 While this library aims to provide a Datomic-like API, there are some differences:
