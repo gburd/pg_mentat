@@ -2,7 +2,41 @@ use super::{Anomaly, AnomalyCategory, Operation, Request};
 use edn::parse;
 use edn::symbols::Keyword;
 use edn::types::{SpannedValue, ValueAndSpan};
+use lazy_static::lazy_static;
 use thiserror::Error;
+
+// Phase 0 Optimization: Pre-allocate commonly used keyword keys
+// These are created once at startup and reused for all requests,
+// avoiding repeated allocations during parsing.
+lazy_static! {
+    static ref KEY_OP: ValueAndSpan = make_keyword_key("op");
+    static ref KEY_ARGS: ValueAndSpan = make_keyword_key("args");
+    static ref KEY_QUERY: ValueAndSpan = make_keyword_key("query");
+    static ref KEY_PATTERN: ValueAndSpan = make_keyword_key("pattern");
+    static ref KEY_ENTITY_ID: ValueAndSpan = make_keyword_key("entity-id");
+    static ref KEY_DB_NAME: ValueAndSpan = make_keyword_key("db-name");
+    static ref KEY_CONNECTION_ID: ValueAndSpan = make_keyword_key("connection-id");
+    static ref KEY_TX_DATA: ValueAndSpan = make_keyword_key("tx-data");
+    static ref KEY_INDEX: ValueAndSpan = make_keyword_key("index");
+    static ref KEY_COMPONENTS: ValueAndSpan = make_keyword_key("components");
+    static ref KEY_TIMEOUT: ValueAndSpan = make_keyword_key("timeout");
+    static ref KEY_LIMIT: ValueAndSpan = make_keyword_key("limit");
+    static ref KEY_OFFSET: ValueAndSpan = make_keyword_key("offset");
+    static ref KEY_DB_ID: ValueAndSpan = make_keyword_key("db-id");
+    static ref KEY_T: ValueAndSpan = make_keyword_key("t");
+    static ref KEY_START: ValueAndSpan = make_keyword_key("start");
+    static ref KEY_END: ValueAndSpan = make_keyword_key("end");
+    static ref KEY_PREDICATE: ValueAndSpan = make_keyword_key("predicate");
+    static ref KEY_TYPE: ValueAndSpan = make_keyword_key("type");
+    static ref KEY_VALUE: ValueAndSpan = make_keyword_key("value");
+}
+
+fn make_keyword_key(name: &str) -> ValueAndSpan {
+    ValueAndSpan {
+        inner: SpannedValue::Keyword(Keyword::plain(name)),
+        span: edn::types::Span::new(0, 0),
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ParseError {
@@ -34,14 +68,9 @@ pub fn parse_request(input: &str) -> Result<Request, ParseError> {
         _ => return Err(ParseError::InvalidType("request must be a map".to_string())),
     };
 
-    let op_keyword = Keyword::plain("op");
-    let op_key = ValueAndSpan {
-        inner: SpannedValue::Keyword(op_keyword.clone()),
-        span: edn::types::Span::new(0, 0),
-    };
-
+    // Phase 0 Optimization: Use pre-allocated key instead of creating new one
     let op_value = map
-        .get(&op_key)
+        .get(&*KEY_OP)
         .ok_or_else(|| ParseError::MissingField("op".to_string()))?;
 
     let op = parse_operation(op_value, map)?;
@@ -91,22 +120,13 @@ fn parse_operation(
         "q" => {
             let args_map = extract_args_map(map)?;
 
-            let query_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("query")),
-                span: edn::types::Span::new(0, 0),
-            };
-
-            let query = match args_map.get(&query_key) {
+            // Phase 0 Optimization: Use pre-allocated keys
+            let query = match args_map.get(&*KEY_QUERY) {
                 Some(v) => format!("{:?}", v.inner),
                 None => return Err(ParseError::MissingField("query".to_string())),
             };
 
-            let args_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("args")),
-                span: edn::types::Span::new(0, 0),
-            };
-
-            let args = match args_map.get(&args_key) {
+            let args = match args_map.get(&*KEY_ARGS) {
                 Some(v) => match &v.inner {
                     SpannedValue::Vector(vec) => {
                         vec.iter().map(|arg| format!("{:?}", arg.inner)).collect()
@@ -116,10 +136,10 @@ fn parse_operation(
                 _ => Vec::new(),
             };
 
-            let timeout = extract_optional_int(&args_map, "timeout").map(|i| i as u64);
-            let limit = extract_optional_int(&args_map, "limit").map(|i| i as usize);
-            let offset = extract_optional_int(&args_map, "offset").map(|i| i as usize);
-            let db_id = extract_optional_string(&args_map, "db-id");
+            let timeout = extract_optional_int(args_map, "timeout").map(|i| i as u64);
+            let limit = extract_optional_int(args_map, "limit").map(|i| i as usize);
+            let offset = extract_optional_int(args_map, "offset").map(|i| i as usize);
+            let db_id = extract_optional_string(args_map, "db-id");
 
             Ok(Operation::Query {
                 query,
@@ -134,12 +154,8 @@ fn parse_operation(
         "transact" => {
             let args_map = extract_args_map(map)?;
 
-            let conn_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("connection-id")),
-                span: edn::types::Span::new(0, 0),
-            };
-
-            let connection_id = match args_map.get(&conn_key) {
+            // Phase 0 Optimization: Use pre-allocated keys
+            let connection_id = match args_map.get(&*KEY_CONNECTION_ID) {
                 Some(v) => match &v.inner {
                     SpannedValue::Text(s) => s.to_string(),
                     _ => return Err(ParseError::MissingField("connection-id".to_string())),
@@ -147,12 +163,7 @@ fn parse_operation(
                 _ => return Err(ParseError::MissingField("connection-id".to_string())),
             };
 
-            let tx_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("tx-data")),
-                span: edn::types::Span::new(0, 0),
-            };
-
-            let tx_data = match args_map.get(&tx_key) {
+            let tx_data = match args_map.get(&*KEY_TX_DATA) {
                 Some(v) => format!("{:?}", v.inner),
                 None => return Err(ParseError::MissingField("tx-data".to_string())),
             };
@@ -218,12 +229,8 @@ fn parse_operation(
         "with" => {
             let args_map = extract_args_map(map)?;
 
-            let tx_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("tx-data")),
-                span: edn::types::Span::new(0, 0),
-            };
-
-            let tx_data = match args_map.get(&tx_key) {
+            // Phase 0 Optimization: Use pre-allocated key
+            let tx_data = match args_map.get(&*KEY_TX_DATA) {
                 Some(v) => format!("{:?}", v.inner),
                 None => return Err(ParseError::MissingField("tx-data".to_string())),
             };
@@ -255,30 +262,18 @@ fn parse_operation(
 fn parse_filter_predicate(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
 ) -> Result<super::FilterPredicate, ParseError> {
-    let pred_key = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain("predicate")),
-        span: edn::types::Span::new(0, 0),
-    };
-
+    // Phase 0 Optimization: Use pre-allocated key
     let pred_value = map
-        .get(&pred_key)
+        .get(&*KEY_PREDICATE)
         .ok_or_else(|| ParseError::MissingField("predicate".to_string()))?;
 
     // Predicate can be a map like {:type :attr-equals :value ":person/name"}
     // or a keyword for simple predicates
     match &pred_value.inner {
         SpannedValue::Map(pred_map) => {
-            let type_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("type")),
-                span: edn::types::Span::new(0, 0),
-            };
-            let value_key = ValueAndSpan {
-                inner: SpannedValue::Keyword(Keyword::plain("value")),
-                span: edn::types::Span::new(0, 0),
-            };
-
+            // Phase 0 Optimization: Use pre-allocated keys
             let pred_type = pred_map
-                .get(&type_key)
+                .get(&*KEY_TYPE)
                 .ok_or_else(|| ParseError::MissingField("predicate :type".to_string()))?;
 
             let pred_type_str = match &pred_type.inner {
@@ -291,7 +286,7 @@ fn parse_filter_predicate(
             };
 
             let pred_val = pred_map
-                .get(&value_key)
+                .get(&*KEY_VALUE)
                 .ok_or_else(|| ParseError::MissingField("predicate :value".to_string()))?;
 
             match pred_type_str.as_str() {
@@ -329,16 +324,14 @@ fn parse_filter_predicate(
     }
 }
 
+// Phase 0 Optimization: Return reference instead of cloning the entire BTreeMap
 fn extract_args_map(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
-) -> Result<std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, ParseError> {
-    let args_key = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain("args")),
-        span: edn::types::Span::new(0, 0),
-    };
-    match map.get(&args_key) {
+) -> Result<&std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>, ParseError> {
+    // Use pre-allocated key
+    match map.get(&*KEY_ARGS) {
         Some(v) => match &v.inner {
-            SpannedValue::Map(m) => Ok(m.clone()),
+            SpannedValue::Map(m) => Ok(m),  // Return reference, not clone
             _ => Err(ParseError::MissingField("args".to_string())),
         },
         _ => Err(ParseError::MissingField("args".to_string())),
@@ -363,15 +356,41 @@ fn extract_string_arg(
     }
 }
 
+// Phase 0 Optimization: Helper to get ValueAndSpan key for a string
+// Uses pre-allocated static keys for common fields, creates on-demand for others
+fn get_key_for(key_str: &str) -> std::borrow::Cow<'static, ValueAndSpan> {
+    match key_str {
+        "op" => std::borrow::Cow::Borrowed(&*KEY_OP),
+        "args" => std::borrow::Cow::Borrowed(&*KEY_ARGS),
+        "query" => std::borrow::Cow::Borrowed(&*KEY_QUERY),
+        "pattern" => std::borrow::Cow::Borrowed(&*KEY_PATTERN),
+        "entity-id" => std::borrow::Cow::Borrowed(&*KEY_ENTITY_ID),
+        "db-name" => std::borrow::Cow::Borrowed(&*KEY_DB_NAME),
+        "connection-id" => std::borrow::Cow::Borrowed(&*KEY_CONNECTION_ID),
+        "tx-data" => std::borrow::Cow::Borrowed(&*KEY_TX_DATA),
+        "index" => std::borrow::Cow::Borrowed(&*KEY_INDEX),
+        "components" => std::borrow::Cow::Borrowed(&*KEY_COMPONENTS),
+        "timeout" => std::borrow::Cow::Borrowed(&*KEY_TIMEOUT),
+        "limit" => std::borrow::Cow::Borrowed(&*KEY_LIMIT),
+        "offset" => std::borrow::Cow::Borrowed(&*KEY_OFFSET),
+        "db-id" => std::borrow::Cow::Borrowed(&*KEY_DB_ID),
+        "t" => std::borrow::Cow::Borrowed(&*KEY_T),
+        "start" => std::borrow::Cow::Borrowed(&*KEY_START),
+        "end" => std::borrow::Cow::Borrowed(&*KEY_END),
+        "predicate" => std::borrow::Cow::Borrowed(&*KEY_PREDICATE),
+        "type" => std::borrow::Cow::Borrowed(&*KEY_TYPE),
+        "value" => std::borrow::Cow::Borrowed(&*KEY_VALUE),
+        // For uncommon keys, create on-demand (still better than before due to reduced allocations)
+        _ => std::borrow::Cow::Owned(make_keyword_key(key_str)),
+    }
+}
+
 fn extract_optional_int(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
 ) -> Option<i64> {
-    let key_value = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain(key)),
-        span: edn::types::Span::new(0, 0),
-    };
-    map.get(&key_value).and_then(|v| match &v.inner {
+    let key_value = get_key_for(key);
+    map.get(key_value.as_ref()).and_then(|v| match &v.inner {
         SpannedValue::Integer(i) => Some(*i),
         _ => None,
     })
@@ -389,11 +408,8 @@ fn extract_value_as_string(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
 ) -> Result<String, ParseError> {
-    let key_value = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain(key)),
-        span: edn::types::Span::new(0, 0),
-    };
-    match map.get(&key_value) {
+    let key_value = get_key_for(key);
+    match map.get(key_value.as_ref()) {
         Some(v) => Ok(format!("{:?}", v.inner)),
         None => Err(ParseError::MissingField(key.to_string())),
     }
@@ -403,11 +419,8 @@ fn extract_optional_vector(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
 ) -> Option<Vec<String>> {
-    let key_value = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain(key)),
-        span: edn::types::Span::new(0, 0),
-    };
-    map.get(&key_value).and_then(|v| match &v.inner {
+    let key_value = get_key_for(key);
+    map.get(key_value.as_ref()).and_then(|v| match &v.inner {
         SpannedValue::Vector(vec) => {
             Some(vec.iter().map(|arg| format!("{:?}", arg.inner)).collect())
         }
@@ -419,11 +432,8 @@ fn extract_optional_string(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
 ) -> Option<String> {
-    let key_value = ValueAndSpan {
-        inner: SpannedValue::Keyword(Keyword::plain(key)),
-        span: edn::types::Span::new(0, 0),
-    };
-    map.get(&key_value).and_then(|v| match &v.inner {
+    let key_value = get_key_for(key);
+    map.get(key_value.as_ref()).and_then(|v| match &v.inner {
         SpannedValue::Text(s) => Some(s.to_string()),
         _ => None,
     })
@@ -582,12 +592,13 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Query { query, args, timeout, limit, offset } => {
+            Operation::Query { query, args, timeout, limit, offset, db_id } => {
                 assert!(query.contains("find"));
                 assert!(args.is_empty());
                 assert!(timeout.is_none());
                 assert!(limit.is_none());
                 assert!(offset.is_none());
+                assert!(db_id.is_none());
             }
             _ => panic!("Expected Query operation"),
         }
