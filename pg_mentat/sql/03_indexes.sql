@@ -1,31 +1,67 @@
 -- Index definitions for pg_mentat
 -- Implements EAVT, AEVT, AVET, VAET index pattern from Datomic/Mentat
+--
+-- Values are stored in type-specific columns (v_ref, v_long, v_text, etc.)
+-- so AVET indexes are type-specific partial indexes for correct range queries.
 
 -- EAVT: Primary index for entity-centric lookups
 -- "What are all the facts about entity E?"
 CREATE INDEX idx_datoms_eavt ON mentat.datoms
-    USING BTREE (e, a, value_type_tag, v, tx)
+    USING BTREE (e, a, value_type_tag, tx)
     WHERE added = TRUE;
 
 -- AEVT: Index for attribute-centric scans
 -- "What are all the facts with attribute A?"
 CREATE INDEX idx_datoms_aevt ON mentat.datoms
-    USING BTREE (a, e, value_type_tag, v, tx)
-    WHERE added = TRUE;
-
--- AVET: Index for attribute+value lookups and unique constraints
--- "What entities have attribute A with value V?"
--- Used for unique constraint enforcement and lookup-refs
-CREATE INDEX idx_datoms_avet ON mentat.datoms
-    USING BTREE (a, value_type_tag, v, e, tx)
+    USING BTREE (a, e, value_type_tag, tx)
     WHERE added = TRUE;
 
 -- VAET: Reverse reference index for ref types
 -- "What entities reference entity E?"
 -- Partial index: only for ref types (value_type_tag = 0)
 CREATE INDEX idx_datoms_vaet ON mentat.datoms
-    USING BTREE (v, a, e, tx)
+    USING BTREE (v_ref, a, e, tx)
     WHERE added = TRUE AND value_type_tag = 0;
+
+-- Type-specific AVET indexes for correct range queries
+-- Each index covers one type so PostgreSQL uses native type comparison operators.
+-- This fixes the core bug: BYTEA binary comparison produced wrong ordering
+-- (e.g., "2" > "10" in binary because 0x32 > 0x31).
+
+-- AVET for ref values (entity ID lookups)
+CREATE INDEX idx_datoms_avet_ref ON mentat.datoms
+    USING BTREE (a, v_ref, e, tx)
+    WHERE added = TRUE AND value_type_tag = 0;
+
+-- AVET for long/integer values (numeric range queries)
+CREATE INDEX idx_datoms_avet_long ON mentat.datoms
+    USING BTREE (a, v_long, e, tx)
+    WHERE added = TRUE AND value_type_tag = 2;
+
+-- AVET for double/float values
+CREATE INDEX idx_datoms_avet_double ON mentat.datoms
+    USING BTREE (a, v_double, e, tx)
+    WHERE added = TRUE AND value_type_tag = 3;
+
+-- AVET for instant/timestamp values (temporal range queries)
+CREATE INDEX idx_datoms_avet_instant ON mentat.datoms
+    USING BTREE (a, v_instant, e, tx)
+    WHERE added = TRUE AND value_type_tag = 4;
+
+-- AVET for text/string values (lexicographic ordering)
+CREATE INDEX idx_datoms_avet_text ON mentat.datoms
+    USING BTREE (a, v_text, e, tx)
+    WHERE added = TRUE AND value_type_tag = 7;
+
+-- AVET for keyword values
+CREATE INDEX idx_datoms_avet_keyword ON mentat.datoms
+    USING BTREE (a, v_keyword, e, tx)
+    WHERE added = TRUE AND value_type_tag = 8;
+
+-- AVET for UUID values
+CREATE INDEX idx_datoms_avet_uuid ON mentat.datoms
+    USING BTREE (a, v_uuid, e, tx)
+    WHERE added = TRUE AND value_type_tag = 10;
 
 -- Transaction temporal index
 CREATE INDEX idx_datoms_tx ON mentat.datoms
@@ -68,7 +104,7 @@ CREATE INDEX idx_datoms_temporal ON mentat.datoms
 -- Avoids table lookups when checking for existing values
 CREATE INDEX idx_datoms_cardinality ON mentat.datoms
     USING BTREE (e, a, added)
-    INCLUDE (v, value_type_tag, tx);
+    INCLUDE (value_type_tag, tx);
 
 -- Fulltext entity/attribute reference index
 -- Speeds up joins between fulltext and datoms tables

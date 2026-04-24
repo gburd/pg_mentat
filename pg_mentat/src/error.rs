@@ -431,15 +431,12 @@ impl std::error::Error for MentatError {
 }
 
 // ---------------------------------------------------------------------------
-// Conversions -- allow `MentatError` to be used where `Box<dyn Error>` is
-// expected, and allow wrapping upstream errors.
+// Conversions -- allow wrapping upstream errors into MentatError.
+//
+// `MentatError` implements `std::error::Error + Send + Sync`, so the blanket
+// impl `From<E: Error + Send + Sync> for Box<dyn Error + Send + Sync>` in
+// std already provides `.into()` conversion.
 // ---------------------------------------------------------------------------
-
-impl From<MentatError> for Box<dyn std::error::Error + Send + Sync> {
-    fn from(e: MentatError) -> Self {
-        Box::new(e)
-    }
-}
 
 impl From<pgrx::spi::SpiError> for MentatError {
     fn from(e: pgrx::spi::SpiError) -> Self {

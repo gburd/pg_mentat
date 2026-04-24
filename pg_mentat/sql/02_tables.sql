@@ -40,13 +40,36 @@ CREATE TABLE mentat.transactions (
 -- Datoms: The core fact table
 -- Stores all assertions and retractions
 -- Structure: [entity, attribute, value, transaction, added]
+-- Values are stored in type-specific columns for correct native comparisons.
+-- Exactly one v_* column must be NOT NULL per row (enforced by CHECK constraint).
 CREATE TABLE mentat.datoms (
     e BIGINT NOT NULL,
     a BIGINT NOT NULL,
-    v BYTEA NOT NULL,
+    value_type_tag SMALLINT NOT NULL,
+    v_ref BIGINT,
+    v_bool BOOLEAN,
+    v_long BIGINT,
+    v_double DOUBLE PRECISION,
+    v_text TEXT,
+    v_keyword TEXT,
+    v_instant TIMESTAMPTZ,
+    v_uuid UUID,
+    v_bytes BYTEA,
     tx BIGINT NOT NULL,
     added BOOLEAN NOT NULL DEFAULT TRUE,
-    value_type_tag SMALLINT NOT NULL,
+
+    -- Ensure exactly one value column is populated
+    CONSTRAINT chk_datom_value CHECK (
+        (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
+       + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
+    ),
 
     -- Reference to transactions table
     CONSTRAINT fk_datoms_tx FOREIGN KEY (tx)

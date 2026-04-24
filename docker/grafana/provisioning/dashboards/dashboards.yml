@@ -1,0 +1,13 @@
+# Grafana dashboard provisioning -- auto-loads dashboards from JSON files
+apiVersion: 1
+
+providers:
+  - name: "mentatd"
+    orgId: 1
+    folder: "mentatd"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

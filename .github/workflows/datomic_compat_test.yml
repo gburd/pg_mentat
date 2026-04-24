@@ -104,13 +104,21 @@ jobs:
 
       # -- Shell-based protocol tests --
 
-      - name: Run shell protocol tests
+      - name: Run shell protocol tests (EDN)
         working-directory: mentatd/tests/datomic_client
         env:
           MENTATD_URL: http://127.0.0.1:8080
         run: |
           chmod +x test_client.sh
           ./test_client.sh
+
+      - name: Run shell protocol tests (Transit)
+        working-directory: mentatd/tests/datomic_client
+        env:
+          MENTATD_URL: http://127.0.0.1:8080
+        run: |
+          chmod +x test_transit.sh
+          ./test_transit.sh
 
       # -- Clojure / Leiningen tests --
 
@@ -136,6 +144,7 @@ jobs:
         working-directory: mentatd/tests/datomic_client
         env:
           MENTATD_URI: "datomic:free://localhost:8080/test-db"
+          MENTATD_URL: "http://127.0.0.1:8080"
         run: lein test
 
       # -- Cleanup --

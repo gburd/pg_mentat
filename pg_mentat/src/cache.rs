@@ -11,6 +11,7 @@ pub struct AttributeInfo {
     pub unique_constraint: Option<String>,
     pub fulltext: bool,
     pub indexed: bool,
+    pub component: bool,
 }
 
 /// Global caches for schema and ident lookups.
@@ -53,7 +54,7 @@ impl SchemaCache {
         let _ = Spi::connect(|client| {
             let rows = client.select(
                 "SELECT entid, ident, value_type::TEXT, cardinality::TEXT, \
-                 unique_constraint::TEXT, fulltext, indexed \
+                 unique_constraint::TEXT, fulltext, indexed, component \
                  FROM mentat.schema",
                 None,
                 &[],
@@ -92,6 +93,7 @@ impl SchemaCache {
                 let unique_constraint: Option<String> = row.get(5).ok().flatten();
                 let fulltext: bool = row.get(6).ok().flatten().unwrap_or(false);
                 let indexed: bool = row.get(7).ok().flatten().unwrap_or(false);
+                let component: bool = row.get(8).ok().flatten().unwrap_or(false);
 
                 attrs.insert(
                     entid,
@@ -101,6 +103,7 @@ impl SchemaCache {
                         unique_constraint,
                         fulltext,
                         indexed,
+                        component,
                     },
                 );
 
@@ -189,6 +192,24 @@ impl SchemaCache {
             .entids_to_ident
             .read()
             .expect("RwLock poisoned - ident cache corrupted");
+        cache.get(&entid).cloned()
+    }
+
+    /// Look up attribute metadata by ident string.
+    pub fn get_attribute_by_ident(&self, ident: &str) -> Option<AttributeInfo> {
+        self.ensure_warm();
+
+        let ident_map = self
+            .idents_to_entid
+            .read()
+            .expect("RwLock poisoned - ident cache corrupted");
+        let entid = ident_map.get(ident).copied()?;
+        drop(ident_map);
+
+        let cache = self
+            .attrs_by_id
+            .read()
+            .expect("RwLock poisoned - schema cache corrupted");
         cache.get(&entid).cloned()
     }
 

@@ -17,7 +17,7 @@
 //! ## Phase 1 - Core Operations
 //!
 //! This initial implementation provides:
-//! - Entity ID allocation from partitions
+//! - Entity ID allocation from partition sequences (lock-free)
 //! - Simple entity queries by attribute/value
 //! - Basic transaction begin/commit
 //! - Helper function wrapping for schema operations
@@ -27,7 +27,8 @@ use pgrx::datum::DatumWithOid;
 
 /// Allocate a new entity ID from the specified partition.
 ///
-/// Wraps the `mentat.allocate_entid(partition_name TEXT)` PostgreSQL function.
+/// Wraps PostgreSQL sequences for lock-free entity ID allocation.
+/// Uses `nextval()` on partition-specific sequences instead of row-level locks.
 ///
 /// # Example
 /// ```sql
@@ -35,21 +36,15 @@ use pgrx::datum::DatumWithOid;
 /// ```
 #[pg_extern]
 fn alloc_entid(partition_name: &str) -> Result<i64, Box<dyn std::error::Error>> {
-    Spi::connect(|client| {
-        let result = client.select(
-            "SELECT mentat.allocate_entid($1)",
-            None,
-            &[DatumWithOid::from(partition_name)],
-        )?;
-
-        if let Some(row) = result.first() {
-            let entid: i64 = row.get(1)?
-                .ok_or_else(|| "allocate_entid returned NULL")?;
-            Ok(entid)
-        } else {
-            Err("allocate_entid returned no rows".into())
-        }
-    })
+    let seq_name = match partition_name {
+        "db.part/db" => "mentat.partition_db_seq",
+        "db.part/user" => "mentat.partition_user_seq",
+        "db.part/tx" => "mentat.partition_tx_seq",
+        _ => return Err(format!("Unknown partition: {}", partition_name).into()),
+    };
+    let query = format!("SELECT nextval('{}')", seq_name);
+    Spi::get_one::<i64>(&query)?
+        .ok_or_else(|| "nextval returned NULL".into())
 }
 
 /// Resolve a keyword ident to its entity ID.
@@ -99,13 +94,13 @@ fn lookup_entity_by_attr(
     // Phase 2: Support all TypedValue types with proper encoding
 
     Spi::connect(|client| {
-        // Query datoms table for matching entity
+        // Query datoms table for matching entity (string values stored in v_text)
         match client.select(
             "SELECT d.e FROM mentat.datoms d \
              JOIN mentat.idents i ON i.ident = $1 \
              WHERE d.a = i.entid \
              AND d.added = true \
-             AND encode(d.v, 'escape') = $2 \
+             AND d.v_text = $2 \
              LIMIT 1",
             None,
             &[DatumWithOid::from(attr_ident), DatumWithOid::from(value_str)],
@@ -141,8 +136,16 @@ fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
             "CREATE TEMPORARY TABLE temp_exact_searches (
                 e0 BIGINT NOT NULL,
                 a0 BIGINT NOT NULL,
-                v0 BYTEA NOT NULL,
                 value_type_tag0 SMALLINT NOT NULL,
+                v_ref0 BIGINT,
+                v_bool0 BOOLEAN,
+                v_long0 BIGINT,
+                v_double0 DOUBLE PRECISION,
+                v_text0 TEXT,
+                v_keyword0 TEXT,
+                v_instant0 TIMESTAMPTZ,
+                v_uuid0 UUID,
+                v_bytes0 BYTEA,
                 added0 BOOLEAN NOT NULL,
                 flags0 SMALLINT NOT NULL
             ) ON COMMIT DROP",
@@ -151,8 +154,16 @@ fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
             "CREATE TEMPORARY TABLE temp_inexact_searches (
                 e0 BIGINT NOT NULL,
                 a0 BIGINT NOT NULL,
-                v0 BYTEA NOT NULL,
                 value_type_tag0 SMALLINT NOT NULL,
+                v_ref0 BIGINT,
+                v_bool0 BOOLEAN,
+                v_long0 BIGINT,
+                v_double0 DOUBLE PRECISION,
+                v_text0 TEXT,
+                v_keyword0 TEXT,
+                v_instant0 TIMESTAMPTZ,
+                v_uuid0 UUID,
+                v_bytes0 BYTEA,
                 added0 BOOLEAN NOT NULL,
                 flags0 SMALLINT NOT NULL
             ) ON COMMIT DROP",
@@ -161,13 +172,20 @@ fn begin_transaction() -> Result<(), Box<dyn std::error::Error>> {
             "CREATE TEMPORARY TABLE temp_search_results (
                 e0 BIGINT NOT NULL,
                 a0 BIGINT NOT NULL,
-                v0 BYTEA NOT NULL,
                 value_type_tag0 SMALLINT NOT NULL,
+                v_ref0 BIGINT,
+                v_bool0 BOOLEAN,
+                v_long0 BIGINT,
+                v_double0 DOUBLE PRECISION,
+                v_text0 TEXT,
+                v_keyword0 TEXT,
+                v_instant0 TIMESTAMPTZ,
+                v_uuid0 UUID,
+                v_bytes0 BYTEA,
                 added0 BOOLEAN NOT NULL,
                 flags0 SMALLINT NOT NULL,
                 search_type TEXT NOT NULL,
-                rid BIGINT,
-                v BYTEA
+                rid BIGINT
             ) ON COMMIT DROP",
         ];
 
@@ -199,8 +217,10 @@ fn commit_transaction(tx_id: i64) -> Result<(), Box<dyn std::error::Error>> {
 
         // Insert new datoms from staged searches
         client.update(
-            "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
-             SELECT e0, a0, v0, $1, added0, value_type_tag0 \
+            "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, v_bool, v_long, v_double, \
+                                        v_text, v_keyword, v_instant, v_uuid, v_bytes, tx, added) \
+             SELECT e0, a0, value_type_tag0, v_ref0, v_bool0, v_long0, v_double0, \
+                    v_text0, v_keyword0, v_instant0, v_uuid0, v_bytes0, $1, added0 \
              FROM temp_exact_searches \
              WHERE added0 = true",
             None,
@@ -222,7 +242,7 @@ fn commit_transaction(tx_id: i64) -> Result<(), Box<dyn std::error::Error>> {
 /// Get all datoms for an entity.
 ///
 /// Returns the current state of an entity (not historical).
-/// Phase 1: Basic entity retrieval.
+/// Returns attribute entid, value as text, type tag, and transaction id.
 ///
 /// # Example
 /// ```sql
@@ -232,12 +252,16 @@ fn commit_transaction(tx_id: i64) -> Result<(), Box<dyn std::error::Error>> {
 fn get_entity_datoms(
     entity_id: i64,
 ) -> Result<
-    TableIterator<'static, (name!(attribute, i64), name!(value, Vec<u8>), name!(value_type, i16), name!(transaction, i64))>,
+    TableIterator<'static, (name!(attribute, i64), name!(value, String), name!(value_type, i16), name!(transaction, i64))>,
     Box<dyn std::error::Error>
 > {
     Ok(TableIterator::new(Spi::connect(|client| {
         let result = client.select(
-            "SELECT a, v, value_type_tag, tx \
+            "SELECT a, value_type_tag, \
+                    COALESCE(v_ref::TEXT, v_bool::TEXT, v_long::TEXT, \
+                             v_double::TEXT, v_text, v_keyword, \
+                             v_instant::TEXT, v_uuid::TEXT, encode(v_bytes, 'hex')) AS value_text, \
+                    tx \
              FROM mentat.datoms \
              WHERE e = $1 AND added = true \
              ORDER BY a, tx DESC",
@@ -248,8 +272,8 @@ fn get_entity_datoms(
         let rows: Vec<_> = result.into_iter()
             .filter_map(|row| {
                 let a: i64 = row.get(1).ok()??;
-                let v: Vec<u8> = row.get(2).ok()??;
-                let value_type: i16 = row.get(3).ok()??;
+                let value_type: i16 = row.get(2).ok()??;
+                let v: String = row.get(3).ok()??;
                 let tx: i64 = row.get(4).ok()??;
                 Some((a, v, value_type, tx))
             })

@@ -33,12 +33,43 @@ struct SchemaBuilder {
     no_history: Option<bool>,    // :db/noHistory
 }
 
+/// Typed value for a pending datom, replacing the old BYTEA encoding.
+/// Each variant maps to a specific typed column in the datoms table.
+#[derive(Debug, Clone, PartialEq)]
+enum TypedValue {
+    Ref(i64),
+    Boolean(bool),
+    Long(i64),
+    Double(f64),
+    Text(String),
+    Keyword(String),
+    Instant(i64),      // microseconds since epoch
+    Uuid(uuid::Uuid),
+    Bytes(Vec<u8>),
+}
+
+impl TypedValue {
+    /// Return the value_type_tag for this value.
+    fn type_tag(&self) -> i16 {
+        match self {
+            TypedValue::Ref(_) => 0,
+            TypedValue::Boolean(_) => 1,
+            TypedValue::Long(_) => 2,
+            TypedValue::Double(_) => 3,
+            TypedValue::Instant(_) => 4,
+            TypedValue::Text(_) => 7,
+            TypedValue::Keyword(_) => 8,
+            TypedValue::Uuid(_) => 10,
+            TypedValue::Bytes(_) => 11,
+        }
+    }
+}
+
 /// A single parsed assertion ready for insertion.
 struct PendingDatom {
     e: i64,
     a: i64,
-    v_bytes: Vec<u8>,
-    v_type_tag: i16,
+    v: TypedValue,
     added: bool,
 }
 
@@ -166,8 +197,17 @@ fn execute_transaction_body(
         }.into()),
     };
 
+    // Get basis-t before transaction (max tx id currently in the database).
+    // In Datomic, basis-t represents the latest transaction point.
+    let basis_t_before = Spi::get_one::<i64>(
+        "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+    )
+    .ok()
+    .flatten()
+    .unwrap_or(0);
+
     // Allocate transaction ID
-    let tx_id = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/tx')")
+    let tx_id = Spi::get_one::<i64>("SELECT nextval('mentat.partition_tx_seq')")
         .ok()
         .flatten()
         .ok_or_else(|| MentatError::AllocationFailed {
@@ -187,18 +227,18 @@ fn execute_transaction_body(
                   The mentat.transactions table may be missing or the insert failed.".to_string(),
     })?;
 
-    // Insert :db/txInstant datom for this transaction
-    let instant_bytes = tx_instant_micros.to_le_bytes().to_vec();
+    // Insert :db/txInstant datom for this transaction using typed column
+    // Use to_timestamp() in SQL to convert microseconds to TIMESTAMPTZ
     Spi::run_with_args(
-        "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO mentat.datoms (e, a, value_type_tag, v_instant, tx, added) \
+         VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
         &[
             DatumWithOid::from(tx_id),
             DatumWithOid::from(bootstrap_entids::DB_TX_INSTANT),
-            DatumWithOid::from(instant_bytes),
+            DatumWithOid::from(4_i16), // type_tag::INSTANT = 4
+            DatumWithOid::from(tx_instant_micros),
             DatumWithOid::from(tx_id),
             DatumWithOid::from(true),
-            DatumWithOid::from(4_i16), // type_tag::INSTANT = 4
         ],
     )?;
 
@@ -244,7 +284,7 @@ fn execute_transaction_body(
                 {
                     resolve_entity_place(id_val, &mut tempid_map)?
                 } else {
-                    Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
+                    Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
                         .ok()
                         .flatten()
                         .ok_or_else(|| MentatError::AllocationFailed {
@@ -300,22 +340,22 @@ fn execute_transaction_body(
                 // Query all current datoms for this entity
                 Spi::connect(|client| {
                     let rows = client.select(
-                        "SELECT a, v, value_type_tag FROM mentat.datoms \
-                         WHERE e = $1 AND added = true",
+                        "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
+                                v_text, v_keyword, v_instant, v_uuid, v_bytes \
+                         FROM mentat.datoms WHERE e = $1 AND added = true",
                         None,
                         &[DatumWithOid::from(e)],
                     )?;
 
                     for row in rows {
                         let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
-                        let v_bytes: Vec<u8> = row.get(2)?.ok_or("Missing value")?;
-                        let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
+                        let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
+                        let v = read_typed_value_from_row(&row, v_type_tag, 3)?;
 
                         pending_datoms.push(PendingDatom {
                             e,
                             a,
-                            v_bytes,
-                            v_type_tag,
+                            v,
                             added: false,
                         });
                     }
@@ -336,19 +376,20 @@ fn execute_transaction_body(
                 let is_ref = lookup_value_type(a).as_deref() == Some("ref");
 
                 // Get current value(s) for this (e, a) pair
-                let current_values: Vec<(Vec<u8>, i16)> = Spi::connect(|client| {
+                let current_values: Vec<TypedValue> = Spi::connect(|client| {
                     let rows = client.select(
-                        "SELECT v, value_type_tag FROM mentat.datoms \
-                         WHERE e = $1 AND a = $2 AND added = true",
+                        "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
+                                v_text, v_keyword, v_instant, v_uuid, v_bytes \
+                         FROM mentat.datoms WHERE e = $1 AND a = $2 AND added = true",
                         None,
                         &[DatumWithOid::from(e), DatumWithOid::from(a)],
                     )?;
 
                     let mut vals = Vec::new();
                     for row in rows {
-                        let v_bytes: Vec<u8> = row.get(1)?.ok_or("Missing value")?;
-                        let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
-                        vals.push((v_bytes, v_type_tag));
+                        let v_type_tag: i16 = row.get(1)?.ok_or("Missing type tag")?;
+                        let v = read_typed_value_from_row(&row, v_type_tag, 2)?;
+                        vals.push(v);
                     }
                     Ok::<_, Box<dyn std::error::Error + Send + Sync>>(vals)
                 })?;
@@ -375,7 +416,7 @@ fn execute_transaction_body(
                 let old_is_nil = matches!(old_edn, edn::Value::Nil);
 
                 // Encode old value for comparison (unless nil)
-                let old_encoded: Option<(Vec<u8>, i16)> = if old_is_nil {
+                let old_encoded: Option<TypedValue> = if old_is_nil {
                     None
                 } else if is_ref {
                     Some(encode_ref_value(old_edn, &mut tempid_map)?)
@@ -387,11 +428,9 @@ fn execute_transaction_body(
                 let cas_matches = if old_is_nil {
                     // old-value is nil: expect no current value
                     current_values.is_empty()
-                } else if let Some((ref old_bytes, old_tag)) = old_encoded {
+                } else if let Some(ref old_val) = old_encoded {
                     // old-value is not nil: expect exactly one matching value
-                    current_values.len() == 1
-                        && current_values[0].0 == *old_bytes
-                        && current_values[0].1 == old_tag
+                    current_values.len() == 1 && current_values[0] == *old_val
                 } else {
                     false
                 };
@@ -403,7 +442,7 @@ fn execute_transaction_body(
                     } else {
                         current_values
                             .iter()
-                            .map(|(v, tag)| format_stored_value(v, *tag))
+                            .map(format_typed_value)
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
@@ -420,18 +459,17 @@ fn execute_transaction_body(
 
                 // CAS matched -- retract old value (if not nil) and assert new value
                 if !old_is_nil {
-                    if let Some((old_bytes, old_tag)) = old_encoded {
+                    if let Some(old_val) = old_encoded {
                         pending_datoms.push(PendingDatom {
                             e,
                             a,
-                            v_bytes: old_bytes,
-                            v_type_tag: old_tag,
+                            v: old_val,
                             added: false,
                         });
                     }
                 }
 
-                let (new_bytes, new_tag) = if is_ref {
+                let new_val = if is_ref {
                     encode_ref_value(new_edn, &mut tempid_map)?
                 } else {
                     encode_value(new_edn)?
@@ -439,8 +477,7 @@ fn execute_transaction_body(
                 pending_datoms.push(PendingDatom {
                     e,
                     a,
-                    v_bytes: new_bytes,
-                    v_type_tag: new_tag,
+                    v: new_val,
                     added: true,
                 });
             }
@@ -455,7 +492,7 @@ fn execute_transaction_body(
                 let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
                 let a = resolve_attribute(&entity_vec[2])?;
                 // Check if attribute is ref-type; if so, resolve value as entity reference
-                let (v_bytes, v_type_tag) = if lookup_value_type(a).as_deref() == Some("ref") {
+                let v = if lookup_value_type(a).as_deref() == Some("ref") {
                     encode_ref_value(&entity_vec[3], &mut tempid_map)?
                 } else {
                     encode_value(&entity_vec[3])?
@@ -465,8 +502,7 @@ fn execute_transaction_body(
                 pending_datoms.push(PendingDatom {
                     e,
                     a,
-                    v_bytes,
-                    v_type_tag,
+                    v,
                     added,
                 });
             }
@@ -476,7 +512,7 @@ fn execute_transaction_body(
                 {
                     resolve_entity_place(id_val, &mut tempid_map)?
                 } else {
-                    Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
+                    Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
                         .ok()
                         .flatten()
                         .ok_or_else(|| MentatError::AllocationFailed {
@@ -493,7 +529,7 @@ fn execute_transaction_body(
 
                     let a = resolve_attribute(attr_key)?;
                     // Check if attribute is ref-type; if so, resolve value as entity reference
-                    let (v_bytes, v_type_tag) = if lookup_value_type(a).as_deref() == Some("ref") {
+                    let v = if lookup_value_type(a).as_deref() == Some("ref") {
                         encode_ref_value(attr_value, &mut tempid_map)?
                     } else {
                         encode_value(attr_value)?
@@ -502,8 +538,7 @@ fn execute_transaction_body(
                     pending_datoms.push(PendingDatom {
                         e,
                         a,
-                        v_bytes,
-                        v_type_tag,
+                        v,
                         added: true,
                     });
                 }
@@ -518,22 +553,58 @@ fn execute_transaction_body(
     let datom_result = insert_datoms(&pending_datoms, tx_id);
 
     match datom_result {
-        Ok(datom_count) => {
+        Ok(_datom_count) => {
             // All datoms inserted successfully. PostgreSQL's transaction
             // management will commit schema + datoms atomically.
 
-            // Build TxReport response
+            // Build Datomic-compatible TxReport response with all 4 required fields:
+            //   :db-before  - database value before the transaction
+            //   :db-after   - database value after the transaction
+            //   :tx-data    - all datoms produced by the transaction
+            //   :tempids    - mapping of tempid strings to allocated entity IDs
+
+            // Build tempids JSON object
             let tempids_json: Vec<String> = tempid_map
                 .iter()
                 .map(|(k, v)| format!("\"{}\":{}", k, v))
                 .collect();
 
-            Ok(format!(
-                "{{\"tx-id\":{},\"tx-instant\":{},\"tempids\":{{{}}},\"datoms-inserted\":{}}}",
+            // Build tx-data: array of [e, a, v, tx, added] for each datom in the transaction.
+            // Include the implicit :db/txInstant datom first (matches Datomic ordering),
+            // then all user-supplied datoms.
+            let mut tx_data_entries: Vec<String> = Vec::with_capacity(pending_datoms.len() + 1);
+
+            // The :db/txInstant datom
+            let tx_instant_tv = TypedValue::Instant(tx_instant_micros);
+            tx_data_entries.push(format!(
+                "[{},{},{},{},{}]",
                 tx_id,
-                tx_instant_micros,
-                tempids_json.join(","),
-                datom_count
+                bootstrap_entids::DB_TX_INSTANT,
+                format_typed_value_for_json(&tx_instant_tv),
+                tx_id,
+                true
+            ));
+
+            // All user datoms (including implicit retractions from cardinality-one handling)
+            for datom in &pending_datoms {
+                tx_data_entries.push(format!(
+                    "[{},{},{},{},{}]",
+                    datom.e,
+                    datom.a,
+                    format_typed_value_for_json(&datom.v),
+                    tx_id,
+                    datom.added
+                ));
+            }
+
+            let tx_data_json = format!("[{}]", tx_data_entries.join(","));
+
+            Ok(format!(
+                "{{\"db-before\":{{\"basis-t\":{}}},\"db-after\":{{\"basis-t\":{}}},\"tx-data\":{},\"tempids\":{{{}}}}}",
+                basis_t_before,
+                tx_id,
+                tx_data_json,
+                tempids_json.join(",")
             ))
         }
         Err(e) => {
@@ -572,19 +643,14 @@ fn insert_datoms(
                             datom.e,
                             datom.a,
                             tx_id,
-                            &datom.v_bytes,
-                            datom.v_type_tag,
+                            &datom.v,
                         )?;
                     }
                     "many" => {
-                        // For cardinality-many, check if this exact value already
-                        // exists. If so, skip inserting a duplicate (idempotent
-                        // assertion, matching Datomic semantics).
                         if is_duplicate_cardinality_many(
                             datom.e,
                             datom.a,
-                            &datom.v_bytes,
-                            datom.v_type_tag,
+                            &datom.v,
                         )? {
                             continue;
                         }
@@ -599,26 +665,14 @@ fn insert_datoms(
             }
         }
 
-        Spi::run_with_args(
-            "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            &[
-                DatumWithOid::from(datom.e),
-                DatumWithOid::from(datom.a),
-                DatumWithOid::from(datom.v_bytes.clone()),
-                DatumWithOid::from(tx_id),
-                DatumWithOid::from(datom.added),
-                DatumWithOid::from(datom.v_type_tag),
-            ],
-        )?;
+        insert_typed_datom(datom.e, datom.a, &datom.v, tx_id, datom.added)?;
 
         // Populate mentat.fulltext for fulltext-enabled string attributes.
-        // The trigger on mentat.fulltext auto-updates the search_vector column.
-        if datom.added && datom.v_type_tag == 7 && is_fulltext_attribute(datom.a) {
-            if let Ok(text_value) = String::from_utf8(datom.v_bytes.clone()) {
+        if datom.added && is_fulltext_attribute(datom.a) {
+            if let TypedValue::Text(ref text_value) = datom.v {
                 Spi::run_with_args(
                     "INSERT INTO mentat.fulltext (text_value) VALUES ($1)",
-                    &[DatumWithOid::from(text_value)],
+                    &[DatumWithOid::from(text_value.clone())],
                 )?;
             }
         }
@@ -791,7 +845,7 @@ fn resolve_entity_place(
             if let Some(&existing) = tempid_map.get::<str>(s.as_ref()) {
                 Ok(existing)
             } else {
-                let entid = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
+                let entid = Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
                     .ok()
                     .flatten()
                     .ok_or_else(|| MentatError::AllocationFailed {
@@ -911,36 +965,35 @@ fn try_resolve_attribute(value: &edn::Value) -> Option<i64> {
     }
 }
 
-/// Encode EDN value as BYTEA with type tag
-/// Returns (bytes, type_tag) where type_tag corresponds to mentat.value_type
+/// Encode EDN value as a TypedValue for insertion into typed columns.
 fn encode_value(
     value: &edn::Value,
-) -> Result<(Vec<u8>, i16), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<TypedValue, Box<dyn std::error::Error + Send + Sync>> {
     match value {
-        edn::Value::Boolean(b) => Ok((vec![if *b { 1 } else { 0 }], 1)), // boolean = 1
-        edn::Value::Integer(i) => Ok((i.to_le_bytes().to_vec(), 2)),     // long = 2
-        edn::Value::Text(ref s) => Ok((s.as_bytes().to_vec(), 7)),       // string = 7
+        edn::Value::Boolean(b) => Ok(TypedValue::Boolean(*b)),
+        edn::Value::Integer(i) => Ok(TypedValue::Long(*i)),
+        edn::Value::Text(ref s) => Ok(TypedValue::Text(s.clone())),
         edn::Value::Float(f) => {
             let val: f64 = f.into_inner();
-            Ok((val.to_le_bytes().to_vec(), 3)) // double = 3
+            Ok(TypedValue::Double(val))
         }
         edn::Value::Instant(dt) => {
             let micros = dt.timestamp_micros();
-            Ok((micros.to_le_bytes().to_vec(), 4)) // instant = 4
+            Ok(TypedValue::Instant(micros))
         }
         edn::Value::Uuid(u) => {
-            Ok((u.as_bytes().to_vec(), 10)) // uuid = 10
+            Ok(TypedValue::Uuid(*u))
         }
         edn::Value::Keyword(kw) => {
             // Store keyword without leading colon, using slash separator
             // e.g., :person/name -> "person/name"
             let display = format!("{}", kw); // produces ":person/name"
             let s = if display.starts_with(':') {
-                &display[1..]
+                display[1..].to_string()
             } else {
-                &display
+                display
             };
-            Ok((s.as_bytes().to_vec(), 8)) // keyword = 8
+            Ok(TypedValue::Keyword(s))
         }
         other => Err(MentatError::UnsupportedValueType {
             got_type: value_type_name(other).to_string(),
@@ -950,14 +1003,13 @@ fn encode_value(
 }
 
 /// Encode a value for a ref-type attribute. The value should be a tempid (string),
-/// integer entity ID, or keyword ident. Returns (bytes, type_tag=0) where bytes
-/// is the entity ID encoded as little-endian i64.
+/// integer entity ID, or keyword ident. Returns TypedValue::Ref with the entity ID.
 fn encode_ref_value(
     value: &edn::Value,
     tempid_map: &mut BTreeMap<String, i64>,
-) -> Result<(Vec<u8>, i16), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<TypedValue, Box<dyn std::error::Error + Send + Sync>> {
     let entity_id = resolve_entity_place(value, tempid_map)?;
-    Ok((entity_id.to_le_bytes().to_vec(), 0)) // ref = 0
+    Ok(TypedValue::Ref(entity_id))
 }
 
 /// Look up the value_type of an attribute (using cache).
@@ -996,17 +1048,18 @@ fn validate_datom_constraints(
 
     // 1. Type validation
     let expected_type_tag = value_type_to_tag(&attr_info.value_type);
-    if datom.v_type_tag != expected_type_tag {
+    let got_type_tag = datom.v.type_tag();
+    if got_type_tag != expected_type_tag {
         let ident_name = crate::cache::get_cache()
             .get_ident(datom.a)
             .unwrap_or_else(|| format!("entid:{}", datom.a));
-        let got_type_name = tag_to_value_type_name(datom.v_type_tag);
+        let got_type_name = tag_to_value_type_name(got_type_tag);
         return Err(MentatError::TypeMismatch {
             attr: ident_name,
             expected: attr_info.value_type.clone(),
             got: got_type_name.to_string(),
             expected_tag: expected_type_tag,
-            got_tag: datom.v_type_tag,
+            got_tag: got_type_tag,
         }.into());
     }
 
@@ -1051,7 +1104,7 @@ fn validate_datom_constraints(
         // Check within this transaction for duplicate values
         let dups_in_tx = all_pending
             .iter()
-            .filter(|d| d.a == datom.a && d.v_bytes == datom.v_bytes && d.e != datom.e && d.added)
+            .filter(|d| d.a == datom.a && d.v == datom.v && d.e != datom.e && d.added)
             .count();
 
         if dups_in_tx > 0 {
@@ -1067,26 +1120,14 @@ fn validate_datom_constraints(
         }
 
         // Check existing datoms in database (use advisory lock to prevent races)
-        // Advisory lock key: hash of (attribute_id, value_bytes)
-        let lock_key = (datom.a as i64) ^ (compute_value_hash(&datom.v_bytes) as i64);
+        let lock_key = (datom.a as i64) ^ (compute_typed_value_hash(&datom.v) as i64);
 
         Spi::run_with_args(
             "SELECT pg_advisory_xact_lock($1)",
             &[DatumWithOid::from(lock_key)],
         )?;
 
-        let existing_entity = Spi::get_one_with_args::<i64>(
-            "SELECT e FROM mentat.datoms \
-             WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
-             LIMIT 1",
-            &[
-                DatumWithOid::from(datom.a),
-                DatumWithOid::from(datom.v_bytes.clone()),
-                DatumWithOid::from(datom.v_type_tag),
-            ],
-        )
-        .ok()
-        .flatten();
+        let existing_entity = check_unique_typed_value(datom.a, &datom.v)?;
 
         if let Some(existing_e) = existing_entity {
             if existing_e != datom.e {
@@ -1113,13 +1154,14 @@ fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
     tx_id: i64,
-    new_v_bytes: &[u8],
-    new_v_type_tag: i16,
+    new_v: &TypedValue,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Find the current value (if any)
-    let existing = Spi::connect(|client| {
+    let existing: Option<TypedValue> = Spi::connect(|client| {
         let rows = client.select(
-            "SELECT v, value_type_tag FROM mentat.datoms \
+            "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
+                    v_text, v_keyword, v_instant, v_uuid, v_bytes \
+             FROM mentat.datoms \
              WHERE e = $1 AND a = $2 AND added = true \
              ORDER BY tx DESC LIMIT 1",
             None,
@@ -1127,34 +1169,26 @@ fn retract_existing_cardinality_one(
         )?;
 
         for row in rows {
-            if let (Ok(Some(v_bytes)), Ok(Some(type_tag))) =
-                (row.get::<Vec<u8>>(1), row.get::<i16>(2))
-            {
-                return Ok::<_, pgrx::spi::SpiError>(Some((v_bytes, type_tag)));
+            let type_tag: i16 = match row.get(1) {
+                Ok(Some(t)) => t,
+                _ => continue,
+            };
+            match read_typed_value_from_row(&row, type_tag, 2) {
+                Ok(tv) => return Ok::<_, pgrx::spi::SpiError>(Some(tv)),
+                Err(_) => continue,
             }
         }
         Ok(None)
     })?;
 
-    if let Some((old_v_bytes, old_type_tag)) = existing {
+    if let Some(old_v) = existing {
         // If the value is identical, no retraction needed (idempotent assertion)
-        if old_v_bytes == new_v_bytes && old_type_tag == new_v_type_tag {
+        if old_v == *new_v {
             return Ok(());
         }
 
         // Insert a retraction datom for the old value
-        Spi::run_with_args(
-            "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
-            &[
-                DatumWithOid::from(entity_id),
-                DatumWithOid::from(attr_id),
-                DatumWithOid::from(old_v_bytes),
-                DatumWithOid::from(tx_id),
-                DatumWithOid::from(false), // added = false (retraction)
-                DatumWithOid::from(old_type_tag),
-            ],
-        )?;
+        insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false)?;
     }
 
     Ok(())
@@ -1166,22 +1200,59 @@ fn retract_existing_cardinality_one(
 fn is_duplicate_cardinality_many(
     entity_id: i64,
     attr_id: i64,
-    v_bytes: &[u8],
-    v_type_tag: i16,
+    v: &TypedValue,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let exists = Spi::get_one_with_args::<bool>(
+    let v_col = typed_value_column(v);
+    let query = format!(
         "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
-         WHERE e = $1 AND a = $2 AND v = $3 AND value_type_tag = $4 AND added = true)",
-        &[
-            DatumWithOid::from(entity_id),
-            DatumWithOid::from(attr_id),
-            DatumWithOid::from(v_bytes.to_vec()),
-            DatumWithOid::from(v_type_tag),
-        ],
-    )
-    .ok()
-    .flatten()
-    .unwrap_or(false);
+         WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true)",
+        v_col,
+    );
+    let type_tag = v.type_tag();
+    let exists = match v {
+        TypedValue::Ref(id) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(*id)]),
+        TypedValue::Boolean(b) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(*b)]),
+        TypedValue::Long(n) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(*n)]),
+        TypedValue::Double(f) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(*f)]),
+        TypedValue::Text(s) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+        TypedValue::Keyword(s) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+        TypedValue::Instant(micros) => {
+            let q = format!(
+                "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
+                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)"
+            );
+            Spi::get_one_with_args::<bool>(
+                &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(*micros)])
+        }
+        TypedValue::Uuid(u) => {
+            let uuid_str = u.to_string();
+            let q = format!(
+                "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
+                 AND v_uuid = $4::UUID AND added = true)"
+            );
+            Spi::get_one_with_args::<bool>(
+                &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(uuid_str.as_str())])
+        }
+        TypedValue::Bytes(b) => Spi::get_one_with_args::<bool>(
+            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
+                       DatumWithOid::from(type_tag), DatumWithOid::from(b.clone())]),
+    }.ok().flatten().unwrap_or(false);
 
     Ok(exists)
 }
@@ -1218,61 +1289,331 @@ fn value_type_to_tag(value_type: &str) -> i16 {
     }
 }
 
-/// Compute a simple hash of value bytes for advisory lock
-fn compute_value_hash(bytes: &[u8]) -> u64 {
+/// Compute a simple hash of a TypedValue for advisory lock keys.
+fn compute_typed_value_hash(v: &TypedValue) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
+    match v {
+        TypedValue::Ref(i) => { 0i16.hash(&mut hasher); i.hash(&mut hasher); }
+        TypedValue::Boolean(b) => { 1i16.hash(&mut hasher); b.hash(&mut hasher); }
+        TypedValue::Long(i) => { 2i16.hash(&mut hasher); i.hash(&mut hasher); }
+        TypedValue::Double(f) => { 3i16.hash(&mut hasher); f.to_bits().hash(&mut hasher); }
+        TypedValue::Text(s) => { 7i16.hash(&mut hasher); s.hash(&mut hasher); }
+        TypedValue::Keyword(s) => { 8i16.hash(&mut hasher); s.hash(&mut hasher); }
+        TypedValue::Instant(i) => { 4i16.hash(&mut hasher); i.hash(&mut hasher); }
+        TypedValue::Uuid(u) => { 10i16.hash(&mut hasher); u.as_bytes().hash(&mut hasher); }
+        TypedValue::Bytes(b) => { 11i16.hash(&mut hasher); b.hash(&mut hasher); }
+    }
     hasher.finish()
 }
 
-/// Format a stored value (bytes + type tag) into a human-readable string for error messages.
-fn format_stored_value(v_bytes: &[u8], type_tag: i16) -> String {
+/// Format a TypedValue into a JSON-compatible representation for tx-data.
+fn format_typed_value_for_json(v: &TypedValue) -> String {
+    match v {
+        TypedValue::Ref(id) => format!("{}", id),
+        TypedValue::Boolean(b) => format!("{}", b),
+        TypedValue::Long(n) => format!("{}", n),
+        TypedValue::Double(f) => format!("{}", f),
+        TypedValue::Instant(micros) => format!("{}", micros),
+        TypedValue::Text(s) => {
+            let escaped = s
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
+                .replace('\t', "\\t");
+            format!("\"{}\"", escaped)
+        }
+        TypedValue::Keyword(s) => format!("\":{}\"", s),
+        TypedValue::Uuid(u) => format!("\"{}\"", u),
+        TypedValue::Bytes(b) => {
+            let hex: String = b.iter().map(|byte| format!("{:02x}", byte)).collect();
+            format!("\"{}\"", hex)
+        }
+    }
+}
+
+/// Format a TypedValue into a human-readable string for error messages.
+fn format_typed_value(v: &TypedValue) -> String {
+    match v {
+        TypedValue::Ref(id) => format!("{}", id),
+        TypedValue::Boolean(b) => format!("{}", b),
+        TypedValue::Long(n) => format!("{}", n),
+        TypedValue::Double(f) => format!("{}", f),
+        TypedValue::Text(s) => format!("\"{}\"", s),
+        TypedValue::Keyword(s) => format!(":{}", s),
+        TypedValue::Instant(micros) => format!("<instant:{}>", micros),
+        TypedValue::Uuid(u) => format!("#uuid \"{}\"", u),
+        TypedValue::Bytes(b) => format!("<bytes:{}>", hex::encode(b)),
+    }
+}
+
+/// Insert a single datom with typed value columns into mentat.datoms.
+fn insert_typed_datom(
+    e: i64,
+    a: i64,
+    v: &TypedValue,
+    tx: i64,
+    added: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let type_tag = v.type_tag();
+    match v {
+        TypedValue::Ref(ref_id) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*ref_id),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Boolean(b) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_bool, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*b),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Long(n) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*n),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Double(f) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_double, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*f),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Text(s) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(s.as_str()),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Keyword(s) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_keyword, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(s.as_str()),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Instant(micros) => {
+            // Insert as TIMESTAMPTZ via SQL CAST to avoid pgrx conversion issues
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_instant, tx, added) \
+                 VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*micros),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Uuid(u) => {
+            // Insert UUID as text and let PostgreSQL cast it
+            let uuid_str = u.to_string();
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_uuid, tx, added) \
+                 VALUES ($1, $2, $3, $4::UUID, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(uuid_str.as_str()),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+        TypedValue::Bytes(b) => {
+            Spi::run_with_args(
+                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_bytes, tx, added) \
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &[
+                    DatumWithOid::from(e),
+                    DatumWithOid::from(a),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(b.clone()),
+                    DatumWithOid::from(tx),
+                    DatumWithOid::from(added),
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Get the column name for a TypedValue.
+fn typed_value_column(v: &TypedValue) -> &'static str {
+    match v {
+        TypedValue::Ref(_) => "v_ref",
+        TypedValue::Boolean(_) => "v_bool",
+        TypedValue::Long(_) => "v_long",
+        TypedValue::Double(_) => "v_double",
+        TypedValue::Instant(_) => "v_instant",
+        TypedValue::Text(_) => "v_text",
+        TypedValue::Keyword(_) => "v_keyword",
+        TypedValue::Uuid(_) => "v_uuid",
+        TypedValue::Bytes(_) => "v_bytes",
+    }
+}
+
+/// Check for unique constraint violation by looking up existing datom with same (a, v).
+fn check_unique_typed_value(
+    attr_id: i64,
+    v: &TypedValue,
+) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
+    let v_col = typed_value_column(v);
+    let query = format!(
+        "SELECT e FROM mentat.datoms \
+         WHERE a = $1 AND value_type_tag = $2 AND {} = $3 AND added = true LIMIT 1",
+        v_col,
+    );
+    let type_tag = v.type_tag();
+    let result = match v {
+        TypedValue::Ref(id) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*id)]),
+        TypedValue::Boolean(b) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*b)]),
+        TypedValue::Long(n) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*n)]),
+        TypedValue::Double(f) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*f)]),
+        TypedValue::Text(s) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+        TypedValue::Keyword(s) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+        TypedValue::Instant(micros) => {
+            let q = format!(
+                "SELECT e FROM mentat.datoms \
+                 WHERE a = $1 AND value_type_tag = $2 \
+                 AND v_instant = to_timestamp($3::DOUBLE PRECISION / 1000000.0) AND added = true LIMIT 1"
+            );
+            Spi::get_one_with_args::<i64>(
+                &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*micros)])
+        }
+        TypedValue::Uuid(u) => {
+            let uuid_str = u.to_string();
+            let q = format!(
+                "SELECT e FROM mentat.datoms \
+                 WHERE a = $1 AND value_type_tag = $2 AND v_uuid = $3::UUID AND added = true LIMIT 1"
+            );
+            Spi::get_one_with_args::<i64>(
+                &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(uuid_str.as_str())])
+        }
+        TypedValue::Bytes(b) => Spi::get_one_with_args::<i64>(
+            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(b.clone())]),
+    }.ok().flatten();
+
+    Ok(result)
+}
+
+/// Read a TypedValue from an SPI row given the type tag and the starting column offset.
+/// The columns starting at (offset+1) are: v_ref, v_bool, v_long, v_double, v_text, v_keyword, v_instant, v_uuid, v_bytes
+/// (pgrx SPI columns are 1-based, so offset=2 means v_ref is at column 3)
+fn read_typed_value_from_row(
+    row: &pgrx::spi::SpiHeapTupleData<'_>,
+    type_tag: i16,
+    offset: usize,
+) -> Result<TypedValue, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
         0 => {
-            // ref: i64 LE
-            if v_bytes.len() == 8 {
-                let id = i64::from_le_bytes(v_bytes.try_into().unwrap());
-                format!("{}", id)
-            } else {
-                format!("<ref:{} bytes>", v_bytes.len())
-            }
+            let v: i64 = row.get(offset + 1)?.ok_or("Missing v_ref")?;
+            Ok(TypedValue::Ref(v))
         }
         1 => {
-            // boolean
-            if v_bytes.first() == Some(&1) {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
+            let v: bool = row.get(offset + 2)?.ok_or("Missing v_bool")?;
+            Ok(TypedValue::Boolean(v))
         }
         2 => {
-            // long: i64 LE
-            if v_bytes.len() == 8 {
-                let n = i64::from_le_bytes(v_bytes.try_into().unwrap());
-                format!("{}", n)
-            } else {
-                format!("<long:{} bytes>", v_bytes.len())
-            }
+            let v: i64 = row.get(offset + 3)?.ok_or("Missing v_long")?;
+            Ok(TypedValue::Long(v))
+        }
+        3 => {
+            let v: f64 = row.get(offset + 4)?.ok_or("Missing v_double")?;
+            Ok(TypedValue::Double(v))
+        }
+        4 => {
+            // Read v_instant - we can read it as i64 microseconds via extract epoch
+            // pgrx TimestampWithTimeZone is internally stored as i64 microseconds from Postgres epoch (2000-01-01)
+            // We need Unix epoch microseconds, so we'll read it differently.
+            // Option: read the column as a String and parse, or use the internal representation.
+            // pgrx::datum::TimestampWithTimeZone can be converted to i64 (microseconds from PG epoch)
+            let v: pgrx::datum::TimestampWithTimeZone = row.get(offset + 7)?.ok_or("Missing v_instant")?;
+            // PG epoch is 2000-01-01 00:00:00 UTC, Unix epoch is 1970-01-01
+            // Difference: 946684800 seconds = 946684800_000_000 microseconds
+            let pg_epoch_offset_micros: i64 = 946_684_800_000_000;
+            let pg_micros: i64 = v.into();
+            let unix_micros = pg_micros + pg_epoch_offset_micros;
+            Ok(TypedValue::Instant(unix_micros))
         }
         7 => {
-            // string: UTF-8
-            match std::str::from_utf8(v_bytes) {
-                Ok(s) => format!("\"{}\"", s),
-                Err(_) => format!("<string:{} bytes>", v_bytes.len()),
-            }
+            let v: String = row.get(offset + 5)?.ok_or("Missing v_text")?;
+            Ok(TypedValue::Text(v))
         }
         8 => {
-            // keyword: UTF-8
-            match std::str::from_utf8(v_bytes) {
-                Ok(s) => format!(":{}", s),
-                Err(_) => format!("<keyword:{} bytes>", v_bytes.len()),
-            }
+            let v: String = row.get(offset + 6)?.ok_or("Missing v_keyword")?;
+            Ok(TypedValue::Keyword(v))
         }
-        _ => {
-            format!("<{}:{} bytes>", tag_to_value_type_name(type_tag), v_bytes.len())
+        10 => {
+            let v: pgrx::Uuid = row.get(offset + 8)?.ok_or("Missing v_uuid")?;
+            let bytes: [u8; 16] = v.as_bytes().try_into().map_err(|_| "Invalid UUID")?;
+            Ok(TypedValue::Uuid(uuid::Uuid::from_bytes(bytes)))
         }
+        11 => {
+            let v: Vec<u8> = row.get(offset + 9)?.ok_or("Missing v_bytes")?;
+            Ok(TypedValue::Bytes(v))
+        }
+        _ => Err(format!("Unknown type tag: {}", type_tag).into()),
     }
 }

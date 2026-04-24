@@ -105,19 +105,21 @@ INSERT INTO mentat.transactions (tx, tx_instant)
 VALUES (1000000, '2025-01-01T00:00:00Z')
 ON CONFLICT (tx) DO NOTHING;
 
--- PL/pgSQL helper functions
+-- Sequences for lock-free entity ID allocation
+CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
+CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
+CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
+
+-- PL/pgSQL helper functions (sequence-based, lock-free)
 CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
 RETURNS BIGINT AS $$
-DECLARE new_entid BIGINT;
 BEGIN
-    UPDATE mentat.partitions
-    SET next_entid = next_entid + 1
-    WHERE name = partition_name
-    RETURNING next_entid - 1 INTO new_entid;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Partition % not found', partition_name;
-    END IF;
-    RETURN new_entid;
+    CASE partition_name
+        WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
+        WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
+        WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
+        ELSE RAISE EXCEPTION 'Partition % not found', partition_name;
+    END CASE;
 END; $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)

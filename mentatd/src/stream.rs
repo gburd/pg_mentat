@@ -51,8 +51,6 @@ pub async fn handle_stream_query(
     metrics::STREAM_QUERY_COUNT.inc();
     metrics::REQUEST_COUNT.inc();
 
-    // Parse and validate the request up front, capturing any error as an
-    // Option so the single async_stream block can handle both paths.
     let validated_op = validate_stream_request(&body);
 
     let stream = async_stream::stream! {
@@ -68,37 +66,27 @@ pub async fn handle_stream_query(
 
         match execute_streaming_query(op, &state).await {
             Ok((columns, rows)) => {
-                // Send the columns event
                 yield Ok(Event::default().event("columns").data(format_columns_edn(&columns)));
 
-                // Stream rows in batches
                 let total_rows = rows.len();
 
                 for chunk in rows.chunks(DEFAULT_BATCH_SIZE) {
                     let batch_edn = format_batch_edn(chunk);
-                    #[allow(clippy::cast_possible_truncation)]
                     metrics::STREAM_ROWS_SENT.inc_by(chunk.len() as u64);
                     yield Ok(Event::default().event("batch").data(batch_edn));
                 }
 
-                // Send completion event
                 let elapsed = query_start.elapsed().as_secs_f64();
                 metrics::STREAM_DURATION.observe(elapsed);
-                let batch_count = if total_rows == 0 {
-                    0
-                } else {
-                    (total_rows + DEFAULT_BATCH_SIZE - 1) / DEFAULT_BATCH_SIZE
-                };
+                let batch_count = total_rows.div_ceil(DEFAULT_BATCH_SIZE.max(1));
                 let done_edn = format!(
-                    "{{:total-rows {} :batches {} :duration-ms {:.1}}}",
-                    total_rows,
-                    batch_count,
+                    "{{:total-rows {total_rows} :batches {batch_count} :duration-ms {:.1}}}",
                     elapsed * 1000.0,
                 );
                 yield Ok(Event::default().event("done").data(done_edn));
             }
             Err(e) => {
-                error!("Streaming query failed: {}", e);
+                error!("Streaming query failed: {e}");
                 metrics::ERROR_COUNT.inc();
                 let anomaly: Anomaly = e.into();
                 yield Ok(Event::default().event("error").data(format_anomaly_edn(&anomaly)));
@@ -113,24 +101,24 @@ pub async fn handle_stream_query(
 /// Returns the validated `Operation` or an `Anomaly` on failure.
 fn validate_stream_request(body: &str) -> Result<Operation, Anomaly> {
     let request = parse_request(body).map_err(|e| {
-        error!("Stream parse failed: {}", e);
+        error!("Stream parse failed: {e}");
         metrics::ERROR_COUNT.inc();
         Anomaly::from(e)
     })?;
 
-    match request.op {
-        op @ (Operation::Query { .. }
-        | Operation::AsOf { .. }
-        | Operation::Since { .. }
-        | Operation::History { .. }) => Ok(op),
-        _ => {
-            metrics::ERROR_COUNT.inc();
-            Err(Anomaly {
-                category: AnomalyCategory::Incorrect,
-                message: "Streaming is only supported for query operations (:q, :as-of, :since, :history)".to_string(),
-                db_error: Some(":db.error/invalid-request".to_string()),
-            })
-        }
+    if let op @ (Operation::Query { .. }
+    | Operation::AsOf { .. }
+    | Operation::Since { .. }
+    | Operation::History { .. }) = request.op
+    {
+        Ok(op)
+    } else {
+        metrics::ERROR_COUNT.inc();
+        Err(Anomaly {
+            category: AnomalyCategory::Incorrect,
+            message: "Streaming is only supported for query operations (:q, :as-of, :since, :history)".to_string(),
+            db_error: Some(":db.error/invalid-request".to_string()),
+        })
     }
 }
 
@@ -162,10 +150,10 @@ impl From<StreamError> for Anomaly {
     }
 }
 
-/// Execute the query and return (column_names, row_values) where each row
+/// Execute the query and return `(column_names, row_values)` where each row
 /// is a `Vec<ResponseValue>`.
 ///
-/// The PostgreSQL function `mentat_query` returns a JSON object with `columns`
+/// The `PostgreSQL` function `mentat_query` returns a JSON object with `columns`
 /// and `results` arrays. We parse the full result and then the caller chunks
 /// it for SSE delivery.
 async fn execute_streaming_query(
@@ -175,12 +163,12 @@ async fn execute_streaming_query(
     let (query, args_json) = match &op {
         Operation::Query { query, args, .. } => {
             let args_json = serde_json::to_value(args)
-                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {}", e)))?;
+                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {e}")))?;
             (query.clone(), args_json)
         }
         Operation::AsOf { query, args, t } => {
             let args_raw = serde_json::to_value(args)
-                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {}", e)))?;
+                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {e}")))?;
             let mut inputs = serde_json::Map::new();
             inputs.insert("inputs".to_string(), args_raw);
             inputs.insert("asOf".to_string(), serde_json::Value::Number((*t).into()));
@@ -188,7 +176,7 @@ async fn execute_streaming_query(
         }
         Operation::Since { query, args, t } => {
             let args_raw = serde_json::to_value(args)
-                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {}", e)))?;
+                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {e}")))?;
             let mut inputs = serde_json::Map::new();
             inputs.insert("inputs".to_string(), args_raw);
             inputs.insert("since".to_string(), serde_json::Value::Number((*t).into()));
@@ -196,7 +184,7 @@ async fn execute_streaming_query(
         }
         Operation::History { query, args } => {
             let args_raw = serde_json::to_value(args)
-                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {}", e)))?;
+                .map_err(|e| StreamError::Internal(format!("Failed to serialize args: {e}")))?;
             let mut inputs = serde_json::Map::new();
             inputs.insert("inputs".to_string(), args_raw);
             inputs.insert("history".to_string(), serde_json::Value::Bool(true));
@@ -217,7 +205,6 @@ async fn execute_streaming_query(
 
     let result_json: serde_json::Value = row.get(0);
 
-    // Extract columns
     let columns: Vec<String> = result_json
         .get("columns")
         .and_then(|c| c.as_array())
@@ -228,7 +215,6 @@ async fn execute_streaming_query(
         })
         .unwrap_or_default();
 
-    // Extract result rows
     let results = result_json
         .get("results")
         .and_then(|r| r.as_array())
@@ -261,12 +247,10 @@ fn json_to_response_value(val: &serde_json::Value) -> ResponseValue {
             if let Some(i) = n.as_i64() {
                 ResponseValue::Integer(i)
             } else if let Some(u) = n.as_u64() {
-                #[allow(clippy::cast_possible_wrap)]
-                if u <= i64::MAX as u64 {
-                    ResponseValue::Integer(u as i64)
-                } else {
-                    ResponseValue::String(u.to_string())
-                }
+                i64::try_from(u).map_or_else(
+                    |_| ResponseValue::String(u.to_string()),
+                    ResponseValue::Integer,
+                )
             } else {
                 ResponseValue::String(n.to_string())
             }
@@ -300,7 +284,7 @@ fn format_columns_edn(columns: &[String]) -> String {
         if i > 0 {
             out.push(' ');
         }
-        write!(out, "\"{}\"", col).ok();
+        write!(out, "\"{col}\"").ok();
     }
     out.push(']');
     out
@@ -385,7 +369,7 @@ mod tests {
         let val = serde_json::json!("hello");
         match json_to_response_value(&val) {
             ResponseValue::String(s) => assert_eq!(s, "hello"),
-            other => panic!("Expected String, got {:?}", other),
+            other => panic!("Expected String, got {other:?}"),
         }
     }
 
@@ -394,7 +378,7 @@ mod tests {
         let val = serde_json::json!(":db/name");
         match json_to_response_value(&val) {
             ResponseValue::Keyword(k) => assert_eq!(k, "db/name"),
-            other => panic!("Expected Keyword, got {:?}", other),
+            other => panic!("Expected Keyword, got {other:?}"),
         }
     }
 
@@ -403,7 +387,7 @@ mod tests {
         let val = serde_json::json!(42);
         match json_to_response_value(&val) {
             ResponseValue::Integer(i) => assert_eq!(i, 42),
-            other => panic!("Expected Integer, got {:?}", other),
+            other => panic!("Expected Integer, got {other:?}"),
         }
     }
 
@@ -418,7 +402,7 @@ mod tests {
         let val = serde_json::json!(true);
         match json_to_response_value(&val) {
             ResponseValue::Boolean(b) => assert!(b),
-            other => panic!("Expected Boolean, got {:?}", other),
+            other => panic!("Expected Boolean, got {other:?}"),
         }
     }
 
@@ -429,7 +413,6 @@ mod tests {
 
     #[test]
     fn test_batch_chunking_logic() {
-        // Verify that chunking produces the expected number of batches
         let rows: Vec<Vec<ResponseValue>> = (0..2500)
             .map(|i| vec![ResponseValue::Integer(i)])
             .collect();

@@ -1,0 +1,184 @@
+# Alert rules for mentatd and PostgreSQL monitoring
+#
+# Thresholds are calibrated for a sequence-based system (post Phase 1.2):
+#   - Write throughput: 500+ TPS expected
+#   - Read latency p99: < 100ms expected
+#   - Error rate: < 0.1% expected
+
+groups:
+  - name: mentatd
+    rules:
+
+      # High error rate -- indicates database issues, malformed requests, or resource exhaustion
+      - alert: MentatdHighErrorRate
+        expr: |
+          (rate(mentatd_errors_total[5m]) / rate(mentatd_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "mentatd error rate above 5%"
+          description: >
+            Error rate is {{ $value | humanizePercentage }}
+            over the last 5 minutes.
+          runbook: "Check database connectivity and review error logs"
+
+      # High query latency
+      - alert: MentatdHighQueryLatency
+        expr: |
+          histogram_quantile(0.99, rate(mentatd_query_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mentatd p99 query latency above 2 seconds"
+          description: >
+            p99 query latency is {{ $value | humanizeDuration }}.
+            Check for expensive queries or missing indexes.
+
+      # High transaction latency -- may indicate sequence contention or disk I/O
+      - alert: MentatdHighTransactionLatency
+        expr: |
+          histogram_quantile(0.99, rate(mentatd_operation_duration_seconds_bucket{operation="transact"}[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mentatd p99 transaction latency above 1 second"
+          description: >
+            p99 transaction latency is {{ $value | humanizeDuration }}.
+            Check disk I/O and WAL configuration.
+
+      # Connection pool near capacity
+      - alert: MentatdPoolExhaustion
+        expr: |
+          mentatd_connection_pool_available < 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mentatd connection pool nearly exhausted"
+          description: >
+            Only {{ $value }} connections available.
+            Consider increasing pool_size or optimizing queries.
+
+      # Connection pool fully exhausted
+      - alert: MentatdPoolExhausted
+        expr: |
+          mentatd_connection_pool_available == 0 and mentatd_connection_pool_waiting > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "mentatd connection pool exhausted, requests queuing"
+          description: >
+            {{ $value }} tasks waiting for a connection.
+            Increase pool_size or terminate stuck queries.
+
+      # Low cache hit ratio -- queries are not being served from cache
+      - alert: MentatdLowCacheHitRatio
+        expr: |
+          (rate(mentatd_cache_hits_total[15m]) /
+           (rate(mentatd_cache_hits_total[15m]) + rate(mentatd_cache_misses_total[15m])))
+          < 0.3
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "mentatd cache hit ratio below 30%"
+          description: >
+            Cache hit ratio is {{ $value | humanizePercentage }}.
+            Consider increasing cache capacity or reviewing query patterns.
+
+      # Cache thrashing from high write rate
+      - alert: MentatdCacheThrashing
+        expr: |
+          rate(mentatd_cache_full_invalidations_total[5m]) > 10
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "mentatd cache being fully invalidated frequently"
+          description: >
+            Full cache invalidations at {{ $value }}/s.
+            High write rate is reducing cache effectiveness.
+
+      # No requests -- possible outage or routing issue
+      - alert: MentatdNoRequests
+        expr: |
+          rate(mentatd_requests_total[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "mentatd receiving no requests"
+          description: >
+            No requests received in the last 5 minutes.
+            Check if the service is running and reachable.
+
+      # Transaction throughput drop -- may indicate lock contention regression
+      - alert: MentatdLowTransactionThroughput
+        expr: |
+          rate(mentatd_transactions_total[5m]) < 10
+          and rate(mentatd_transactions_total[5m] offset 1h) > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mentatd transaction throughput dropped significantly"
+          description: >
+            Current transaction rate is {{ $value }}/s, previously was above 50/s.
+            Check for lock contention or resource exhaustion.
+
+  - name: postgresql
+    rules:
+
+      # PostgreSQL connection saturation
+      - alert: PostgreSQLConnectionSaturation
+        expr: |
+          pg_stat_activity_count / pg_settings_max_connections > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connections above 80% capacity"
+          description: >
+            {{ $value | humanizePercentage }} of max_connections in use.
+
+      # High sequential scan ratio on datoms table
+      - alert: PostgreSQLHighSeqScan
+        expr: |
+          rate(pg_stat_user_tables_seq_scan{relname="datoms"}[5m]) > 100
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "High sequential scan rate on mentat.datoms"
+          description: >
+            Consider adding indexes or reviewing query patterns.
+            See the Performance Tuning guide.
+
+      # Dead tuple accumulation
+      - alert: PostgreSQLTableBloat
+        expr: |
+          pg_stat_user_tables_n_dead_tup{relname="datoms"} > 1000000
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "mentat.datoms has over 1M dead tuples"
+          description: >
+            Run VACUUM ANALYZE mentat.datoms during maintenance window.
+
+      # Replication lag (if replicas are in use)
+      - alert: PostgreSQLReplicationLag
+        expr: |
+          pg_replication_lag > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL replication lag exceeds 30 seconds"
+          description: >
+            Replication lag is {{ $value }} seconds.
+            Check replica I/O and network.

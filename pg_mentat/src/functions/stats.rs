@@ -124,34 +124,35 @@ pub fn mentat_query_stats() -> Result<JsonB, Box<dyn std::error::Error + Send + 
             .and_then(|mut rows| rows.next().and_then(|r| r.get::<i64>(1).ok().flatten()))
             .unwrap_or(0);
 
-        // Partition info
+        // Partition info - read from sequences for current allocation state
         let mut partitions = serde_json::Map::new();
-        if let Ok(rows) = client.select(
-            "SELECT name, start_entid, next_entid FROM mentat.partitions ORDER BY name",
-            None,
-            &[],
-        ) {
-            for row in rows {
-                let name: String = match row.get(1) {
-                    Ok(Some(v)) => v,
-                    _ => continue,
-                };
-                let start_entid: i64 = match row.get(2) {
-                    Ok(Some(v)) => v,
-                    _ => 0,
-                };
-                let next_entid: i64 = match row.get(3) {
-                    Ok(Some(v)) => v,
-                    _ => 0,
-                };
-                partitions.insert(
-                    name,
-                    json!({
-                        "next_entid": next_entid,
-                        "used": next_entid - start_entid,
-                    }),
-                );
-            }
+        let seq_info = [
+            ("db.part/db", "mentat.partition_db_seq", 0i64),
+            ("db.part/user", "mentat.partition_user_seq", 10000i64),
+            ("db.part/tx", "mentat.partition_tx_seq", 1000000i64),
+        ];
+        for (name, seq_name, start_entid) in &seq_info {
+            // Use last_value from pg_sequences to get current position
+            // without advancing the sequence
+            let next_entid: i64 = client
+                .select(
+                    &format!(
+                        "SELECT last_value FROM pg_sequences WHERE schemaname = 'mentat' AND sequencename = '{}'",
+                        seq_name.trim_start_matches("mentat.")
+                    ),
+                    None,
+                    &[],
+                )
+                .ok()
+                .and_then(|mut rows| rows.next().and_then(|r| r.get::<i64>(1).ok().flatten()))
+                .unwrap_or(*start_entid);
+            partitions.insert(
+                name.to_string(),
+                json!({
+                    "next_entid": next_entid,
+                    "used": next_entid - start_entid,
+                }),
+            );
         }
 
         json!({

@@ -3,13 +3,35 @@
 
 -- Unique value constraint enforcement
 -- For attributes with :db/unique :db.unique/value
--- Creates a unique index that enforces uniqueness per attribute
-CREATE UNIQUE INDEX idx_datoms_unique_value ON mentat.datoms (a, value_type_tag, v)
-    WHERE added = TRUE
-    AND a IN (
-        SELECT entid FROM mentat.schema
-        WHERE unique_constraint IS NOT NULL
-    );
+-- Type-specific unique indexes enforce uniqueness per attribute.
+-- We need one per type because values live in different columns.
+CREATE UNIQUE INDEX idx_datoms_unique_ref ON mentat.datoms (a, v_ref)
+    WHERE added = TRUE AND value_type_tag = 0
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_bool ON mentat.datoms (a, v_bool)
+    WHERE added = TRUE AND value_type_tag = 1
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_long ON mentat.datoms (a, v_long)
+    WHERE added = TRUE AND value_type_tag = 2
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_double ON mentat.datoms (a, v_double)
+    WHERE added = TRUE AND value_type_tag = 3
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_text ON mentat.datoms (a, v_text)
+    WHERE added = TRUE AND value_type_tag = 7
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_keyword ON mentat.datoms (a, v_keyword)
+    WHERE added = TRUE AND value_type_tag = 8
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+
+CREATE UNIQUE INDEX idx_datoms_unique_uuid ON mentat.datoms (a, v_uuid)
+    WHERE added = TRUE AND value_type_tag = 10
+    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
 
 -- Function to validate value types match schema
 CREATE OR REPLACE FUNCTION mentat.validate_datom_value_type()

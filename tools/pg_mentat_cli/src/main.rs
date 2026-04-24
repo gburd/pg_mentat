@@ -1,4 +1,5 @@
 mod commands;
+mod completer;
 mod repl;
 
 use clap::Parser;
@@ -7,9 +8,18 @@ use crate::commands::Command;
 use crate::repl::Repl;
 
 /// pg_mentat_cli - Interactive Datalog shell for PostgreSQL with pg_mentat
+///
+/// Connect using a URL, conninfo string, or individual options:
+///   pg_mentat_cli postgresql://localhost/mentat
+///   pg_mentat_cli -c "host=localhost dbname=mentat"
+///   pg_mentat_cli --host db.example.com -d mydb -U myuser
 #[derive(Parser, Debug)]
 #[command(name = "pg_mentat_cli", version, about)]
 struct Args {
+    /// Connection URL (e.g., postgresql://user:pass@host:port/dbname)
+    #[arg(index = 1)]
+    url: Option<String>,
+
     /// PostgreSQL host
     #[arg(long, default_value = "localhost")]
     host: String,
@@ -54,7 +64,13 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    let conninfo = args.conninfo.unwrap_or_else(|| {
+    // Connection priority: positional URL > -c conninfo > individual flags
+    let conninfo = if let Some(ref url) = args.url {
+        // Accept both postgresql:// URLs and plain conninfo strings as the positional arg
+        url.clone()
+    } else if let Some(ref ci) = args.conninfo {
+        ci.clone()
+    } else {
         let mut parts = format!(
             "host={} port={} dbname={} user={}",
             args.host, args.port, args.database, args.user
@@ -63,7 +79,7 @@ fn main() {
             parts.push_str(&format!(" password={pw}"));
         }
         parts
-    });
+    };
 
     let mut repl = match Repl::new(&conninfo, !args.no_tty) {
         Ok(r) => r,

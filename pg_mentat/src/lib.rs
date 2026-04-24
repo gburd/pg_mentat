@@ -28,10 +28,29 @@ extension_sql!(
     CREATE TABLE IF NOT EXISTS mentat.datoms (
         e BIGINT NOT NULL,
         a BIGINT NOT NULL,
-        v BYTEA NOT NULL,
         value_type_tag SMALLINT NOT NULL,
+        v_ref BIGINT,
+        v_bool BOOLEAN,
+        v_long BIGINT,
+        v_double DOUBLE PRECISION,
+        v_text TEXT,
+        v_keyword TEXT,
+        v_instant TIMESTAMPTZ,
+        v_uuid UUID,
+        v_bytes BYTEA,
         tx BIGINT NOT NULL,
-        added BOOLEAN NOT NULL DEFAULT TRUE
+        added BOOLEAN NOT NULL DEFAULT TRUE,
+        CONSTRAINT chk_datom_value CHECK (
+            (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
+        )
     );
 
     CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -64,12 +83,23 @@ extension_sql!(
         tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    -- EAVT, AEVT, AVET, VAET index pattern
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, v, tx);
-    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, v, tx);
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet ON mentat.datoms (a, value_type_tag, v, e, tx);
-    CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v, a, e, tx) WHERE value_type_tag = 0;
+    -- EAVT and AEVT covering indexes (type-agnostic)
+    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx);
+    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx);
     CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+
+    -- VAET index for ref lookups (reverse traversals)
+    CREATE INDEX IF NOT EXISTS idx_datoms_vaet_ref ON mentat.datoms (v_ref, a, e, tx) WHERE value_type_tag = 0;
+
+    -- Type-specific AVET indexes for range queries and equality lookups
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE value_type_tag = 0;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE value_type_tag = 2;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_double ON mentat.datoms (a, v_double, e, tx) WHERE value_type_tag = 3;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE value_type_tag = 7;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE value_type_tag = 8;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_instant ON mentat.datoms (a, v_instant, e, tx) WHERE value_type_tag = 4;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_uuid ON mentat.datoms (a, v_uuid, e, tx) WHERE value_type_tag = 10;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_bool ON mentat.datoms (a, v_bool, e, tx) WHERE value_type_tag = 1;
 
     -- Full-text search support table
     CREATE TABLE IF NOT EXISTS mentat.fulltext (
@@ -95,23 +125,27 @@ extension_sql!(
         ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
     ON CONFLICT (name) DO NOTHING;
 
+    -- Sequences for lock-free entity ID allocation (replaces UPDATE-based locking)
+    -- CACHE 100 pre-allocates IDs per connection for high concurrency
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
+
     INSERT INTO mentat.transactions (tx, tx_instant)
     VALUES (1000000, '2025-01-01T00:00:00Z')
     ON CONFLICT (tx) DO NOTHING;
 
     -- PL/pgSQL helper functions for transaction processing
+    -- allocate_entid uses sequences for lock-free concurrent ID allocation
     CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
     RETURNS BIGINT AS $$
-    DECLARE new_entid BIGINT;
     BEGIN
-        UPDATE mentat.partitions
-        SET next_entid = next_entid + 1
-        WHERE name = partition_name
-        RETURNING next_entid - 1 INTO new_entid;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'Partition % not found', partition_name;
-        END IF;
-        RETURN new_entid;
+        CASE partition_name
+            WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
+            WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
+            WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
+            ELSE RAISE EXCEPTION 'Partition % not found', partition_name;
+        END CASE;
     END; $$ LANGUAGE plpgsql;
 
     CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)
@@ -256,10 +290,29 @@ mod tests {
             CREATE TABLE IF NOT EXISTS mentat.datoms (
                 e BIGINT NOT NULL,
                 a BIGINT NOT NULL,
-                v BYTEA NOT NULL,
                 value_type_tag SMALLINT NOT NULL,
+                v_ref BIGINT,
+                v_bool BOOLEAN,
+                v_long BIGINT,
+                v_double DOUBLE PRECISION,
+                v_text TEXT,
+                v_keyword TEXT,
+                v_instant TIMESTAMPTZ,
+                v_uuid UUID,
+                v_bytes BYTEA,
                 tx BIGINT NOT NULL,
-                added BOOLEAN NOT NULL DEFAULT TRUE
+                added BOOLEAN NOT NULL DEFAULT TRUE,
+                CONSTRAINT chk_datom_value CHECK (
+                    (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
+                   + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
+                )
             );
 
             CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -292,12 +345,22 @@ mod tests {
                 tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
-            -- EAVT, AEVT, AVET, VAET index pattern (simplified for tests)
-            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, v, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, v, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet ON mentat.datoms (a, value_type_tag, v, e, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v, a, e, tx) WHERE value_type_tag = 0;
+            -- Core indexes
+            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx);
+            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx);
             CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+
+            -- VAET index for reverse ref lookups
+            CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE value_type_tag = 0;
+
+            -- Type-specific AVET indexes for correct range queries
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE value_type_tag = 0;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE value_type_tag = 2;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_double ON mentat.datoms (a, v_double, e, tx) WHERE value_type_tag = 3;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE value_type_tag = 7;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE value_type_tag = 8;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_instant ON mentat.datoms (a, v_instant, e, tx) WHERE value_type_tag = 4;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_uuid ON mentat.datoms (a, v_uuid, e, tx) WHERE value_type_tag = 10;
 
             -- Full-text search support table
             CREATE TABLE IF NOT EXISTS mentat.fulltext (
@@ -323,23 +386,26 @@ mod tests {
                 ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
             ON CONFLICT (name) DO NOTHING;
 
+            -- Sequences for lock-free entity ID allocation
+            CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
+            CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
+            CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
+
             INSERT INTO mentat.transactions (tx, tx_instant)
             VALUES (1000000, '2025-01-01T00:00:00Z')
             ON CONFLICT (tx) DO NOTHING;
 
             -- PL/pgSQL helper functions for transaction processing
+            -- allocate_entid uses sequences for lock-free concurrent ID allocation
             CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
             RETURNS BIGINT AS $$
-            DECLARE new_entid BIGINT;
             BEGIN
-                UPDATE mentat.partitions
-                SET next_entid = next_entid + 1
-                WHERE name = partition_name
-                RETURNING next_entid - 1 INTO new_entid;
-                IF NOT FOUND THEN
-                    RAISE EXCEPTION 'Partition % not found', partition_name;
-                END IF;
-                RETURN new_entid;
+                CASE partition_name
+                    WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
+                    WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
+                    WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
+                    ELSE RAISE EXCEPTION 'Partition % not found', partition_name;
+                END CASE;
             END; $$ LANGUAGE plpgsql;
 
             CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)
@@ -1058,7 +1124,7 @@ mod tests {
             "SELECT e FROM mentat.datoms d \
              JOIN mentat.idents i ON d.a = i.entid \
              WHERE i.ident = ':person/name' \
-             AND d.v = convert_to('Alice', 'UTF8') \
+             AND d.v_text = 'Alice' \
              AND d.added = true \
              LIMIT 1",
         )
@@ -4788,6 +4854,493 @@ mod tests {
         assert!(
             err.contains(":query") || err.contains(":transact"),
             "Error should list valid operations, got: {err}"
+        );
+    }
+
+    // ============================================================================
+    // Range Query Regression Tests (BYTEA encoding bug fix verification)
+    // ============================================================================
+
+    /// Regression test: numeric range queries must use native BIGINT comparison.
+    ///
+    /// With the old BYTEA encoding, `[(> ?age 30)]` could produce wrong results
+    /// because binary comparison of little-endian bytes doesn't match numeric ordering.
+    #[pg_test]
+    fn test_range_query_numeric() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Insert people with various ages
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 25]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 35]
+                 [:db/add \"p3\" :person/name \"Carol\"]
+                 [:db/add \"p3\" :person/age 10]
+                 [:db/add \"p4\" :person/name \"Dave\"]
+                 [:db/add \"p4\" :person/age 100]
+                 [:db/add \"p5\" :person/name \"Eve\"]
+                 [:db/add \"p5\" :person/age 2]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test: (> ?age 30) should return Bob(35) and Dave(100), NOT Eve(2)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?p :person/name ?name]
+                  [?p :person/age ?age]
+                  [(> ?age 30)]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        // Should have exactly 2 results: Bob(35) and Dave(100)
+        assert_eq!(
+            results.len(), 2,
+            "Expected 2 people with age > 30, got {}: {:?}",
+            results.len(), results
+        );
+
+        // Verify the names
+        let names: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Bob"), "Bob (age 35) should be in results: {:?}", names);
+        assert!(names.contains(&"Dave"), "Dave (age 100) should be in results: {:?}", names);
+        // Critical: Eve (age 2) must NOT be in results
+        assert!(!names.contains(&"Eve"), "Eve (age 2) should NOT be in results: {:?}", names);
+    }
+
+    /// Regression test: numeric less-than comparison.
+    ///
+    /// With BYTEA encoding, `[(< ?age 10)]` could incorrectly include values
+    /// whose binary representation sorts lower but numeric value is higher.
+    #[pg_test]
+    fn test_range_query_numeric_less_than() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 5]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 10]
+                 [:db/add \"p3\" :person/name \"Carol\"]
+                 [:db/add \"p3\" :person/age 100]
+                 [:db/add \"p4\" :person/name \"Dave\"]
+                 [:db/add \"p4\" :person/age 2]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test: (< ?age 10) should return Alice(5) and Dave(2) only
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?p :person/name ?name]
+                  [?p :person/age ?age]
+                  [(< ?age 10)]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(
+            results.len(), 2,
+            "Expected 2 people with age < 10, got {}: {:?}",
+            results.len(), results
+        );
+
+        let names: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Alice"), "Alice (age 5) should be in results: {:?}", names);
+        assert!(names.contains(&"Dave"), "Dave (age 2) should be in results: {:?}", names);
+    }
+
+    /// Regression test: text range queries use lexicographic ordering.
+    ///
+    /// With BYTEA encoding, text comparison used binary (byte) ordering which
+    /// is the same as UTF-8 lexicographic for ASCII. This test verifies the
+    /// new TEXT column preserves correct behavior.
+    #[pg_test]
+    fn test_range_query_text_ordering() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 1]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 2]
+                 [:db/add \"p3\" :person/name \"Carol\"]
+                 [:db/add \"p3\" :person/age 3]
+                 [:db/add \"p4\" :person/name \"Zara\"]
+                 [:db/add \"p4\" :person/age 4]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test: names > "Bob" should return Carol and Zara (lexicographic)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name
+                  :where
+                  [?p :person/name ?name]
+                  [(> ?name \"Bob\")]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(
+            results.len(), 2,
+            "Expected 2 names > 'Bob', got {}: {:?}",
+            results.len(), results
+        );
+
+        let names: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Carol"), "Carol should be > Bob: {:?}", names);
+        assert!(names.contains(&"Zara"), "Zara should be > Bob: {:?}", names);
+        assert!(!names.contains(&"Alice"), "Alice should NOT be > Bob: {:?}", names);
+    }
+
+    /// Regression test: numeric ordering with order-by.
+    ///
+    /// Verifies that ORDER BY on numeric values uses correct integer ordering,
+    /// not BYTEA binary ordering.
+    #[pg_test]
+    fn test_order_by_numeric() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 2]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 10]
+                 [:db/add \"p3\" :person/name \"Carol\"]
+                 [:db/add \"p3\" :person/age 100]
+                 [:db/add \"p4\" :person/name \"Dave\"]
+                 [:db/add \"p4\" :person/age 3]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test: order by age ascending should be 2, 3, 10, 100
+        // With BYTEA, binary ordering would give: 2, 3, 10, 100 for small ints
+        // but for larger values the ordering breaks.
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?p :person/name ?name]
+                  [?p :person/age ?age]
+                  :order (asc ?age)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(results.len(), 4, "Expected 4 results");
+
+        // Verify ordering: ages should be 2, 3, 10, 100
+        let ages: Vec<i64> = results.iter()
+            .map(|r| r[1].as_i64().unwrap())
+            .collect();
+        assert_eq!(
+            ages, vec![2, 3, 10, 100],
+            "Ages should be in ascending numeric order, got: {:?}",
+            ages
+        );
+    }
+
+    /// Regression test: BETWEEN-style range queries with two predicates.
+    ///
+    /// Tests that combining (> ?age X) and (< ?age Y) works correctly
+    /// with native typed columns.
+    #[pg_test]
+    fn test_range_query_between() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 5]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 15]
+                 [:db/add \"p3\" :person/name \"Carol\"]
+                 [:db/add \"p3\" :person/age 25]
+                 [:db/add \"p4\" :person/name \"Dave\"]
+                 [:db/add \"p4\" :person/age 35]
+                 [:db/add \"p5\" :person/name \"Eve\"]
+                 [:db/add \"p5\" :person/age 45]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test: 10 < age < 40 should return Bob(15), Carol(25), Dave(35)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?p :person/name ?name]
+                  [?p :person/age ?age]
+                  [(> ?age 10)]
+                  [(< ?age 40)]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(
+            results.len(), 3,
+            "Expected 3 people with 10 < age < 40, got {}: {:?}",
+            results.len(), results
+        );
+
+        let names: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"Bob"), "Bob (15) should be in 10..40: {:?}", names);
+        assert!(names.contains(&"Carol"), "Carol (25) should be in 10..40: {:?}", names);
+        assert!(names.contains(&"Dave"), "Dave (35) should be in 10..40: {:?}", names);
+    }
+
+    /// Regression test: UUID values maintain consistent ordering.
+    ///
+    /// Verifies that UUID values stored in the native v_uuid column produce
+    /// deterministic and consistent ordering via ORDER BY, unlike BYTEA where
+    /// the 16-byte representation could produce unexpected sort results.
+    #[pg_test]
+    fn test_uuid_ordering() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with uuid attribute
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"uuid-attr\" :db/ident :item/id]
+                 [:db/add \"uuid-attr\" :db/valueType :db.type/uuid]
+                 [:db/add \"uuid-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"name-attr\" :db/ident :item/name]
+                 [:db/add \"name-attr\" :db/valueType :db.type/string]
+                 [:db/add \"name-attr\" :db/cardinality :db.cardinality/one]]
+            '::TEXT)",
+        )
+        .expect("Schema transaction failed");
+
+        // Insert 3 items with UUIDs that have a known lexicographic order:
+        //   "11111111-..." < "55555555-..." < "aaaaaaaa-..."
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"i1\" :item/name \"First\"]
+                 [:db/add \"i1\" :item/id #uuid \"55555555-5555-5555-5555-555555555555\"]
+                 [:db/add \"i2\" :item/name \"Second\"]
+                 [:db/add \"i2\" :item/id #uuid \"11111111-1111-1111-1111-111111111111\"]
+                 [:db/add \"i3\" :item/name \"Third\"]
+                 [:db/add \"i3\" :item/id #uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Query all UUIDs with ORDER BY ascending
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?id
+                  :where
+                  [?e :item/name ?name]
+                  [?e :item/id ?id]
+                  :order (asc ?id)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(results.len(), 3, "Should find all 3 items");
+
+        // Verify consistent ordering: 11111111 < 55555555 < aaaaaaaa
+        let names: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names, vec!["Second", "First", "Third"],
+            "UUIDs should sort in consistent lexicographic order: 1111 < 5555 < aaaa, got: {:?}",
+            names
+        );
+
+        // Also verify the UUID values round-trip correctly
+        let uuids: Vec<&str> = results.iter()
+            .map(|r| r[1].as_str().unwrap())
+            .collect();
+        assert!(
+            uuids[0].starts_with("11111111"),
+            "First UUID should be 11111111..., got: {}",
+            uuids[0]
+        );
+        assert!(
+            uuids[1].starts_with("55555555"),
+            "Second UUID should be 55555555..., got: {}",
+            uuids[1]
+        );
+        assert!(
+            uuids[2].starts_with("aaaaaaaa"),
+            "Third UUID should be aaaaaaaa..., got: {}",
+            uuids[2]
+        );
+    }
+
+    /// Regression test: timestamp/instant range queries with correct temporal ordering.
+    ///
+    /// Verifies that instant values stored in the native v_instant TIMESTAMPTZ column
+    /// produce correct temporal ordering. With the old BYTEA encoding, the 8-byte
+    /// little-endian microsecond representation could produce incorrect ordering
+    /// because binary comparison of LE bytes doesn't match numeric ordering.
+    #[pg_test]
+    fn test_timestamp_ranges() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with instant attribute
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"ts-attr\" :db/ident :event/timestamp]
+                 [:db/add \"ts-attr\" :db/valueType :db.type/instant]
+                 [:db/add \"ts-attr\" :db/cardinality :db.cardinality/one]
+                 [:db/add \"label-attr\" :db/ident :event/label]
+                 [:db/add \"label-attr\" :db/valueType :db.type/string]
+                 [:db/add \"label-attr\" :db/cardinality :db.cardinality/one]]
+            '::TEXT)",
+        )
+        .expect("Schema transaction failed");
+
+        // Insert events with timestamps spanning different years/months
+        // These are chosen so that BYTEA LE comparison would fail:
+        // epoch microseconds for 2020 vs 2024 differ in higher bytes
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"e1\" :event/label \"Ancient\"]
+                 [:db/add \"e1\" :event/timestamp \"1999-06-15T12:00:00Z\"]
+                 [:db/add \"e2\" :event/label \"Early\"]
+                 [:db/add \"e2\" :event/timestamp \"2020-01-01T00:00:00Z\"]
+                 [:db/add \"e3\" :event/label \"Middle\"]
+                 [:db/add \"e3\" :event/timestamp \"2022-06-15T12:00:00Z\"]
+                 [:db/add \"e4\" :event/label \"Recent\"]
+                 [:db/add \"e4\" :event/timestamp \"2024-12-25T18:30:00Z\"]]
+            '::TEXT)",
+        )
+        .expect("Transaction failed");
+
+        // Test ORDER BY timestamp ascending - should be chronological
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?label ?ts
+                  :where
+                  [?e :event/label ?label]
+                  [?e :event/timestamp ?ts]
+                  :order (asc ?ts)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let json: serde_json::Value = serde_json::from_str(&result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        assert_eq!(results.len(), 4, "Should find all 4 events");
+
+        // Verify chronological ordering
+        let labels: Vec<&str> = results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            labels, vec!["Ancient", "Early", "Middle", "Recent"],
+            "Events should be in chronological order, got: {:?}",
+            labels
+        );
+
+        // Verify timestamps contain expected date fragments
+        let timestamps: Vec<&str> = results.iter()
+            .map(|r| r[1].as_str().unwrap())
+            .collect();
+        assert!(
+            timestamps[0].contains("1999"),
+            "First timestamp should be 1999, got: {}",
+            timestamps[0]
+        );
+        assert!(
+            timestamps[3].contains("2024"),
+            "Last timestamp should be 2024, got: {}",
+            timestamps[3]
+        );
+
+        // Test descending order
+        let desc_result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?label ?ts
+                  :where
+                  [?e :event/label ?label]
+                  [?e :event/timestamp ?ts]
+                  :order (desc ?ts)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed");
+
+        let desc_json: serde_json::Value = serde_json::from_str(&desc_result.expect("Query returned NULL"))
+            .expect("Failed to parse JSON");
+        let desc_results = desc_json["results"].as_array().expect("Expected array");
+
+        let desc_labels: Vec<&str> = desc_results.iter()
+            .map(|r| r[0].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            desc_labels, vec!["Recent", "Middle", "Early", "Ancient"],
+            "Descending order should be reverse chronological, got: {:?}",
+            desc_labels
         );
     }
 }

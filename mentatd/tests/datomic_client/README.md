@@ -14,6 +14,7 @@ mentatd/tests/datomic_client/
     datomic_compat/
       core_test.clj                    Core compatibility suite
       real_client_test.clj             Extended real-client tests
+      typed_values_test.clj            Typed value and range query tests (BYTEA fix)
   test_queries.clj                     Legacy REPL-oriented manual tests
   test_client.sh                       Shell-based protocol tests (curl/EDN)
   compatibility_report.md              API coverage matrix and known limitations
@@ -50,6 +51,9 @@ lein test datomic-compat.core-test
 
 # Only the extended real-client suite
 lein test datomic-compat.real-client-test
+
+# Only the typed values / range query tests
+lein test datomic-compat.typed-values-test
 ```
 
 The default mentatd URI is `datomic:free://localhost:8080/test-db`.  Override
@@ -103,6 +107,23 @@ database (`:once` fixture):
 | Pull API     | wildcard, specific attributes                        |
 | Entity API   | lazy entity map, attribute access                    |
 | Time-travel  | history, as-of                                       |
+
+### `typed_values_test.clj`
+
+Tests specifically designed to validate the BYTEA-to-typed-columns fix
+(Phase 1.1).  Each test creates its own isolated database.  Covers:
+
+| Category               | Tests                                                    |
+|------------------------|----------------------------------------------------------|
+| Numeric range queries  | `>`, `<`, and combined range predicates on `:db.type/long` |
+| Text ordering          | Lexicographic `>` comparison on `:db.type/string`        |
+| Boolean round-trip     | `true`/`false` values via `:db.type/boolean`             |
+| Double round-trip      | Floating-point values via `:db.type/double`              |
+| Instant round-trip     | Timestamps via `:db.type/instant`                        |
+| UUID round-trip        | UUID values via `:db.type/uuid`                          |
+| Timestamp ordering     | Chronological sort of instant values                     |
+| UUID ordering          | Consistent sort of UUID values                           |
+| Multi-type entity      | Entity with all typed attributes in a single pull        |
 
 ### `real_client_test.clj`
 

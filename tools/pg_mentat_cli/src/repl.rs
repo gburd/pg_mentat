@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
 
 use linefeed::{Interface, ReadResult, Signal};
@@ -8,6 +9,7 @@ use tabwriter::TabWriter;
 use termion::{color, style};
 
 use crate::commands::{self, Command};
+use crate::completer::MentatCompleter;
 
 static BLUE: color::Rgb = color::Rgb(0x99, 0xaa, 0xFF);
 static GREEN: color::Rgb = color::Rgb(0x77, 0xFF, 0x99);
@@ -27,6 +29,7 @@ fn history_file_path() -> PathBuf {
 pub struct Repl {
     client: Client,
     interface: Option<Interface<linefeed::DefaultTerminal>>,
+    completer: Arc<MentatCompleter>,
     buffer: String,
     timer_on: bool,
     conninfo: String,
@@ -35,8 +38,10 @@ pub struct Repl {
 impl Repl {
     /// Create a new REPL connected to PostgreSQL.
     pub fn new(conninfo: &str, use_tty: bool) -> Result<Repl, String> {
-        let client = Client::connect(conninfo, NoTls)
+        let mut client = Client::connect(conninfo, NoTls)
             .map_err(|e| format!("Failed to connect to PostgreSQL: {e}"))?;
+
+        let completer = Arc::new(MentatCompleter::new());
 
         let interface = if use_tty {
             let iface = Interface::new("pg_mentat")
@@ -44,8 +49,10 @@ impl Repl {
             {
                 let mut r = iface.lock_reader();
                 r.set_report_signal(Signal::Interrupt, true);
-                r.set_word_break_chars(" \t\n!\"#$%&'(){}*+,-./:;<=>?@[\\]^`");
+                // Colons are NOT word-break chars so :person/name completes as one word
+                r.set_word_break_chars(" \t\n!\"#$%&'(){}*+,-;<=>?@[\\]^`");
             }
+            iface.set_completer(Arc::clone(&completer));
             // Load history
             let p = history_file_path();
             let _ = iface.load_history(&p);
@@ -54,9 +61,13 @@ impl Repl {
             None
         };
 
+        // Load schema idents for tab completion
+        load_schema_idents(&mut client, &completer);
+
         Ok(Repl {
             client,
             interface,
+            completer,
             buffer: String::new(),
             timer_on: false,
             conninfo: conninfo.to_string(),
@@ -165,6 +176,7 @@ impl Repl {
             Command::Query(q) => self.execute_query(&q),
             Command::Transact(t) => self.execute_transact(&t),
             Command::Pull(pattern, entity_id) => self.execute_pull(&pattern, entity_id),
+            Command::PullMany(pattern, entity_ids) => self.execute_pull_many(&pattern, &entity_ids),
             Command::Sql(sql) => self.execute_sql(&sql),
             Command::Timer(on) => {
                 self.timer_on = on;
@@ -173,6 +185,9 @@ impl Repl {
             Command::Entity(id) => self.show_entity(id),
             Command::ClearCache => self.clear_cache(),
             Command::CacheStats => self.show_cache_stats(),
+            Command::Explain(query) => self.explain_query(&query),
+            Command::Export(entity_ids) => self.export_entities(&entity_ids),
+            Command::Import(path) => self.import_file(&path),
         }
 
         if let Some(start) = start {
@@ -197,6 +212,9 @@ impl Repl {
         let _ = writeln!(tw, "  .timer on|off\tToggle query timing");
         let _ = writeln!(tw, "  .cache_stats\tShow prepared statement cache stats");
         let _ = writeln!(tw, "  .clear_cache\tClear prepared statement cache");
+        let _ = writeln!(tw, "  .explain <query>\tShow EXPLAIN ANALYZE for a Datalog query");
+        let _ = writeln!(tw, "  .export <id> ...\tExport entities as JSON (pull [*])");
+        let _ = writeln!(tw, "  .import <file>\tImport an EDN transaction file");
         let _ = writeln!(tw, "  .sql <stmt>\tExecute raw SQL");
         let _ = writeln!(tw, "  .exit, .quit\tExit the REPL");
         let _ = writeln!(tw);
@@ -210,6 +228,7 @@ impl Repl {
             "  [{{:db/ident :foo/bar ...}}]\tExecute a transaction"
         );
         let _ = writeln!(tw, "  (pull 42 [*])\tPull entity attributes");
+        let _ = writeln!(tw, "  (pull-many [:attr] [1 2 3])\tBatched pull of multiple entities");
         let _ = writeln!(tw);
         let _ = tw.flush();
     }
@@ -282,6 +301,8 @@ impl Repl {
             Ok(row) => {
                 let raw: String = row.get(0);
                 self.print_success(&format!("Transaction result: {raw}"));
+                // Refresh tab completions in case new schema attributes were defined
+                load_schema_idents(&mut self.client, &self.completer);
             }
             Err(e) => self.print_error(&format!("Transaction failed: {e}")),
         }
@@ -300,6 +321,89 @@ impl Repl {
                 }
             }
             Err(e) => self.print_error(&format!("Pull failed: {e}")),
+        }
+    }
+
+    fn execute_pull_many(&mut self, pattern: &str, entity_ids: &[i64]) {
+        // Build the ARRAY literal for the entity IDs
+        let ids_sql: String = entity_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT mentat_pull_many($1, ARRAY[{}]::BIGINT[])",
+            ids_sql
+        );
+
+        match self.client.query_one(&sql, &[&pattern]) {
+            Ok(row) => {
+                let raw: String = row.get(0);
+                match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(json) => self.pretty_print_json(&json),
+                    Err(_) => println!("{raw}"),
+                }
+            }
+            Err(e) => self.print_error(&format!("Pull-many failed: {e}")),
+        }
+    }
+
+    fn explain_query(&mut self, query: &str) {
+        // Use EXPLAIN ANALYZE on the generated SQL from mentat_query
+        // First try to get the SQL plan
+        let explain_sql = format!("EXPLAIN (ANALYZE, FORMAT JSON) SELECT mentat_query($1, $2)");
+        match self.client.query_one(&explain_sql, &[&query, &"{}"]) {
+            Ok(row) => {
+                let raw: String = row.get(0);
+                match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(json) => self.pretty_print_json(&json),
+                    Err(_) => println!("{raw}"),
+                }
+            }
+            Err(e) => self.print_error(&format!("Explain failed: {e}")),
+        }
+    }
+
+    fn export_entities(&mut self, entity_ids: &[i64]) {
+        // Pull each entity with [*] pattern and output as EDN-style data
+        let ids_sql: String = entity_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT mentat_pull_many('[*]', ARRAY[{}]::BIGINT[])",
+            ids_sql
+        );
+
+        match self.client.query_one(&sql, &[]) {
+            Ok(row) => {
+                let raw: String = row.get(0);
+                match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(json) => {
+                        // Output as pretty JSON (can be re-imported as transaction data)
+                        self.pretty_print_json(&json);
+                    }
+                    Err(_) => println!("{raw}"),
+                }
+            }
+            Err(e) => self.print_error(&format!("Export failed: {e}")),
+        }
+    }
+
+    fn import_file(&mut self, path: &str) {
+        // Read the file and treat its contents as a transaction
+        match std::fs::read_to_string(path) {
+            Ok(contents) => {
+                let trimmed = contents.trim();
+                if trimmed.is_empty() {
+                    self.print_error("File is empty");
+                    return;
+                }
+                self.print_success(&format!("Importing from: {path}"));
+                self.execute_transact(trimmed);
+            }
+            Err(e) => self.print_error(&format!("Failed to read file: {e}")),
         }
     }
 
@@ -547,6 +651,19 @@ enum LineResult {
     Input(String),
     Interrupt,
     Eof,
+}
+
+/// Load all schema attribute idents from the database for tab completion.
+fn load_schema_idents(client: &mut Client, completer: &MentatCompleter) {
+    match client.query("SELECT ident FROM mentat.schema ORDER BY ident", &[]) {
+        Ok(rows) => {
+            let idents: Vec<String> = rows.iter().map(|r| r.get(0)).collect();
+            completer.set_schema_idents(idents);
+        }
+        Err(_) => {
+            // Schema may not exist yet; ignore silently
+        }
+    }
 }
 
 /// Try to extract a displayable string from a postgres row column.

@@ -27,6 +27,12 @@ pub struct ServerConfig {
     pub port: u16,
     #[serde(default = "default_timeout")]
     pub timeout: u64,
+    /// Optional API key for request authentication.
+    /// When set, all requests to `/` and `/stream/query` must include
+    /// an `Authorization: Bearer <key>` header matching this value.
+    /// Health and metrics endpoints are exempt.
+    #[serde(default)]
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -125,6 +131,7 @@ impl Config {
                     .ok()
                     .and_then(|t| t.parse().ok())
                     .unwrap_or_else(default_timeout),
+                api_key: std::env::var("MENTATD_API_KEY").ok(),
             },
             database: DatabaseConfig {
                 connection_string: std::env::var("DATABASE_URL")
@@ -173,5 +180,118 @@ mod tests {
         assert!(config.cache.enabled);
         assert_eq!(config.cache.capacity, 1000);
         assert_eq!(config.cache.ttl_secs, 300);
+    }
+
+    #[test]
+    fn test_default_server_timeout() {
+        let config = Config::from_env();
+        assert_eq!(config.server.timeout, 30);
+    }
+
+    #[test]
+    fn test_default_database_max_lifetime() {
+        let config = Config::from_env();
+        assert_eq!(config.database.max_lifetime_secs, 1800);
+    }
+
+    #[test]
+    fn test_default_logging() {
+        let config = Config::from_env();
+        assert_eq!(config.logging.level, "info");
+        assert_eq!(config.logging.format, "compact");
+    }
+
+    #[test]
+    fn test_default_database_url() {
+        let config = Config::from_env();
+        // Unless DATABASE_URL is set, should use default
+        if std::env::var("DATABASE_URL").is_err() {
+            assert_eq!(
+                config.database.connection_string,
+                "postgresql://localhost/mentat"
+            );
+        }
+    }
+
+    #[test]
+    fn test_cache_config_default() {
+        let cache = CacheConfig::default();
+        assert!(cache.enabled);
+        assert_eq!(cache.capacity, 1000);
+        assert_eq!(cache.ttl_secs, 300);
+    }
+
+    #[test]
+    fn test_config_from_toml_string() {
+        let toml_str = r#"
+            [server]
+            host = "0.0.0.0"
+            port = 9090
+            timeout = 60
+
+            [database]
+            connection_string = "postgresql://user:pass@host/db"
+            pool_size = 20
+            max_lifetime_secs = 3600
+
+            [logging]
+            level = "debug"
+            format = "json"
+
+            [cache]
+            enabled = false
+            capacity = 500
+            ttl_secs = 120
+        "#;
+
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(config.server.host, "0.0.0.0");
+        assert_eq!(config.server.port, 9090);
+        assert_eq!(config.server.timeout, 60);
+        assert_eq!(
+            config.database.connection_string,
+            "postgresql://user:pass@host/db"
+        );
+        assert_eq!(config.database.pool_size, 20);
+        assert_eq!(config.database.max_lifetime_secs, 3600);
+        assert_eq!(config.logging.level, "debug");
+        assert_eq!(config.logging.format, "json");
+        assert!(!config.cache.enabled);
+        assert_eq!(config.cache.capacity, 500);
+        assert_eq!(config.cache.ttl_secs, 120);
+    }
+
+    #[test]
+    fn test_config_from_toml_minimal() {
+        // Only required fields; everything else uses defaults
+        let toml_str = r#"
+            [server]
+
+            [database]
+            connection_string = "postgresql://localhost/test"
+
+            [logging]
+        "#;
+
+        let config: Config = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.server.port, 8080);
+        assert_eq!(config.database.pool_size, 10);
+        // Cache should use Default impl
+        assert!(config.cache.enabled);
+        assert_eq!(config.cache.capacity, 1000);
+    }
+
+    #[test]
+    fn test_config_from_file_nonexistent() {
+        let result = Config::from_file("/nonexistent/path/config.toml");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_from_invalid_toml() {
+        let bad_toml = "this is not valid toml {{{{";
+        let result: Result<Config, _> = toml::from_str(bad_toml);
+        assert!(result.is_err());
     }
 }

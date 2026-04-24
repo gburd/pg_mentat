@@ -4,6 +4,19 @@ use pgrx::prelude::*;
 use pgrx::JsonB;
 use serde_json::json;
 
+/// Type tags matching encode_value in transact.rs.
+mod type_tag {
+    pub const REF: i16 = 0;
+    pub const BOOLEAN: i16 = 1;
+    pub const LONG: i16 = 2;
+    pub const DOUBLE: i16 = 3;
+    pub const INSTANT: i16 = 4;
+    pub const STRING: i16 = 7;
+    pub const KEYWORD: i16 = 8;
+    pub const UUID: i16 = 10;
+    pub const BYTES: i16 = 11;
+}
+
 /// Fetch all datoms for a specific entity and return as JSON
 ///
 /// Returns entity data as a JSON map:
@@ -22,21 +35,26 @@ pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error 
     entity_map.insert(":db/id".to_string(), json!(entity_id));
 
     Spi::connect(|client| {
-        let query = "SELECT s.ident, d.v, d.value_type_tag \
-             FROM mentat.datoms d \
-             JOIN mentat.schema s ON d.a = s.entid \
-             WHERE d.e = $1 AND d.added = true";
+        let query = "SELECT s.ident, d.value_type_tag, \
+                            d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                            d.v_text, d.v_keyword, \
+                            EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                            EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                            d.v_uuid::TEXT, d.v_bytes \
+                     FROM mentat.datoms d \
+                     JOIN mentat.schema s ON d.a = s.entid \
+                     WHERE d.e = $1 AND d.added = true";
 
         for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
-            let ident: String = row.get(1)?.ok_or(
-                ":db.error/data-integrity Missing ident column in schema join for entity query")?;
-            let v_bytes: Vec<u8> = row.get(2)?.ok_or(
-                ":db.error/data-integrity Missing value (v) column in datoms for entity query")?;
-            let v_type_tag: i16 = row.get(3)?.ok_or(
-                ":db.error/data-integrity Missing value_type_tag column in datoms for entity query")?;
+            let ident: String = row.get(1)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing ident column in schema join for entity query".to_string(),
+            })?;
+            let v_type_tag: i16 = row.get(2)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing value_type_tag column in datoms for entity query".to_string(),
+            })?;
 
-            // Decode value based on type tag
-            let decoded_value = decode_value(&v_bytes, v_type_tag)?;
+            // Decode value from typed columns
+            let decoded_value = decode_row_value(&row, v_type_tag, 3)?;
 
             // For cardinality-many attributes, we need to accumulate values
             if let Some(existing) = entity_map.get(&ident) {
@@ -60,100 +78,71 @@ pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error 
     Ok(JsonB(serde_json::Value::Object(entity_map)))
 }
 
-/// Decode BYTEA value based on type tag
-/// Type tags match the encoding in transact.rs:
-/// 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, 8=keyword, 10=uuid, 11=bytes
-fn decode_value(
-    bytes: &[u8],
+/// Decode a typed value from an SPI row.
+///
+/// Columns at col_offset:
+///   +0 = v_ref, +1 = v_bool, +2 = v_long, +3 = v_double,
+///   +4 = v_text, +5 = v_keyword, +6 = v_instant_micros, +7 = v_uuid::TEXT, +8 = v_bytes
+fn decode_row_value(
+    row: &pgrx::spi::SpiHeapTupleData<'_>,
     type_tag: i16,
+    col_offset: usize,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
-        1 => {
-            // boolean
-            if bytes.is_empty() {
-                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
-                            The datoms table may contain corrupted data.".into());
-            }
-            Ok(json!(bytes[0] != 0))
+        type_tag::REF => {
+            let ref_id: i64 = row.get(col_offset)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_ref for ref type".to_string(),
+            })?;
+            Ok(json!(ref_id))
         }
-        0 | 2 => {
-            // ref or long (both i64 little-endian)
-            if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}. \
-                     The datoms table may contain corrupted data.",
-                    bytes.len()
-                ).into());
-            }
-            let val = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::BOOLEAN => {
+            let b: bool = row.get(col_offset + 1)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bool for boolean type".to_string(),
+            })?;
+            Ok(json!(b))
         }
-        3 => {
-            // double (f64 little-endian)
-            if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid double value: expected 8 bytes, got {}.",
-                    bytes.len()
-                ).into());
-            }
-            let val = f64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::LONG => {
+            let n: i64 = row.get(col_offset + 2)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_long for long type".to_string(),
+            })?;
+            Ok(json!(n))
         }
-        4 => {
-            // instant (i64 microseconds since epoch, little-endian)
-            if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid instant value: expected 8 bytes, got {}.",
-                    bytes.len()
-                ).into());
-            }
-            let micros = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(micros))
+        type_tag::DOUBLE => {
+            let f: f64 = row.get(col_offset + 3)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_double for double type".to_string(),
+            })?;
+            Ok(json!(f))
         }
-        7 => {
-            // string
-            let s = String::from_utf8(bytes.to_vec())?;
+        type_tag::STRING => {
+            let s: String = row.get(col_offset + 4)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_text for string type".to_string(),
+            })?;
             Ok(json!(s))
         }
-        8 => {
-            // keyword - stored without leading colon
-            let s = String::from_utf8(bytes.to_vec())?;
-            Ok(json!(format!(":{}", s)))
+        type_tag::KEYWORD => {
+            let s: String = row.get(col_offset + 5)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_keyword for keyword type".to_string(),
+            })?;
+            Ok(json!(format!(":{s}")))
         }
-        10 => {
-            // uuid (16 bytes)
-            if bytes.len() != 16 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid UUID value: expected 16 bytes, got {}.",
-                    bytes.len()
-                ).into());
-            }
-            let uuid_str = format!(
-                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                bytes[0], bytes[1], bytes[2], bytes[3],
-                bytes[4], bytes[5],
-                bytes[6], bytes[7],
-                bytes[8], bytes[9],
-                bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-            );
-            Ok(json!(uuid_str))
+        type_tag::INSTANT => {
+            let micros: i64 = row.get(col_offset + 6)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_instant_micros for instant type".to_string(),
+            })?;
+            Ok(json!(micros))
         }
-        11 => {
-            // raw bytes - return as hex string
-            Ok(json!(hex::encode(bytes)))
+        type_tag::UUID => {
+            let s: String = row.get(col_offset + 7)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_uuid for uuid type".to_string(),
+            })?;
+            Ok(json!(s))
         }
-        _ => Err(format!(
-            ":db.error/unsupported-type Unsupported value type tag: {}. \
-             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
-             8=keyword, 10=uuid, 11=bytes.",
-            type_tag
-        )
-        .into()),
+        type_tag::BYTES => {
+            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bytes for bytes type".to_string(),
+            })?;
+            Ok(json!(hex::encode(b)))
+        }
+        _ => Err(MentatError::UnsupportedType { type_tag }.into()),
     }
 }

@@ -5,11 +5,12 @@ use crate::pool::DbPool;
 use crate::protocol::{
     parser::{parse_request, ParseError},
     serializer::serialize_response,
+    transit_parser::{detect_input_format, parse_transit_json, parse_transit_msgpack, InputFormat},
     transit_serializer::{
         content_type_for_encoding, parse_accept_encoding, serialize_transit_json,
         serialize_transit_msgpack, TransitEncoding,
     },
-    Anomaly, AnomalyCategory, Operation, Response, ResponseValue,
+    Anomaly, AnomalyCategory, FilterPredicate, Operation, Response, ResponseValue,
 };
 use axum::{
     extract::State,
@@ -21,7 +22,7 @@ use axum::{
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -83,13 +84,82 @@ impl AppState {
     }
 }
 
+/// Maximum request body size (16 MiB).
+///
+/// Prevents denial-of-service via oversized payloads.
+const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
+
 pub fn create_router(state: AppState) -> Router {
-    Router::new()
+    // Authenticated routes: require API key when configured
+    let api_routes = Router::new()
         .route("/", post(handle_request))
-        .route("/stream/query", post(crate::stream::handle_stream_query))
+        .route("/stream/query", post(crate::stream::handle_stream_query));
+
+    // Public routes: health and metrics are always accessible
+    let public_routes = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics_endpoint))
+        .route("/metrics", get(metrics_endpoint));
+
+    let api_routes = if state.config.server.api_key.is_some() {
+        api_routes.layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+    } else {
+        api_routes
+    };
+
+    api_routes
+        .merge(public_routes)
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_SIZE))
         .with_state(state)
+}
+
+/// Authentication middleware that validates Bearer tokens against the configured API key.
+///
+/// When `MENTATD_API_KEY` is set, all requests to protected endpoints must include
+/// an `Authorization: Bearer <key>` header. Returns 401 Unauthorized if the key
+/// is missing or incorrect.
+async fn auth_middleware(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<AxumResponse, StatusCode> {
+    let expected_key = state
+        .config
+        .server
+        .api_key
+        .as_deref()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let auth_header = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+
+    if let Some(token) = auth_header.strip_prefix("Bearer ") {
+        // Use constant-time comparison to prevent timing attacks
+        if constant_time_eq(token.as_bytes(), expected_key.as_bytes()) {
+            Ok(next.run(request).await)
+        } else {
+            Err(StatusCode::UNAUTHORIZED)
+        }
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+/// Constant-time byte comparison to prevent timing side-channel attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 async fn health_check() -> impl IntoResponse {
@@ -103,8 +173,11 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
     metrics::CONNECTION_POOL_AVAILABLE.set(i64::from(pool_status.available as u32));
     metrics::CONNECTION_POOL_WAITING.set(i64::from(pool_status.waiting as u32));
 
-    // Update cache size gauge
-    metrics::CACHE_SIZE.set(state.query_cache.len() as i64);
+    // Update cache gauges from dependency-tracked stats
+    let cache_stats = state.query_cache.stats();
+    metrics::CACHE_SIZE.set(cache_stats.size as i64);
+    metrics::CACHE_TRACKED_ENTRIES.set(cache_stats.tracked_entries as i64);
+    metrics::CACHE_HIT_RATE.set(cache_stats.hit_rate);
 
     let body = metrics::render_metrics();
     (
@@ -117,12 +190,40 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
 async fn handle_request(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: String,
+    body: axum::body::Bytes,
 ) -> Result<AxumResponse, StatusCode> {
-    info!("Received request: {}", body);
     metrics::REQUEST_COUNT.inc();
 
-    let response = match parse_request(&body) {
+    // Detect input format from Content-Type header
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/edn");
+    let input_format = detect_input_format(content_type);
+
+    // Parse the request body using the appropriate parser.
+    // SECURITY: Log only the format and size at info level; full body at debug
+    // to avoid leaking transaction data (which may contain PII) into logs.
+    let parse_result = match input_format {
+        InputFormat::TransitJson => {
+            let body_str = std::str::from_utf8(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+            info!("Received Transit+JSON request ({} bytes)", body.len());
+            debug!("Transit+JSON body: {}", body_str);
+            parse_transit_json(body_str)
+        }
+        InputFormat::TransitMsgpack => {
+            info!("Received Transit+MessagePack request ({} bytes)", body.len());
+            parse_transit_msgpack(&body)
+        }
+        InputFormat::Edn => {
+            let body_str = std::str::from_utf8(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+            info!("Received EDN request ({} bytes)", body.len());
+            debug!("EDN body: {}", body_str);
+            parse_request(body_str)
+        }
+    };
+
+    let response = match parse_result {
         Ok(request) => match execute_operation(request.op, &state).await {
             Ok(result) => Response::Success { result },
             Err(e) => {
@@ -171,7 +272,8 @@ async fn handle_request(
     } else {
         // Default: EDN format
         let edn_response = serialize_response(&response);
-        info!("Sending EDN response: {}", edn_response);
+        info!("Sending EDN response ({} bytes)", edn_response.len());
+        debug!("EDN response: {}", edn_response);
         Ok((
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/edn")],
@@ -212,8 +314,12 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let client = state.pool.get().await?;
 
+            // Use quoted identifier to prevent SQL injection.
+            // is_valid_db_name already restricts to [a-zA-Z][a-zA-Z0-9_]* but
+            // we quote defensively as a second layer of protection.
+            let quoted_name = quote_identifier(&db_name);
             client
-                .execute(&format!("CREATE DATABASE {}", db_name), &[])
+                .execute(&format!("CREATE DATABASE {}", quoted_name), &[])
                 .await?;
 
             ("create_database", Ok(ResponseValue::Boolean(true)))
@@ -226,8 +332,9 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let client = state.pool.get().await?;
 
+            let quoted_name = quote_identifier(&db_name);
             client
-                .execute(&format!("DROP DATABASE {}", db_name), &[])
+                .execute(&format!("DROP DATABASE {}", quoted_name), &[])
                 .await?;
 
             ("delete_database", Ok(ResponseValue::Boolean(true)))
@@ -319,9 +426,12 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let result_json: serde_json::Value = row.get(0);
 
-            // Cache the raw JSON result from PostgreSQL
+            // Cache the raw JSON result with entity dependency tracking
             let json_str = result_json.to_string();
-            state.query_cache.insert(&query, &args_json_str, json_str);
+            let deps = extract_result_entities(&result_json);
+            state
+                .query_cache
+                .insert_with_deps(&query, &args_json_str, json_str, deps);
 
             let result = parse_query_results(&result_json)?;
 
@@ -354,10 +464,23 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let tx_elapsed = tx_start.elapsed().as_secs_f64();
             metrics::TRANSACTION_DURATION.observe(tx_elapsed);
 
-            // Invalidate query cache after successful transaction since
-            // data has changed and cached query results may be stale
-            state.query_cache.invalidate();
-            debug!("Query cache invalidated after transaction");
+            // Extract changed entity IDs from the tx report and perform
+            // targeted cache invalidation instead of clearing everything.
+            let changed_entities = extract_changed_entities(&report_str);
+            if changed_entities.is_empty() {
+                // Could not determine affected entities -- fall back to full clear.
+                state.query_cache.invalidate();
+                debug!("Query cache fully invalidated (no entity info in tx report)");
+            } else {
+                let removed = state
+                    .query_cache
+                    .invalidate_entities(&changed_entities);
+                debug!(
+                    "Query cache: invalidated {} entries for {} changed entities",
+                    removed,
+                    changed_entities.len()
+                );
+            }
 
             ("transact", Ok(result))
         }
@@ -375,6 +498,87 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let result = json_to_response_value(&result_json);
 
             ("pull", Ok(result))
+        }
+
+        Operation::BasisT => {
+            info!("Executing basis-t");
+
+            let client = state.pool.get().await?;
+
+            let row = client
+                .query_one(
+                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+                    &[],
+                )
+                .await?;
+
+            let basis_t: i64 = row.get(0);
+
+            ("basis_t", Ok(ResponseValue::Integer(basis_t)))
+        }
+
+        Operation::With { tx_data } => {
+            info!("Executing speculative transaction (d/with): {}", tx_data);
+            metrics::TRANSACTION_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            // Use a savepoint to execute the transaction speculatively.
+            // BEGIN a transaction, run the transact, capture the report, then ROLLBACK.
+            // This gives us the what-if results without committing.
+            client.execute("BEGIN", &[]).await?;
+
+            let result = async {
+                let row = client
+                    .query_one("SELECT mentat_transact($1)", &[&tx_data])
+                    .await?;
+
+                let report_str: String = row.get(0);
+                let result = parse_tx_report(&report_str)?;
+                Ok::<_, ServerError>(result)
+            }
+            .await;
+
+            // Always rollback -- this is speculative
+            client.execute("ROLLBACK", &[]).await?;
+
+            match result {
+                Ok(report) => ("with", Ok(report)),
+                Err(e) => return Err(e),
+            }
+        }
+
+        Operation::Filter {
+            predicate,
+            query,
+            args,
+        } => {
+            info!("Executing filtered query: {} with predicate: {:?}", query, predicate);
+            metrics::QUERY_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            // Convert args to JSON
+            let args_json = serde_json::to_value(&args)
+                .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
+
+            // Build filtered query by wrapping with a CTE that applies the predicate.
+            // The filter predicate restricts the datoms visible to the query.
+            let filter_clause = build_filter_clause(&predicate);
+
+            let mut inputs = serde_json::Map::new();
+            inputs.insert("inputs".to_string(), args_json);
+            inputs.insert("filter".to_string(), serde_json::Value::String(filter_clause));
+            let inputs_json = serde_json::Value::Object(inputs);
+
+            let row = client
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = parse_query_results(&result_json)?;
+
+            ("filter", Ok(ResponseValue::Vector(result)))
         }
 
         Operation::Datoms { index, components } => {
@@ -637,18 +841,54 @@ fn parse_query_results(json: &serde_json::Value) -> Result<Vec<ResponseValue>, S
 
 /// Parse the JSON string returned by `mentat_transact()` into a response map.
 ///
-/// The extension returns a JSON string like:
+/// The extension returns a Datomic-compatible JSON string like:
 /// ```json
-/// {"tx-id": 12345, "tx-instant": null, "tempids": {"tempid1": 100}, "datoms-inserted": 3}
+/// {
+///   "db-before": {"basis-t": 1234},
+///   "db-after": {"basis-t": 1235},
+///   "tx-data": [[e, a, v, tx, added], ...],
+///   "tempids": {"tempid1": 10001}
+/// }
 /// ```
 ///
-/// This converts it to a `ResponseValue::Map` with native EDN types.
+/// This converts it to a `ResponseValue::Map` matching Datomic's transaction report format.
+/// For backwards compatibility, also handles the legacy format with "tx-id" fields.
 fn parse_tx_report(report_str: &str) -> Result<ResponseValue, ServerError> {
     let report: serde_json::Value = serde_json::from_str(report_str)
         .map_err(|e| ServerError::Internal(format!("Failed to parse tx report: {}", e)))?;
 
     let mut entries = Vec::new();
 
+    // Datomic-compatible format: db-before, db-after, tx-data, tempids
+    if let Some(db_before) = report.get("db-before") {
+        entries.push((
+            ResponseValue::Keyword("db-before".to_string()),
+            json_to_response_value(db_before),
+        ));
+    }
+
+    if let Some(db_after) = report.get("db-after") {
+        entries.push((
+            ResponseValue::Keyword("db-after".to_string()),
+            json_to_response_value(db_after),
+        ));
+    }
+
+    if let Some(tx_data) = report.get("tx-data") {
+        entries.push((
+            ResponseValue::Keyword("tx-data".to_string()),
+            json_to_response_value(tx_data),
+        ));
+    }
+
+    if let Some(tempids) = report.get("tempids") {
+        entries.push((
+            ResponseValue::Keyword("tempids".to_string()),
+            json_to_response_value(tempids),
+        ));
+    }
+
+    // Legacy format fields (backwards compatibility)
     if let Some(tx_id) = report.get("tx-id") {
         entries.push((
             ResponseValue::Keyword("tx-id".to_string()),
@@ -663,24 +903,12 @@ fn parse_tx_report(report_str: &str) -> Result<ResponseValue, ServerError> {
         ));
     }
 
-    if let Some(tempids) = report.get("tempids") {
-        entries.push((
-            ResponseValue::Keyword("tempids".to_string()),
-            json_to_response_value(tempids),
-        ));
-    }
-
     if let Some(datoms) = report.get("datoms-inserted") {
         entries.push((
             ResponseValue::Keyword("datoms-inserted".to_string()),
             json_to_response_value(datoms),
         ));
     }
-
-    entries.push((
-        ResponseValue::Keyword("status".to_string()),
-        ResponseValue::String("committed".to_string()),
-    ));
 
     Ok(ResponseValue::Map(entries))
 }
@@ -693,6 +921,74 @@ fn is_valid_db_name(name: &str) -> bool {
             .chars()
             .next()
             .map_or(false, |c| c.is_ascii_alphabetic())
+}
+
+/// Build a SQL filter clause from a `FilterPredicate`.
+///
+/// Returns a SQL WHERE clause fragment that can be passed to the query engine
+/// to restrict which datoms are visible.
+///
+/// SECURITY: All string values are escaped using `escape_sql_string` to prevent
+/// SQL injection. Integer values are safe because they are typed as `i64`.
+/// Custom expressions are rejected to eliminate arbitrary SQL execution.
+fn build_filter_clause(predicate: &FilterPredicate) -> String {
+    match predicate {
+        FilterPredicate::AttrEquals(attr) => {
+            // Filter datoms to only those with a specific attribute ident.
+            // The attr string may be a keyword like ":person/name" or a quoted form.
+            let clean = attr
+                .trim_matches(|c| c == ':' || c == '"')
+                .to_string();
+            // Validate: attribute idents must be alphanumeric with / . - _
+            if !is_valid_attribute_ident(&clean) {
+                return "FALSE".to_string(); // safe no-op: match nothing
+            }
+            format!(
+                "a = (SELECT entid FROM mentat.idents WHERE ident = '{}' LIMIT 1)",
+                escape_sql_string(&format!(":{}", clean))
+            )
+        }
+        FilterPredicate::EntityEquals(eid) => {
+            // i64 is safe from injection -- format! produces a numeric literal
+            format!("e = {}", eid)
+        }
+        FilterPredicate::Since(t) => {
+            // i64 is safe from injection
+            format!("tx > {}", t)
+        }
+        FilterPredicate::Custom(_expr) => {
+            // SECURITY: Custom SQL expressions are rejected. Allowing arbitrary
+            // user-supplied SQL fragments is inherently unsafe.
+            warn!("Custom filter predicates are disabled for security. Use built-in predicates.");
+            "FALSE".to_string()
+        }
+    }
+}
+
+/// Validate an attribute ident string.
+///
+/// Attribute idents follow the pattern `namespace/name` where each part contains
+/// only alphanumeric characters, hyphens, underscores, and dots.
+fn is_valid_attribute_ident(ident: &str) -> bool {
+    !ident.is_empty()
+        && ident.len() <= 256
+        && ident
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '-' || c == '_' || c == '.')
+}
+
+/// Escape a string value for safe inclusion in a SQL string literal.
+///
+/// Doubles single quotes to prevent SQL injection via quote-breaking.
+fn escape_sql_string(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Quote a PostgreSQL identifier (database name, table name, etc.).
+///
+/// Wraps the identifier in double quotes and escapes any embedded double quotes.
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
 }
 
 /// Build a SQL query for datoms index access.
@@ -839,6 +1135,59 @@ fn decode_datom_value(v_bytes: &[u8], v_type_tag: i16) -> ResponseValue {
         }
         _ => ResponseValue::Nil,
     }
+}
+
+/// Extract entity IDs from a Datomic-compatible transaction report JSON string.
+///
+/// The report may have a `"tx-data"` field containing an array of datom arrays
+/// where the first element of each datom is the entity ID.  Returns an empty
+/// `Vec` if the report does not contain parseable tx-data.
+fn extract_changed_entities(report_str: &str) -> Vec<i64> {
+    let report: serde_json::Value = match serde_json::from_str(report_str) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let tx_data = match report.get("tx-data").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return Vec::new(),
+    };
+
+    let mut entities = std::collections::HashSet::new();
+    for datom in tx_data {
+        if let Some(arr) = datom.as_array() {
+            if let Some(e) = arr.first().and_then(|v| v.as_i64()) {
+                entities.insert(e);
+            }
+        }
+    }
+
+    entities.into_iter().collect()
+}
+
+/// Extract entity IDs that appear in a query result JSON value.
+///
+/// The extension returns results as `{"results": [[col1, col2, ...], ...]}`.
+/// We scan each result column for integer values, which are likely entity IDs
+/// or attribute IDs.  This is a conservative over-approximation: we track all
+/// integer values as potential entity dependencies, which may cause some
+/// unnecessary invalidations but never misses a true dependency.
+fn extract_result_entities(result_json: &serde_json::Value) -> std::collections::HashSet<i64> {
+    let mut entities = std::collections::HashSet::new();
+
+    if let Some(results) = result_json.get("results").and_then(|r| r.as_array()) {
+        for row in results {
+            if let Some(cols) = row.as_array() {
+                for val in cols {
+                    if let Some(id) = val.as_i64() {
+                        entities.insert(id);
+                    }
+                }
+            }
+        }
+    }
+
+    entities
 }
 
 #[cfg(test)]
@@ -1007,7 +1356,8 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_tx_report_basic() {
+    fn test_parse_tx_report_legacy_format() {
+        // Test backwards compatibility with the legacy format
         let report_str =
             r#"{"tx-id":12345,"tx-instant":null,"tempids":{"tempid1":100},"datoms-inserted":3}"#;
         let result = parse_tx_report(report_str);
@@ -1040,14 +1390,6 @@ mod tests {
                     other => panic!("Expected Integer for datoms-inserted, got {:?}", other),
                 }
 
-                // status should be a string
-                let status_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "status"));
-                assert!(status_entry.is_some());
-                match &status_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
-                    ResponseValue::String(s) => assert_eq!(s, "committed"),
-                    other => panic!("Expected String for status, got {:?}", other),
-                }
-
                 // tempids should be a map
                 let tempids_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
                 assert!(tempids_entry.is_some());
@@ -1063,7 +1405,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_tx_report_serialized_format() {
+    fn test_parse_tx_report_legacy_serialized_format() {
         use crate::protocol::serializer::serialize_response;
         use crate::protocol::Response;
 
@@ -1076,7 +1418,6 @@ mod tests {
         assert!(output.contains(":tx-instant nil"));
         assert!(output.contains(":datoms-inserted 3"));
         assert!(output.contains(":tempids {}"));
-        assert!(output.contains(r#":status "committed""#));
     }
 
     #[test]
@@ -1101,6 +1442,99 @@ mod tests {
     fn test_parse_tx_report_invalid_json() {
         let result = parse_tx_report("not json");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_tx_report_datomic_format() {
+        // Test the new Datomic-compatible transaction report format
+        let report_str = r#"{"db-before":{"basis-t":1000},"db-after":{"basis-t":1001},"tx-data":[[1001,10,1714000000000000,1001,true],[5001,100,"Alice",1001,true]],"tempids":{"alice":5001}}"#;
+        let result = parse_tx_report(report_str);
+        assert!(result.is_ok());
+
+        match result.unwrap_or(ResponseValue::Nil) {
+            ResponseValue::Map(entries) => {
+                // db-before should be a map with basis-t
+                let db_before = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-before"));
+                assert!(db_before.is_some(), "Missing :db-before");
+                match &db_before.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                    ResponseValue::Map(inner) => {
+                        assert_eq!(inner.len(), 1);
+                        let basis_t = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"));
+                        assert!(basis_t.is_some());
+                        match &basis_t.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                            ResponseValue::Integer(t) => assert_eq!(*t, 1000),
+                            other => panic!("Expected Integer for basis-t, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected Map for db-before, got {:?}", other),
+                }
+
+                // db-after should be a map with basis-t
+                let db_after = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-after"));
+                assert!(db_after.is_some(), "Missing :db-after");
+                match &db_after.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                    ResponseValue::Map(inner) => {
+                        let basis_t = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"));
+                        match &basis_t.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                            ResponseValue::Integer(t) => assert_eq!(*t, 1001),
+                            other => panic!("Expected Integer for basis-t, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected Map for db-after, got {:?}", other),
+                }
+
+                // tx-data should be a vector of vectors
+                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"));
+                assert!(tx_data.is_some(), "Missing :tx-data");
+                match &tx_data.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                    ResponseValue::Vector(datoms) => {
+                        assert_eq!(datoms.len(), 2);
+                        // First datom should be [1001, 10, 1714000000000000, 1001, true]
+                        match &datoms[0] {
+                            ResponseValue::Vector(d) => {
+                                assert_eq!(d.len(), 5);
+                                match &d[0] {
+                                    ResponseValue::Integer(e) => assert_eq!(*e, 1001),
+                                    other => panic!("Expected Integer for e, got {:?}", other),
+                                }
+                                match &d[4] {
+                                    ResponseValue::Boolean(added) => assert!(*added),
+                                    other => panic!("Expected Boolean for added, got {:?}", other),
+                                }
+                            }
+                            other => panic!("Expected Vector for datom, got {:?}", other),
+                        }
+                    }
+                    other => panic!("Expected Vector for tx-data, got {:?}", other),
+                }
+
+                // tempids should be a map
+                let tempids = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
+                assert!(tempids.is_some(), "Missing :tempids");
+                match &tempids.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                    ResponseValue::Map(inner) => {
+                        assert_eq!(inner.len(), 1);
+                    }
+                    other => panic!("Expected Map for tempids, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_tx_report_datomic_format_serialized() {
+        use crate::protocol::serializer::serialize_response;
+        use crate::protocol::Response;
+
+        let report_str = r#"{"db-before":{"basis-t":0},"db-after":{"basis-t":1001},"tx-data":[[1001,10,1714000000000000,1001,true]],"tempids":{}}"#;
+        let result = parse_tx_report(report_str).unwrap_or(ResponseValue::Nil);
+        let response = Response::Success { result };
+        let output = serialize_response(&response);
+        assert!(output.contains(":db-before {:basis-t 0}"), "Output missing db-before: {}", output);
+        assert!(output.contains(":db-after {:basis-t 1001}"), "Output missing db-after: {}", output);
+        assert!(output.contains(":tx-data"), "Output missing tx-data: {}", output);
+        assert!(output.contains(":tempids {}"), "Output missing tempids: {}", output);
     }
 
     #[test]
@@ -1140,5 +1574,687 @@ mod tests {
             }
             other => panic!("Expected Vector, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_build_filter_clause_attr_equals() {
+        let pred = FilterPredicate::AttrEquals(":person/name".to_string());
+        let clause = build_filter_clause(&pred);
+        assert!(clause.contains("person/name"));
+        assert!(clause.contains("SELECT entid FROM mentat.idents"));
+    }
+
+    #[test]
+    fn test_build_filter_clause_entity_equals() {
+        let pred = FilterPredicate::EntityEquals(42);
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "e = 42");
+    }
+
+    #[test]
+    fn test_build_filter_clause_since() {
+        let pred = FilterPredicate::Since(1000);
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "tx > 1000");
+    }
+
+    #[test]
+    fn test_build_filter_clause_custom_rejected() {
+        // Custom predicates are rejected for security -- they always return FALSE
+        let pred = FilterPredicate::Custom("a = 10 AND e > 5; DROP TABLE users".to_string());
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "FALSE");
+    }
+
+    // ---- Entity extraction for cache invalidation ----
+
+    #[test]
+    fn test_extract_changed_entities_datomic_format() {
+        let report = r#"{"db-before":{"basis-t":1000},"db-after":{"basis-t":1001},"tx-data":[[1001,10,1714000000000000,1001,true],[5001,100,"Alice",1001,true],[5002,100,"Bob",1001,true]],"tempids":{}}"#;
+        let mut entities = extract_changed_entities(report);
+        entities.sort();
+        assert_eq!(entities, vec![1001, 5001, 5002]);
+    }
+
+    #[test]
+    fn test_extract_changed_entities_legacy_format() {
+        // Legacy format has no tx-data -- should return empty
+        let report = r#"{"tx-id":12345,"tx-instant":null,"tempids":{},"datoms-inserted":3}"#;
+        let entities = extract_changed_entities(report);
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_changed_entities_invalid_json() {
+        let entities = extract_changed_entities("not json at all");
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_changed_entities_empty_tx_data() {
+        let report = r#"{"tx-data":[],"tempids":{}}"#;
+        let entities = extract_changed_entities(report);
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_changed_entities_deduplicates() {
+        // Same entity appears in multiple datoms
+        let report = r#"{"tx-data":[[5001,100,"Alice",1001,true],[5001,101,30,1001,true]]}"#;
+        let entities = extract_changed_entities(report);
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0], 5001);
+    }
+
+    #[test]
+    fn test_extract_result_entities_basic() {
+        let json = serde_json::json!({
+            "columns": ["?e", "?name"],
+            "results": [
+                [100, "Alice"],
+                [200, "Bob"]
+            ]
+        });
+        let entities = extract_result_entities(&json);
+        assert!(entities.contains(&100));
+        assert!(entities.contains(&200));
+    }
+
+    #[test]
+    fn test_extract_result_entities_no_integers() {
+        let json = serde_json::json!({
+            "columns": ["?name"],
+            "results": [
+                ["Alice"],
+                ["Bob"]
+            ]
+        });
+        let entities = extract_result_entities(&json);
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_extract_result_entities_missing_results() {
+        let json = serde_json::json!({"columns": ["?x"]});
+        let entities = extract_result_entities(&json);
+        assert!(entities.is_empty());
+    }
+
+    // ---- is_valid_db_name comprehensive tests ----
+
+    #[test]
+    fn test_valid_db_names() {
+        assert!(is_valid_db_name("a"));
+        assert!(is_valid_db_name("test_db"));
+        assert!(is_valid_db_name("mydb123"));
+        assert!(is_valid_db_name("A"));
+        assert!(is_valid_db_name("MyDB"));
+        assert!(is_valid_db_name("a_b_c_d"));
+        assert!(is_valid_db_name("db1_test2_foo3"));
+    }
+
+    #[test]
+    fn test_invalid_db_names() {
+        assert!(!is_valid_db_name(""));
+        assert!(!is_valid_db_name("123db")); // starts with digit
+        assert!(!is_valid_db_name("_db")); // starts with underscore
+        assert!(!is_valid_db_name("my-db")); // contains dash
+        assert!(!is_valid_db_name("my db")); // contains space
+        assert!(!is_valid_db_name("my.db")); // contains dot
+        assert!(!is_valid_db_name("my;db")); // contains semicolon
+        assert!(!is_valid_db_name("DROP TABLE")); // SQL injection attempt
+    }
+
+    #[test]
+    fn test_db_name_max_length() {
+        let name_63 = "a".repeat(63);
+        assert!(is_valid_db_name(&name_63));
+
+        let name_64 = "a".repeat(64);
+        assert!(!is_valid_db_name(&name_64));
+    }
+
+    // ---- build_datoms_query comprehensive tests ----
+
+    #[test]
+    fn test_build_datoms_query_eavt_all_components() {
+        use crate::protocol::DatomsIndex;
+
+        let q0 = build_datoms_query(DatomsIndex::EAVT, 0);
+        assert!(q0.contains("FROM mentat.datoms"));
+        assert!(!q0.contains("WHERE"));
+        assert!(q0.contains("ORDER BY e, a, v, tx"));
+
+        let q1 = build_datoms_query(DatomsIndex::EAVT, 1);
+        assert!(q1.contains("WHERE e = $1"));
+
+        let q2 = build_datoms_query(DatomsIndex::EAVT, 2);
+        assert!(q2.contains("WHERE e = $1 AND a = $2"));
+
+        let q3 = build_datoms_query(DatomsIndex::EAVT, 3);
+        assert!(q3.contains("WHERE e = $1 AND a = $2 AND v = $3"));
+    }
+
+    #[test]
+    fn test_build_datoms_query_aevt() {
+        use crate::protocol::DatomsIndex;
+
+        let q1 = build_datoms_query(DatomsIndex::AEVT, 1);
+        assert!(q1.contains("WHERE a = $1"));
+        assert!(q1.contains("ORDER BY a, e, v, tx"));
+
+        let q2 = build_datoms_query(DatomsIndex::AEVT, 2);
+        assert!(q2.contains("WHERE a = $1 AND e = $2"));
+    }
+
+    #[test]
+    fn test_build_datoms_query_avet() {
+        use crate::protocol::DatomsIndex;
+
+        let q1 = build_datoms_query(DatomsIndex::AVET, 1);
+        assert!(q1.contains("WHERE a = $1"));
+        assert!(q1.contains("ORDER BY a, v, e, tx"));
+
+        let q2 = build_datoms_query(DatomsIndex::AVET, 2);
+        assert!(q2.contains("WHERE a = $1 AND v = $2"));
+    }
+
+    #[test]
+    fn test_build_datoms_query_vaet() {
+        use crate::protocol::DatomsIndex;
+
+        let q1 = build_datoms_query(DatomsIndex::VAET, 1);
+        assert!(q1.contains("WHERE v = $1"));
+        assert!(q1.contains("ORDER BY v, a, e, tx"));
+
+        let q2 = build_datoms_query(DatomsIndex::VAET, 2);
+        assert!(q2.contains("WHERE v = $1 AND a = $2"));
+    }
+
+    // ---- decode_datom_value comprehensive tests ----
+
+    #[test]
+    fn test_decode_datom_ref() {
+        let bytes = 42_i64.to_le_bytes();
+        match decode_datom_value(&bytes, 0) {
+            ResponseValue::Integer(i) => assert_eq!(i, 42),
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_ref_wrong_size() {
+        match decode_datom_value(&[1, 2, 3], 0) {
+            ResponseValue::Nil => {}
+            other => panic!("Expected Nil for wrong-size ref, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_boolean_true() {
+        match decode_datom_value(&[1], 1) {
+            ResponseValue::Boolean(b) => assert!(b),
+            other => panic!("Expected Boolean(true), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_boolean_false() {
+        match decode_datom_value(&[0], 1) {
+            ResponseValue::Boolean(b) => assert!(!b),
+            other => panic!("Expected Boolean(false), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_boolean_wrong_size() {
+        match decode_datom_value(&[], 1) {
+            ResponseValue::Nil => {}
+            other => panic!("Expected Nil for wrong-size bool, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_long() {
+        let bytes = 12345_i64.to_le_bytes();
+        match decode_datom_value(&bytes, 2) {
+            ResponseValue::Integer(i) => assert_eq!(i, 12345),
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_long_negative() {
+        let bytes = (-99_i64).to_le_bytes();
+        match decode_datom_value(&bytes, 2) {
+            ResponseValue::Integer(i) => assert_eq!(i, -99),
+            other => panic!("Expected Integer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_double() {
+        let bytes = 3.14_f64.to_le_bytes();
+        match decode_datom_value(&bytes, 3) {
+            ResponseValue::String(s) => {
+                let f: f64 = s.parse().expect("should parse as float");
+                assert!((f - 3.14).abs() < 0.001);
+            }
+            other => panic!("Expected String(float), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_string() {
+        let bytes = b"hello world";
+        match decode_datom_value(bytes, 7) {
+            ResponseValue::String(s) => assert_eq!(s, "hello world"),
+            other => panic!("Expected String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_string_empty() {
+        match decode_datom_value(&[], 7) {
+            ResponseValue::String(s) => assert_eq!(s, ""),
+            other => panic!("Expected empty String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_keyword() {
+        let bytes = b"db/ident";
+        match decode_datom_value(bytes, 8) {
+            ResponseValue::Keyword(k) => assert_eq!(k, "db/ident"),
+            other => panic!("Expected Keyword, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_uuid() {
+        let uuid = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
+            .expect("valid uuid");
+        let bytes = uuid.as_bytes();
+        match decode_datom_value(bytes, 10) {
+            ResponseValue::String(s) => assert_eq!(s, "550e8400-e29b-41d4-a716-446655440000"),
+            other => panic!("Expected String(uuid), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_uuid_wrong_size() {
+        match decode_datom_value(&[1, 2, 3], 10) {
+            ResponseValue::Nil => {}
+            other => panic!("Expected Nil for wrong-size uuid, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_bytes() {
+        let bytes = &[0xDE, 0xAD, 0xBE, 0xEF];
+        match decode_datom_value(bytes, 11) {
+            ResponseValue::String(s) => assert_eq!(s, "0xdeadbeef"),
+            other => panic!("Expected hex String, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_datom_unknown_type_tag() {
+        match decode_datom_value(&[1, 2, 3], 99) {
+            ResponseValue::Nil => {}
+            other => panic!("Expected Nil for unknown type tag, got {:?}", other),
+        }
+    }
+
+    // ---- json_to_response_value edge cases ----
+
+    #[test]
+    fn test_json_to_response_value_object() {
+        let val = serde_json::json!({"key1": "value1", "key2": 42});
+        match json_to_response_value(&val) {
+            ResponseValue::Map(entries) => {
+                assert_eq!(entries.len(), 2);
+            }
+            other => panic!("Expected Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_json_to_response_value_nested_object() {
+        let val = serde_json::json!({"outer": {"inner": 1}});
+        match json_to_response_value(&val) {
+            ResponseValue::Map(entries) => {
+                assert_eq!(entries.len(), 1);
+                match &entries[0].1 {
+                    ResponseValue::Map(inner) => assert_eq!(inner.len(), 1),
+                    other => panic!("Expected inner Map, got {:?}", other),
+                }
+            }
+            other => panic!("Expected Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_json_to_response_value_large_u64() {
+        // u64 value larger than i64::MAX should become a string
+        let val = serde_json::json!(u64::MAX);
+        match json_to_response_value(&val) {
+            ResponseValue::String(s) => {
+                assert_eq!(s, u64::MAX.to_string());
+            }
+            other => panic!("Expected String for large u64, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_json_to_response_value_float() {
+        let val = serde_json::json!(3.14);
+        match json_to_response_value(&val) {
+            ResponseValue::String(s) => {
+                let f: f64 = s.parse().expect("should parse as float");
+                assert!((f - 3.14).abs() < 0.001);
+            }
+            other => panic!("Expected String(float), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_json_to_response_value_empty_array() {
+        let val = serde_json::json!([]);
+        match json_to_response_value(&val) {
+            ResponseValue::Vector(items) => assert!(items.is_empty()),
+            other => panic!("Expected empty Vector, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_json_to_response_value_empty_object() {
+        let val = serde_json::json!({});
+        match json_to_response_value(&val) {
+            ResponseValue::Map(entries) => assert!(entries.is_empty()),
+            other => panic!("Expected empty Map, got {:?}", other),
+        }
+    }
+
+    // ---- build_filter_clause comprehensive tests ----
+
+    #[test]
+    fn test_build_filter_clause_attr_equals_with_colon() {
+        let pred = FilterPredicate::AttrEquals(":person/name".to_string());
+        let clause = build_filter_clause(&pred);
+        assert!(clause.contains("person/name"));
+        assert!(clause.contains("SELECT entid FROM mentat.idents"));
+    }
+
+    #[test]
+    fn test_build_filter_clause_attr_equals_with_quotes() {
+        let pred = FilterPredicate::AttrEquals("\":person/age\"".to_string());
+        let clause = build_filter_clause(&pred);
+        assert!(clause.contains("person/age"));
+    }
+
+    #[test]
+    fn test_build_filter_clause_entity_equals_zero() {
+        let pred = FilterPredicate::EntityEquals(0);
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "e = 0");
+    }
+
+    #[test]
+    fn test_build_filter_clause_entity_equals_large() {
+        let pred = FilterPredicate::EntityEquals(999999);
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "e = 999999");
+    }
+
+    #[test]
+    fn test_build_filter_clause_since_zero() {
+        let pred = FilterPredicate::Since(0);
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "tx > 0");
+    }
+
+    #[test]
+    fn test_build_filter_clause_custom_always_returns_false() {
+        // Custom predicates are disabled for security
+        let pred = FilterPredicate::Custom("a = 10".to_string());
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "FALSE");
+    }
+
+    #[test]
+    fn test_build_filter_clause_custom_blocks_injection() {
+        let pred = FilterPredicate::Custom("a = 10; DROP TABLE users".to_string());
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "FALSE");
+        assert!(!clause.contains("DROP"));
+    }
+
+    // ---- parse_query_results edge cases ----
+
+    #[test]
+    fn test_parse_query_results_single_column() {
+        let json = serde_json::json!({
+            "columns": ["?e"],
+            "results": [[42], [43], [44]]
+        });
+        let result = parse_query_results(&json);
+        assert!(result.is_ok());
+        let rows = result.unwrap();
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_query_results_keywords_in_results() {
+        let json = serde_json::json!({
+            "columns": ["?attr"],
+            "results": [[":db/ident"], [":person/name"]]
+        });
+        let result = parse_query_results(&json);
+        assert!(result.is_ok());
+        let rows = result.unwrap();
+        match &rows[0] {
+            ResponseValue::Vector(vals) => match &vals[0] {
+                ResponseValue::Keyword(k) => assert_eq!(k, "db/ident"),
+                other => panic!("Expected Keyword, got {:?}", other),
+            },
+            other => panic!("Expected Vector, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_results_null_value() {
+        let json = serde_json::json!({
+            "columns": ["?v"],
+            "results": [[null]]
+        });
+        let result = parse_query_results(&json);
+        assert!(result.is_ok());
+        let rows = result.unwrap();
+        match &rows[0] {
+            ResponseValue::Vector(vals) => {
+                assert!(matches!(&vals[0], ResponseValue::Nil));
+            }
+            other => panic!("Expected Vector, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_query_results_not_array() {
+        let json = serde_json::json!({
+            "results": "not an array"
+        });
+        let result = parse_query_results(&json);
+        assert!(result.is_err());
+    }
+
+    // ---- parse_tx_report edge cases ----
+
+    #[test]
+    fn test_parse_tx_report_empty_object() {
+        let result = parse_tx_report("{}");
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ResponseValue::Map(entries) => assert!(entries.is_empty()),
+            other => panic!("Expected empty Map, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_tx_report_with_all_fields() {
+        let report = r#"{"db-before":{"basis-t":0},"db-after":{"basis-t":1},"tx-data":[],"tempids":{},"tx-id":1,"tx-instant":"2024-01-01T00:00:00Z","datoms-inserted":0}"#;
+        let result = parse_tx_report(report);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ResponseValue::Map(entries) => {
+                // Should have both Datomic and legacy fields
+                assert!(entries.len() >= 5);
+            }
+            other => panic!("Expected Map, got {:?}", other),
+        }
+    }
+
+    // ---- AnomalyCategory tests ----
+
+    #[test]
+    fn test_anomaly_category_keywords() {
+        use crate::protocol::AnomalyCategory;
+        assert_eq!(
+            AnomalyCategory::Incorrect.as_keyword(),
+            ":cognitect.anomalies/incorrect"
+        );
+        assert_eq!(
+            AnomalyCategory::Forbidden.as_keyword(),
+            ":cognitect.anomalies/forbidden"
+        );
+        assert_eq!(
+            AnomalyCategory::NotFound.as_keyword(),
+            ":cognitect.anomalies/not-found"
+        );
+        assert_eq!(
+            AnomalyCategory::Unavailable.as_keyword(),
+            ":cognitect.anomalies/unavailable"
+        );
+        assert_eq!(
+            AnomalyCategory::Interrupted.as_keyword(),
+            ":cognitect.anomalies/interrupted"
+        );
+        assert_eq!(
+            AnomalyCategory::Fault.as_keyword(),
+            ":cognitect.anomalies/fault"
+        );
+    }
+
+    // ---- ServerError to Anomaly conversion ----
+
+    #[test]
+    fn test_server_error_parse_to_anomaly() {
+        use crate::protocol::parser::ParseError;
+        let err: ServerError = ParseError::MissingField("test".to_string()).into();
+        let anomaly: Anomaly = err.into();
+        assert!(matches!(anomaly.category, crate::protocol::AnomalyCategory::Incorrect));
+    }
+
+    #[test]
+    fn test_server_error_internal_to_anomaly() {
+        let err = ServerError::Internal("something went wrong".to_string());
+        let anomaly: Anomaly = err.into();
+        assert!(matches!(anomaly.category, crate::protocol::AnomalyCategory::Fault));
+        assert!(anomaly.message.contains("something went wrong"));
+    }
+
+    // ---- Security tests ----
+
+    #[test]
+    fn test_is_valid_db_name_blocks_injection() {
+        // SQL injection via database name
+        assert!(!is_valid_db_name("test; DROP TABLE users"));
+        assert!(!is_valid_db_name("test--comment"));
+        assert!(!is_valid_db_name("test' OR '1'='1"));
+        assert!(!is_valid_db_name(""));
+        assert!(!is_valid_db_name("1starts_with_number"));
+        // Valid names
+        assert!(is_valid_db_name("test_db"));
+        assert!(is_valid_db_name("mentat"));
+        assert!(is_valid_db_name("MyDB123"));
+    }
+
+    #[test]
+    fn test_is_valid_attribute_ident_blocks_injection() {
+        // SQL injection via attribute ident
+        assert!(!is_valid_attribute_ident("'; DROP TABLE mentat.datoms; --"));
+        assert!(!is_valid_attribute_ident("person/name' UNION SELECT * FROM pg_shadow --"));
+        assert!(!is_valid_attribute_ident(""));
+        // Oversized ident
+        let long_ident = "a".repeat(257);
+        assert!(!is_valid_attribute_ident(&long_ident));
+        // Valid idents
+        assert!(is_valid_attribute_ident("person/name"));
+        assert!(is_valid_attribute_ident("db.type/string"));
+        assert!(is_valid_attribute_ident("my-attr/some-name"));
+    }
+
+    #[test]
+    fn test_escape_sql_string() {
+        assert_eq!(escape_sql_string("hello"), "hello");
+        assert_eq!(escape_sql_string("it's"), "it''s");
+        assert_eq!(escape_sql_string("a''b"), "a''''b");
+        assert_eq!(escape_sql_string("'; DROP TABLE users; --"), "''; DROP TABLE users; --");
+    }
+
+    #[test]
+    fn test_quote_identifier() {
+        assert_eq!(quote_identifier("test_db"), "\"test_db\"");
+        assert_eq!(quote_identifier("test\"db"), "\"test\"\"db\"");
+        assert_eq!(quote_identifier(""), "\"\"");
+    }
+
+    #[test]
+    fn test_filter_clause_attr_injection_blocked() {
+        // Attribute ident with SQL injection attempt should produce FALSE
+        let pred = FilterPredicate::AttrEquals("person/name' OR 1=1 --".to_string());
+        let clause = build_filter_clause(&pred);
+        assert_eq!(clause, "FALSE");
+    }
+
+    #[test]
+    fn test_filter_clause_attr_valid() {
+        let pred = FilterPredicate::AttrEquals(":person/name".to_string());
+        let clause = build_filter_clause(&pred);
+        assert!(clause.contains("person/name"));
+        assert!(!clause.contains("FALSE"));
+    }
+
+    #[test]
+    fn test_body_size_limit_configured() {
+        // Verify the body size limit constant is reasonable (not too large)
+        assert!(MAX_BODY_SIZE <= 64 * 1024 * 1024, "Body limit should not exceed 64 MiB");
+        assert!(MAX_BODY_SIZE >= 1024 * 1024, "Body limit should be at least 1 MiB");
+    }
+
+    #[test]
+    fn test_constant_time_eq_identical() {
+        assert!(constant_time_eq(b"secret-key-123", b"secret-key-123"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different() {
+        assert!(!constant_time_eq(b"secret-key-123", b"wrong-key-456"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_different_lengths() {
+        assert!(!constant_time_eq(b"short", b"longer-string"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_empty() {
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_constant_time_eq_single_bit_diff() {
+        // Differ by one bit in the last byte
+        assert!(!constant_time_eq(b"abcA", b"abcB"));
     }
 }

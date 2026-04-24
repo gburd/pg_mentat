@@ -119,6 +119,21 @@ test_request "Connect to nonexistent database" \
     '{:op :connect :args {:db-name "nonexistent_db_xyz"}}' \
     ':error'
 
+# Test 16: Range query with numeric predicate (BYTEA bug regression)
+test_request "Numeric range query (> age 30)" \
+    '{:op :q :args {:query "[:find ?name ?age :where [?e :person/name ?name] [?e :person/age ?age] [(> ?age 30)]]" :args []}}' \
+    ':result'
+
+# Test 17: Range query with less-than predicate
+test_request "Numeric range query (< age 10)" \
+    '{:op :q :args {:query "[:find ?name ?age :where [?e :person/name ?name] [?e :person/age ?age] [(< ?age 10)]]" :args []}}' \
+    ':result'
+
+# Test 18: Text comparison predicate
+test_request "Text comparison query (> name Bob)" \
+    '{:op :q :args {:query "[:find ?name :where [?e :person/name ?name] [(> ?name \"Bob\")]]" :args []}}' \
+    ':result'
+
 # Summary
 echo "================================"
 echo "Test Summary"

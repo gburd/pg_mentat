@@ -1,32 +1,25 @@
 -- Helper functions for pg_mentat
 -- Entity ID allocation, value encoding/decoding, and utility functions
 
--- Allocate a new entity ID from a partition
--- Returns the next available entid and increments the partition counter
+-- Allocate a new entity ID from a partition using lock-free sequences.
+-- Returns the next available entid without acquiring row-level locks.
 CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
 RETURNS BIGINT AS $$
-DECLARE
-    new_entid BIGINT;
 BEGIN
-    UPDATE mentat.partitions
-    SET next_entid = next_entid + 1
-    WHERE name = partition_name
-    RETURNING next_entid - 1 INTO new_entid;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Partition % does not exist', partition_name;
-    END IF;
-
-    RETURN new_entid;
+    CASE partition_name
+        WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
+        WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
+        WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
+        ELSE RAISE EXCEPTION 'Partition % does not exist', partition_name;
+    END CASE;
 END;
 $$ LANGUAGE plpgsql;
 
--- Allocate multiple entity IDs from a partition
--- Returns an array of new entids
+-- Allocate multiple entity IDs from a partition using lock-free sequences.
+-- Returns an array of new entids without acquiring row-level locks.
 CREATE OR REPLACE FUNCTION mentat.allocate_entids(partition_name TEXT, count INTEGER)
 RETURNS BIGINT[] AS $$
 DECLARE
-    start_entid BIGINT;
     entids BIGINT[];
     i INTEGER;
 BEGIN
@@ -34,19 +27,9 @@ BEGIN
         RAISE EXCEPTION 'Count must be positive';
     END IF;
 
-    UPDATE mentat.partitions
-    SET next_entid = next_entid + count
-    WHERE name = partition_name
-    RETURNING next_entid - count INTO start_entid;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Partition % does not exist', partition_name;
-    END IF;
-
-    -- Build array of allocated entids
     entids := ARRAY[]::BIGINT[];
-    FOR i IN 0..(count - 1) LOOP
-        entids := array_append(entids, start_entid + i);
+    FOR i IN 1..count LOOP
+        entids := array_append(entids, mentat.allocate_entid(partition_name));
     END LOOP;
 
     RETURN entids;
@@ -60,8 +43,8 @@ RETURNS BIGINT AS $$
 DECLARE
     tx_id BIGINT;
 BEGIN
-    -- Allocate from :db.part/tx partition
-    tx_id := mentat.allocate_entid('db.part/tx');
+    -- Allocate from :db.part/tx partition using lock-free sequence
+    tx_id := nextval('mentat.partition_tx_seq');
 
     -- Create transaction record
     INSERT INTO mentat.transactions (tx_id, instant)

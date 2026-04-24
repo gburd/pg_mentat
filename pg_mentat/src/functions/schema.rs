@@ -1,3 +1,4 @@
+use crate::error::MentatError;
 use pgrx::prelude::*;
 use pgrx::JsonB;
 use serde_json::json;
@@ -32,23 +33,31 @@ pub fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>
 
         for row in client.select(query, None, &[])? {
             // Column indices are 1-based in pgrx
-            let entid: i64 = row.get(1)?.ok_or(
-                ":db.error/data-integrity Missing entid in mentat.schema row")?;
-            let ident: String = row.get(2)?.ok_or(
-                ":db.error/data-integrity Missing ident in mentat.schema row")?;
-            let value_type: String = row.get(3)?.ok_or(
-                ":db.error/data-integrity Missing value_type in mentat.schema row")?;
-            let cardinality: String = row.get(4)?.ok_or(
-                ":db.error/data-integrity Missing cardinality in mentat.schema row")?;
+            let entid: i64 = row.get(1)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing entid in mentat.schema row".to_string(),
+            })?;
+            let ident: String = row.get(2)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing ident in mentat.schema row".to_string(),
+            })?;
+            let value_type: String = row.get(3)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing value_type in mentat.schema row".to_string(),
+            })?;
+            let cardinality: String = row.get(4)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing cardinality in mentat.schema row".to_string(),
+            })?;
             let unique_constraint: Option<String> = row.get(5)?;
-            let indexed: bool = row.get(6)?.ok_or(
-                ":db.error/data-integrity Missing indexed in mentat.schema row")?;
-            let fulltext: bool = row.get(7)?.ok_or(
-                ":db.error/data-integrity Missing fulltext in mentat.schema row")?;
-            let component: bool = row.get(8)?.ok_or(
-                ":db.error/data-integrity Missing component in mentat.schema row")?;
-            let no_history: bool = row.get(9)?.ok_or(
-                ":db.error/data-integrity Missing no_history in mentat.schema row")?;
+            let indexed: bool = row.get(6)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing indexed in mentat.schema row".to_string(),
+            })?;
+            let fulltext: bool = row.get(7)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing fulltext in mentat.schema row".to_string(),
+            })?;
+            let component: bool = row.get(8)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing component in mentat.schema row".to_string(),
+            })?;
+            let no_history: bool = row.get(9)?.ok_or_else(|| MentatError::DataIntegrity {
+                message: "Missing no_history in mentat.schema row".to_string(),
+            })?;
 
             let attr_info = json!({
                 "entid": entid,

@@ -1,0 +1,37 @@
+# Prometheus configuration for pg_mentat monitoring stack
+#
+# Scrapes mentatd application metrics and PostgreSQL exporter metrics.
+# Alert rules are loaded from mentatd_alerts.yml in this directory.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "mentatd_alerts.yml"
+
+scrape_configs:
+  # mentatd application metrics
+  - job_name: "mentatd"
+    scrape_interval: 10s
+    static_configs:
+      - targets: ["mentatd:8080"]
+        labels:
+          environment: "docker"
+          service: "mentatd"
+    metrics_path: "/metrics"
+
+  # PostgreSQL metrics via postgres_exporter
+  - job_name: "postgresql"
+    scrape_interval: 15s
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          environment: "docker"
+          service: "postgresql"
+
+  # Prometheus self-monitoring
+  - job_name: "prometheus"
+    scrape_interval: 30s
+    static_configs:
+      - targets: ["localhost:9090"]

@@ -68,4 +68,48 @@ mod tests {
         let result = create_pool("postgresql://localhost/mentat", 5);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_pool_with_host_and_port() {
+        let result = create_pool("postgresql://localhost:5432/mentat", 5);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pool_with_user_and_password() {
+        let result = create_pool("postgresql://user:pass@localhost/mentat", 5);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pool_invalid_connection_string() {
+        let result = create_pool("not-a-valid-connection-string", 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_pool_max_size_one() {
+        let result = create_pool("postgresql://localhost/mentat", 1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pool_large_max_size() {
+        let result = create_pool("postgresql://localhost/mentat", 100);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_pool_status_fields() {
+        let pool = create_pool("postgresql://localhost/mentat", 5).unwrap();
+        let status = pool.status();
+        assert_eq!(status.max_size, 5);
+        assert_eq!(status.size, 0); // no connections yet
+    }
+
+    #[test]
+    fn test_pool_error_display() {
+        let err = PoolError::Config("test error".to_string());
+        assert_eq!(err.to_string(), "Failed to create connection pool: test error");
+    }
 }

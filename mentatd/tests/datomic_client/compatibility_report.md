@@ -180,8 +180,9 @@ Operations also accept the `datomic.catalog/` namespace prefix for
 |------|-------------|
 | `test/datomic_compat/core_test.clj` | Core compatibility suite (connection, schema, CRUD, pull, entity, time-travel) |
 | `test/datomic_compat/real_client_test.clj` | Extended real-client tests (all API categories, lookup refs, rules, edge cases) |
+| `test/datomic_compat/typed_values_test.clj` | Typed value round-trips, range queries, UUID/timestamp ordering (BYTEA fix validation) |
 | `test_queries.clj` | REPL-oriented manual test script |
-| `test_client.sh` | Shell-based protocol-level tests |
+| `test_client.sh` | Shell-based protocol-level tests (including range query regression tests) |
 | `project.clj` | Leiningen project config with `datomic-free` dependency |
 
 ---
@@ -223,4 +224,5 @@ branches, and on PRs targeting `main` or `claude`.
 
 | Date       | Author | Change                                              |
 |------------|--------|-----------------------------------------------------|
+| 2026-04-24 | CI     | Added typed_values_test.clj (BYTEA fix validation)  |
 | 2026-04-22 | CI     | Initial compatibility report with full API matrix    |

@@ -53,6 +53,27 @@ lazy_static! {
     pub static ref CACHE_SIZE: IntGauge =
         IntGauge::new("mentatd_cache_entries", "Current number of entries in the query cache")
             .expect("metric can be created");
+    pub static ref CACHE_TARGETED_INVALIDATIONS: IntCounter =
+        IntCounter::new(
+            "mentatd_cache_targeted_invalidations_total",
+            "Total entity-level cache invalidations"
+        )
+        .expect("metric can be created");
+    pub static ref CACHE_FULL_INVALIDATIONS: IntCounter =
+        IntCounter::new(
+            "mentatd_cache_full_invalidations_total",
+            "Total full cache invalidations"
+        )
+        .expect("metric can be created");
+    pub static ref CACHE_TRACKED_ENTRIES: IntGauge =
+        IntGauge::new(
+            "mentatd_cache_tracked_entries",
+            "Number of cache entries with entity dependency tracking"
+        )
+        .expect("metric can be created");
+    pub static ref CACHE_HIT_RATE: Gauge =
+        Gauge::new("mentatd_cache_hit_rate", "Query cache hit rate")
+            .expect("metric can be created");
 
     // -- Transaction metrics ----------------------------------------------------
     pub static ref TRANSACTION_COUNT: IntCounter =
@@ -110,6 +131,10 @@ pub fn register_metrics() {
         Box::new(CACHE_HITS.clone()),
         Box::new(CACHE_MISSES.clone()),
         Box::new(CACHE_SIZE.clone()),
+        Box::new(CACHE_TARGETED_INVALIDATIONS.clone()),
+        Box::new(CACHE_FULL_INVALIDATIONS.clone()),
+        Box::new(CACHE_TRACKED_ENTRIES.clone()),
+        Box::new(CACHE_HIT_RATE.clone()),
         Box::new(TRANSACTION_COUNT.clone()),
         Box::new(TRANSACTION_DURATION.clone()),
         Box::new(CONNECTION_POOL_SIZE.clone()),

@@ -250,4 +250,211 @@ mod tests {
         assert!(escaped.contains(r#"\""#));
         assert!(escaped.contains(r#"\\"#));
     }
+
+    // ---- Additional serializer tests ----
+
+    #[test]
+    fn test_serialize_list() {
+        let response = Response::Success {
+            result: ResponseValue::List(vec![
+                ResponseValue::Integer(1),
+                ResponseValue::Integer(2),
+                ResponseValue::Integer(3),
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result (1 2 3)}");
+    }
+
+    #[test]
+    fn test_serialize_empty_vector() {
+        let response = Response::Success {
+            result: ResponseValue::Vector(vec![]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result []}");
+    }
+
+    #[test]
+    fn test_serialize_empty_map() {
+        let response = Response::Success {
+            result: ResponseValue::Map(vec![]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result {}}");
+    }
+
+    #[test]
+    fn test_serialize_empty_list() {
+        let response = Response::Success {
+            result: ResponseValue::List(vec![]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result ()}");
+    }
+
+    #[test]
+    fn test_serialize_deeply_nested() {
+        let inner = ResponseValue::Vector(vec![ResponseValue::Integer(42)]);
+        let mid = ResponseValue::Vector(vec![inner]);
+        let outer = ResponseValue::Vector(vec![mid]);
+        let response = Response::Success { result: outer };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result [[[42]]]}");
+    }
+
+    #[test]
+    fn test_serialize_map_in_vector() {
+        let response = Response::Success {
+            result: ResponseValue::Vector(vec![ResponseValue::Map(vec![(
+                ResponseValue::Keyword("name".to_string()),
+                ResponseValue::String("Alice".to_string()),
+            )])]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, r#"{:result [{:name "Alice"}]}"#);
+    }
+
+    #[test]
+    fn test_serialize_string_with_special_chars() {
+        let response = Response::Success {
+            result: ResponseValue::String("line1\nline2\ttab".to_string()),
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains("\\n"));
+        assert!(output.contains("\\t"));
+    }
+
+    #[test]
+    fn test_serialize_string_with_quotes() {
+        let response = Response::Success {
+            result: ResponseValue::String(r#"say "hello""#.to_string()),
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains(r#"\""#));
+    }
+
+    #[test]
+    fn test_serialize_negative_integer() {
+        let response = Response::Success {
+            result: ResponseValue::Integer(-42),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result -42}");
+    }
+
+    #[test]
+    fn test_serialize_large_integer() {
+        let response = Response::Success {
+            result: ResponseValue::Integer(i64::MAX),
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains(&i64::MAX.to_string()));
+    }
+
+    #[test]
+    fn test_serialize_boolean_false() {
+        let response = Response::Success {
+            result: ResponseValue::Boolean(false),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result false}");
+    }
+
+    #[test]
+    fn test_serialize_anomaly_without_db_error() {
+        let response = Response::Error {
+            anomaly: Anomaly {
+                category: AnomalyCategory::Fault,
+                message: "internal error".to_string(),
+                db_error: None,
+            },
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains(":cognitect.anomalies/fault"));
+        assert!(output.contains("internal error"));
+        assert!(!output.contains(":db/error"));
+    }
+
+    #[test]
+    fn test_serialize_all_anomaly_categories() {
+        let categories = vec![
+            (AnomalyCategory::Incorrect, "incorrect"),
+            (AnomalyCategory::Forbidden, "forbidden"),
+            (AnomalyCategory::NotFound, "not-found"),
+            (AnomalyCategory::Unavailable, "unavailable"),
+            (AnomalyCategory::Interrupted, "interrupted"),
+            (AnomalyCategory::Fault, "fault"),
+        ];
+
+        for (cat, expected) in categories {
+            let response = Response::Error {
+                anomaly: Anomaly {
+                    category: cat,
+                    message: "test".to_string(),
+                    db_error: None,
+                },
+            };
+            let output = serialize_response(&response);
+            assert!(
+                output.contains(expected),
+                "Expected output to contain '{}', got: {}",
+                expected,
+                output
+            );
+        }
+    }
+
+    #[test]
+    fn test_serialize_anomaly_message_with_special_chars() {
+        let response = Response::Error {
+            anomaly: Anomaly {
+                category: AnomalyCategory::Incorrect,
+                message: "Error with \"quotes\" and\nnewlines".to_string(),
+                db_error: None,
+            },
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains(r#"\""#));
+        assert!(output.contains("\\n"));
+    }
+
+    #[test]
+    fn test_serialize_empty_string() {
+        let response = Response::Success {
+            result: ResponseValue::String(String::new()),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, r#"{:result ""}"#);
+    }
+
+    #[test]
+    fn test_serialize_vector_of_nils() {
+        let response = Response::Success {
+            result: ResponseValue::Vector(vec![
+                ResponseValue::Nil,
+                ResponseValue::Nil,
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result [nil nil]}");
+    }
+
+    #[test]
+    fn test_escape_string_backslash() {
+        let escaped = escape_string(r"path\to\file");
+        assert_eq!(escaped, r"path\\to\\file");
+    }
+
+    #[test]
+    fn test_escape_string_carriage_return() {
+        let escaped = escape_string("line1\rline2");
+        assert_eq!(escaped, "line1\\rline2");
+    }
+
+    #[test]
+    fn test_escape_string_no_special_chars() {
+        let escaped = escape_string("hello world");
+        assert_eq!(escaped, "hello world");
+    }
 }

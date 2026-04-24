@@ -2,6 +2,7 @@
 ///
 /// These functions provide EDN-native interfaces for batch operations,
 /// import/export, and advanced query patterns.
+use crate::error::MentatError;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::Spi;
@@ -42,8 +43,9 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
     // Expect a vector of operations
     let ops = match value {
         edn::Value::Vector(v) => v,
-        _ => return Err(":db.error/invalid-batch Batch document must be an EDN vector of \
-                        operations. Example: [[:query ...] [:transact ...]]".into()),
+        _ => return Err(MentatError::InvalidTransaction {
+            message: "Batch document must be an EDN vector of operations. Example: [[:query ...] [:transact ...]]".to_string(),
+        }.into()),
     };
 
     let mut results = Vec::new();
@@ -61,20 +63,22 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
                         "pull" => execute_pull_op(&op_vec)?,
                         "entity" => execute_entity_op(&op_vec)?,
                         "schema" => execute_schema_op()?,
-                        other => return Err(format!(
-                            ":db.error/unknown-batch-op Unknown batch operation type: {}. \
-                             Valid operations: :query, :transact, :pull, :entity, :schema",
-                            other
-                        ).into()),
+                        other => return Err(MentatError::UnknownBatchOp {
+                            op: other.to_string(),
+                        }.into()),
                     },
-                    _ => return Err(":db.error/invalid-batch-op Each batch operation must start with \
-                                    a keyword (:query, :transact, :pull, :entity, :schema).".into()),
+                    _ => return Err(MentatError::BatchMissingArg {
+                        op: "batch".to_string(),
+                        message: "Each batch operation must start with a keyword (:query, :transact, :pull, :entity, :schema).".to_string(),
+                    }.into()),
                 };
 
                 results.push(result);
             }
-            _ => return Err(":db.error/invalid-batch-op Each batch operation must be a vector \
-                            starting with a keyword. Example: [:query [:find ?e :where [?e :attr ?v]]]".into()),
+            _ => return Err(MentatError::BatchMissingArg {
+                op: "batch".to_string(),
+                message: "Each batch operation must be a vector starting with a keyword. Example: [:query [:find ?e :where [?e :attr ?v]]]".to_string(),
+            }.into()),
         }
     }
 
@@ -86,8 +90,10 @@ fn execute_query_op(
     op_vec: &[edn::Value],
 ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err(":db.error/batch-missing-arg Query operation requires a query pattern. \
-                    Example: [:query [:find ?e :where [?e :person/name]]]".into());
+        return Err(MentatError::BatchMissingArg {
+            op: "query".to_string(),
+            message: "Requires a query pattern. Example: [:query [:find ?e :where [?e :person/name]]]".to_string(),
+        }.into());
     }
 
     // Convert query EDN to string
@@ -115,8 +121,10 @@ fn execute_transact_op(
     op_vec: &[edn::Value],
 ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err(":db.error/batch-missing-arg Transact operation requires transaction data. \
-                    Example: [:transact [[:db/add \"new\" :person/name \"Alice\"]]]".into());
+        return Err(MentatError::BatchMissingArg {
+            op: "transact".to_string(),
+            message: "Requires transaction data. Example: [:transact [[:db/add \"new\" :person/name \"Alice\"]]]".to_string(),
+        }.into());
     }
 
     // Convert tx data to string
@@ -133,31 +141,55 @@ fn execute_transact_op(
 }
 
 /// Helper: Execute a pull operation
+///
+/// Supports both single entity and multi-entity pulls:
+///   [:pull [:person/name] 100]
+///   [:pull [:person/name] [100 101 102]]
 fn execute_pull_op(
     op_vec: &[edn::Value],
 ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 3 {
-        return Err(":db.error/batch-missing-arg Pull operation requires a pattern and entity ID. \
-                    Example: [:pull [:person/name :person/age] 100]".into());
+        return Err(MentatError::BatchMissingArg {
+            op: "pull".to_string(),
+            message: "Requires a pattern and entity ID(s). Example: [:pull [:person/name] 100] or [:pull [:person/name] [100 101]]".to_string(),
+        }.into());
     }
 
     // Get pattern string
     let pattern_str = op_vec[1].to_string();
 
-    // Get entity ID
-    let entity_id = match &op_vec[2] {
-        edn::Value::Integer(n) => *n,
-        _ => return Err(":db.error/batch-invalid-arg Pull entity ID must be an integer. \
-                        Example: [:pull [:person/name] 100]".into()),
-    };
-
-    // Execute pull
-    let result = crate::functions::pull::mentat_pull(&pattern_str, entity_id)?;
-
-    Ok(json!({
-        "type": "pull",
-        "result": result.0
-    }))
+    match &op_vec[2] {
+        edn::Value::Integer(n) => {
+            // Single entity pull
+            let result = crate::functions::pull::mentat_pull(&pattern_str, *n)?;
+            Ok(json!({
+                "type": "pull",
+                "result": result.0
+            }))
+        }
+        edn::Value::Vector(ids) => {
+            // Multi-entity pull
+            let mut entity_ids = Vec::with_capacity(ids.len());
+            for id_val in ids {
+                match id_val {
+                    edn::Value::Integer(n) => entity_ids.push(*n),
+                    _ => return Err(MentatError::BatchMissingArg {
+                        op: "pull".to_string(),
+                        message: "Entity IDs must be integers. Example: [:pull [:person/name] [100 101]]".to_string(),
+                    }.into()),
+                }
+            }
+            let result = crate::functions::pull::mentat_pull_many(&pattern_str, entity_ids)?;
+            Ok(json!({
+                "type": "pull-many",
+                "results": result.0
+            }))
+        }
+        _ => Err(MentatError::BatchMissingArg {
+            op: "pull".to_string(),
+            message: "Entity ID must be an integer or vector of integers. Example: [:pull [:person/name] 100] or [:pull [:person/name] [100 101]]".to_string(),
+        }.into()),
+    }
 }
 
 /// Helper: Execute an entity operation
@@ -165,15 +197,19 @@ fn execute_entity_op(
     op_vec: &[edn::Value],
 ) -> Result<JsonValue, Box<dyn std::error::Error + Send + Sync>> {
     if op_vec.len() < 2 {
-        return Err(":db.error/batch-missing-arg Entity operation requires an entity ID. \
-                    Example: [:entity 100]".into());
+        return Err(MentatError::BatchMissingArg {
+            op: "entity".to_string(),
+            message: "Requires an entity ID. Example: [:entity 100]".to_string(),
+        }.into());
     }
 
     // Get entity ID
     let entity_id = match &op_vec[1] {
         edn::Value::Integer(n) => *n,
-        _ => return Err(":db.error/batch-invalid-arg Entity ID must be an integer. \
-                        Example: [:entity 100]".into()),
+        _ => return Err(MentatError::BatchMissingArg {
+            op: "entity".to_string(),
+            message: "Entity ID must be an integer. Example: [:entity 100]".to_string(),
+        }.into()),
     };
 
     // Execute entity lookup
@@ -193,6 +229,19 @@ fn execute_schema_op() -> Result<JsonValue, Box<dyn std::error::Error + Send + S
         "type": "schema",
         "result": result.0
     }))
+}
+
+/// Type tags matching encode_value in transact.rs.
+mod type_tag {
+    pub const REF: i16 = 0;
+    pub const BOOLEAN: i16 = 1;
+    pub const LONG: i16 = 2;
+    pub const DOUBLE: i16 = 3;
+    pub const INSTANT: i16 = 4;
+    pub const STRING: i16 = 7;
+    pub const KEYWORD: i16 = 8;
+    pub const UUID: i16 = 10;
+    pub const BYTES: i16 = 11;
 }
 
 /// Export entities to EDN format
@@ -223,18 +272,24 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
         // Get all facts for this entity
         let facts = Spi::connect(|client| {
             let query = "\
-                SELECT a, v, value_type_tag \
+                SELECT a, value_type_tag, \
+                       v_ref, v_bool, v_long, v_double, \
+                       v_text, v_keyword, \
+                       EXTRACT(EPOCH FROM v_instant)::BIGINT * 1000000 + \
+                       EXTRACT(MICROSECOND FROM v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                       v_uuid::TEXT, v_bytes \
                 FROM mentat.datoms \
                 WHERE e = $1 AND added = true \
                 ORDER BY a";
 
-            let mut entity_facts = Vec::new();
+            let mut entity_facts: Vec<(i64, String)> = Vec::new();
 
             for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
-                if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) =
-                    (row.get::<i64>(1), row.get::<Vec<u8>>(2), row.get::<i16>(3))
+                if let (Ok(Some(attr_id)), Ok(Some(tt))) =
+                    (row.get::<i64>(1), row.get::<i16>(2))
                 {
-                    entity_facts.push((attr_id, value_bytes, type_tag));
+                    let edn_val = row_value_to_edn(&row, tt, 3)?;
+                    entity_facts.push((attr_id, edn_val));
                 }
             }
 
@@ -248,18 +303,17 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
         // Build EDN map for this entity
         let mut entity_edn = format!("{{:db/id {}", entity_id);
 
-        for (attr_id, value_bytes, type_tag) in facts {
+        for (attr_id, value_edn) in facts {
             // Resolve attribute ident
             let attr_ident = crate::cache::get_cache()
                 .get_ident(attr_id)
-                .ok_or_else(|| format!(
-                    ":db.error/attribute-not-found Failed to resolve attribute entid {} to an ident. \
-                     The schema cache may be stale or the attribute was never defined.",
-                    attr_id
-                ))?;
-
-            // Decode value to EDN representation
-            let value_edn = value_to_edn(&value_bytes, type_tag)?;
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    MentatError::AttributeNotFound {
+                        attr: format!("entid:{}", attr_id),
+                        available: crate::error::get_available_attributes(),
+                        suggestion: None,
+                    }.into()
+                })?;
 
             entity_edn.push_str(&format!("\n   {} {}", attr_ident, value_edn));
         }
@@ -372,88 +426,72 @@ fn export_all_edn() -> Result<String, Box<dyn std::error::Error + Send + Sync>> 
     export_edn(entity_ids)
 }
 
-/// Helper: Convert BYTEA value to EDN string representation
-fn value_to_edn(
-    bytes: &[u8],
+/// Convert a typed value from an SPI row to EDN string representation.
+///
+/// Columns at col_offset:
+///   +0 = v_ref, +1 = v_bool, +2 = v_long, +3 = v_double,
+///   +4 = v_text, +5 = v_keyword, +6 = v_instant_micros, +7 = v_uuid::TEXT, +8 = v_bytes
+fn row_value_to_edn(
+    row: &pgrx::spi::SpiHeapTupleData<'_>,
     type_tag: i16,
+    col_offset: usize,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
-        1 => {
-            // boolean
-            if bytes.is_empty() {
-                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
-                            The datoms table may contain corrupted data.".into());
-            }
-            Ok(if bytes[0] != 0 { "true" } else { "false" }.to_string())
-        }
-        0 | 2 => {
-            // ref or long (both i64)
-            if bytes.len() != 8 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
-                );
-            }
-            let val = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
+        type_tag::REF | type_tag::LONG => {
+            // ref or long - both stored as BIGINT
+            let col = if type_tag == type_tag::REF { col_offset } else { col_offset + 2 };
+            let val: i64 = row.get(col)?.ok_or_else(|| MentatError::DataCorruption {
+                message: format!("Missing value for type_tag {}", type_tag),
+            })?;
             Ok(val.to_string())
         }
-        3 => {
-            // double (f64)
-            if bytes.len() != 8 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid double: expected 8 bytes, got {}", bytes.len()).into(),
-                );
-            }
-            let val = f64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(val.to_string())
+        type_tag::BOOLEAN => {
+            let b: bool = row.get(col_offset + 1)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bool".to_string(),
+            })?;
+            Ok(if b { "true" } else { "false" }.to_string())
         }
-        4 => {
-            // instant (microseconds since epoch)
-            if bytes.len() != 8 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid instant: expected 8 bytes, got {}", bytes.len()).into(),
-                );
-            }
-            let micros = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            // Format as #inst "YYYY-MM-DD..."
-            Ok(format!("#inst {}", micros)) // Simplified - full impl would format timestamp
+        type_tag::DOUBLE => {
+            let f: f64 = row.get(col_offset + 3)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_double".to_string(),
+            })?;
+            Ok(f.to_string())
         }
-        7 => {
-            // string
-            let s = String::from_utf8(bytes.to_vec())?;
+        type_tag::INSTANT => {
+            let micros: i64 = row.get(col_offset + 6)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_instant_micros".to_string(),
+            })?;
+            Ok(format!("#inst {}", micros))
+        }
+        type_tag::STRING => {
+            let s: String = row.get(col_offset + 4)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_text".to_string(),
+            })?;
             Ok(format!("\"{}\"", s.replace('"', "\\\"")))
         }
-        8 => {
-            // keyword
-            let s = String::from_utf8(bytes.to_vec())?;
+        type_tag::KEYWORD => {
+            let s: String = row.get(col_offset + 5)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_keyword".to_string(),
+            })?;
             Ok(if s.starts_with(':') {
                 s
             } else {
                 format!(":{}", s)
             })
         }
-        10 => {
-            // uuid
-            if bytes.len() != 16 {
-                return Err(format!(":db.error/data-corruption Invalid UUID: expected 16 bytes, got {}", bytes.len()).into());
-            }
-            Ok(format!("#uuid \"{}\"", hex::encode(bytes)))
+        type_tag::UUID => {
+            let s: String = row.get(col_offset + 7)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_uuid".to_string(),
+            })?;
+            Ok(format!("#uuid \"{}\"", s))
         }
-        11 => {
-            // bytes
-            Ok(format!("#bytes \"{}\"", hex::encode(bytes)))
+        type_tag::BYTES => {
+            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bytes".to_string(),
+            })?;
+            Ok(format!("#bytes \"{}\"", hex::encode(b)))
         }
-        _ => Err(format!(
-            ":db.error/unsupported-type Unsupported type tag: {}. \
-             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
-             8=keyword, 10=uuid, 11=bytes.",
-            type_tag
-        ).into()),
+        _ => Err(MentatError::UnsupportedType { type_tag }.into()),
     }
 }
 

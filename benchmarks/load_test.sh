@@ -20,6 +20,7 @@
 #   spike         - Ramp from 10 to 100 TPS
 #   large         - Complex queries with large result sets
 #   mixed         - 80% reads, 20% writes
+#   writes        - 100% concurrent writes (sequence allocation stress test)
 #   health        - Baseline health check throughput
 #
 # Options:
@@ -84,7 +85,7 @@ usage() {
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            all|steady|spike|large|mixed|health)
+            all|steady|spike|large|mixed|writes|health)
                 SCENARIO="$1"; shift ;;
             --host)       HOST="$2"; shift 2 ;;
             --port)       PORT="$2"; shift 2 ;;
@@ -616,6 +617,56 @@ scenario_mixed() {
     analyze_results "$datafile" "mixed_workload" "$RUN_DIR/mixed_report.txt"
 }
 
+# ── Scenario: Concurrent Writes ───────────────────────────────────
+# Specifically validates the sequence-based entity ID allocation.
+# All workers perform write transactions to stress nextval() path.
+scenario_writes() {
+    log_info "=== Scenario: Concurrent Writes (100% writes, sequence stress test) ==="
+
+    local datafile="$RUN_DIR/writes_raw.dat"
+    > "$datafile"
+
+    # Install loadtest schema
+    edn_request_full '{:op :transact :args {:connection-id "bench" :tx-data [{:db/ident :loadtest/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one} {:db/ident :loadtest/counter :db/valueType :db.type/long :db/cardinality :db.cardinality/one} {:db/ident :loadtest/worker :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]}}' > /dev/null 2>&1
+
+    local workers=$((CONCURRENCY < 100 ? CONCURRENCY : 100))
+
+    local pids=()
+    for i in $(seq 1 "$workers"); do
+        (
+            local wid="cw${i}"
+            local end_time=$(($(date +%s) + DURATION))
+            local counter=0
+            while [[ $(date +%s) -lt $end_time ]]; do
+                counter=$((counter + 1))
+                local unique_id="w${i}_c${counter}_$(date +%s%N)"
+                local tx_body="{:op :transact :args {:connection-id \"bench\" :tx-data [{:loadtest/name \"${unique_id}\" :loadtest/counter ${counter} :loadtest/worker \"worker-${i}\"}]}}"
+                local result
+                result=$(edn_request "$tx_body")
+                local status_code time_total size
+                read -r status_code time_total size <<< "$result"
+                local latency_ms
+                latency_ms=$(echo "$time_total * 1000" | bc 2>/dev/null || echo "0")
+                echo "${wid} ${status_code} ${latency_ms} ${size}" >> "$datafile"
+            done
+        ) &
+        pids+=($!)
+    done
+
+    log_info "Running $workers concurrent write workers for ${DURATION}s..."
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null || true
+    done
+
+    analyze_results "$datafile" "concurrent_writes" "$RUN_DIR/writes_report.txt"
+
+    # Post-test: verify no duplicate entity IDs
+    log_info "Verifying no duplicate entity IDs..."
+    local count_result
+    count_result=$(edn_request_full '{:op :q :args {:query [:find (count ?e) :where [?e :loadtest/name _]]}}')
+    log_info "Total loadtest entities: $count_result"
+}
+
 # ── k6 runner ──────────────────────────────────────────────────────
 # Runs a k6 scenario .js file with appropriate environment variables
 run_k6_scenario() {
@@ -761,11 +812,14 @@ run_k6_scenarios() {
             run_k6_scenario "large_queries" "$scenarios_dir/large_queries.js" || any_fail=true
             echo ""
             run_k6_scenario "mixed_workload" "$scenarios_dir/mixed_workload.js" || any_fail=true
+            echo ""
+            run_k6_scenario "concurrent_writes" "$scenarios_dir/concurrent_writes.js" || any_fail=true
             ;;
         steady) run_k6_scenario "steady_state" "$scenarios_dir/steady_state.js" || any_fail=true ;;
         spike)  run_k6_scenario "spike" "$scenarios_dir/spike.js" || any_fail=true ;;
         large)  run_k6_scenario "large_queries" "$scenarios_dir/large_queries.js" || any_fail=true ;;
         mixed)  run_k6_scenario "mixed_workload" "$scenarios_dir/mixed_workload.js" || any_fail=true ;;
+        writes) run_k6_scenario "concurrent_writes" "$scenarios_dir/concurrent_writes.js" || any_fail=true ;;
         health)
             log_warn "No k6 health scenario; falling back to curl-based health test"
             scenario_health
@@ -881,12 +935,15 @@ main() {
                 scenario_large
                 echo ""
                 scenario_mixed
+                echo ""
+                scenario_writes
                 ;;
             health)  scenario_health ;;
             steady)  scenario_steady ;;
             spike)   scenario_spike ;;
             large)   scenario_large ;;
             mixed)   scenario_mixed ;;
+            writes)  scenario_writes ;;
         esac
     fi
 

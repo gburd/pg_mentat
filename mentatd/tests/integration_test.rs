@@ -279,3 +279,153 @@ async fn test_whitespace_only_request() {
     assert_eq!(response.status, 200);
     assert!(response.body.contains(":error"));
 }
+
+// ---------------------------------------------------------------------------
+// Transit+JSON integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_transit_json_health() {
+    let server = TestServer::start().await;
+
+    // Transit+JSON cmap encoding: ["^ ", "~:op", "~:health"]
+    let request = r#"["^ ","~:op","~:health"]"#;
+    let response = server.client.post_transit_json("/", request).await;
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.content_type.as_deref(),
+        Some("application/transit+json")
+    );
+    // Transit+JSON response should contain "~:result" (keyword encoding)
+    assert!(
+        response.body.contains("result"),
+        "Transit+JSON response should contain result: {}",
+        response.body
+    );
+}
+
+#[tokio::test]
+async fn test_transit_json_list_dbs() {
+    let server = TestServer::start().await;
+
+    let request = r#"["^ ","~:op","~:list-dbs"]"#;
+    let response = server.client.post_transit_json("/", request).await;
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.content_type.as_deref(),
+        Some("application/transit+json")
+    );
+    assert!(
+        response.body.contains("result"),
+        "List databases response should contain result"
+    );
+}
+
+#[tokio::test]
+async fn test_transit_json_invalid_operation() {
+    let server = TestServer::start().await;
+
+    let request = r#"["^ ","~:op","~:nonexistent-op"]"#;
+    let response = server.client.post_transit_json("/", request).await;
+
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("error"),
+        "Invalid operation should return error: {}",
+        response.body
+    );
+}
+
+#[tokio::test]
+async fn test_transit_json_connect() {
+    let server = TestServer::start().await;
+
+    let request =
+        r#"["^ ","~:op","~:connect","~:args",["^ ","~:db-name","postgres"]]"#;
+    let response = server.client.post_transit_json("/", request).await;
+
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("result"),
+        "Connect response should contain result: {}",
+        response.body
+    );
+}
+
+#[tokio::test]
+async fn test_transit_json_malformed() {
+    let server = TestServer::start().await;
+
+    let request = "this is not valid transit json";
+    let response = server.client.post_transit_json("/", request).await;
+
+    assert_eq!(response.status, 200);
+    assert!(
+        response.body.contains("error"),
+        "Malformed Transit+JSON should return error"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Transit+MessagePack integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_transit_msgpack_health() {
+    let server = TestServer::start().await;
+
+    // Build msgpack-encoded Transit request: ["^ ", "~:op", "~:health"]
+    let mut buf = Vec::new();
+    // fixarray(3)
+    buf.push(0x93);
+    // fixstr "^ " (2 bytes)
+    buf.push(0xa2);
+    buf.extend_from_slice(b"^ ");
+    // fixstr "~:op" (4 bytes)
+    buf.push(0xa4);
+    buf.extend_from_slice(b"~:op");
+    // fixstr "~:health" (8 bytes)
+    buf.push(0xa8);
+    buf.extend_from_slice(b"~:health");
+
+    let response = server.client.post_transit_msgpack("/", buf).await;
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.content_type.as_deref(),
+        Some("application/transit+msgpack")
+    );
+    assert!(
+        !response.body.is_empty(),
+        "MessagePack response should not be empty"
+    );
+}
+
+#[tokio::test]
+async fn test_transit_msgpack_list_dbs() {
+    let server = TestServer::start().await;
+
+    // Build msgpack-encoded Transit request: ["^ ", "~:op", "~:list-dbs"]
+    let mut buf = Vec::new();
+    buf.push(0x93);
+    buf.push(0xa2);
+    buf.extend_from_slice(b"^ ");
+    buf.push(0xa4);
+    buf.extend_from_slice(b"~:op");
+    buf.push(0xa9);
+    buf.extend_from_slice(b"~:list-dbs");
+
+    let response = server.client.post_transit_msgpack("/", buf).await;
+
+    assert_eq!(response.status, 200);
+    assert_eq!(
+        response.content_type.as_deref(),
+        Some("application/transit+msgpack")
+    );
+    assert!(
+        !response.body.is_empty(),
+        "MessagePack response should not be empty"
+    );
+}

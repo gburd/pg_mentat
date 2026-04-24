@@ -11,6 +11,19 @@ use pgrx::spi::Spi;
 use pgrx::JsonB;
 use serde_json::json;
 
+/// Type tags matching encode_value in transact.rs.
+mod type_tag {
+    pub const REF: i16 = 0;
+    pub const BOOLEAN: i16 = 1;
+    pub const LONG: i16 = 2;
+    pub const DOUBLE: i16 = 3;
+    pub const INSTANT: i16 = 4;
+    pub const STRING: i16 = 7;
+    pub const KEYWORD: i16 = 8;
+    pub const UUID: i16 = 10;
+    pub const BYTES: i16 = 11;
+}
+
 /// Look up an entity ID by its ident attribute value
 ///
 /// Example:
@@ -25,10 +38,10 @@ fn lookup_by_ident(attr_ident: &str, value: &str) -> Option<i64> {
 
     // Query datoms for the entity with this value (string type tag = 7)
     let result = Spi::get_one_with_args::<i64>(
-        "SELECT e FROM mentat.datoms WHERE a = $1 AND v = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
+        "SELECT e FROM mentat.datoms WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
         &[
             DatumWithOid::from(attr_id),
-            DatumWithOid::from(value.as_bytes().to_vec()),
+            DatumWithOid::from(value),
         ],
     );
 
@@ -95,19 +108,21 @@ fn attribute_values(attr_ident: &str) -> JsonB {
     let result: Result<Vec<serde_json::Value>, _> = Spi::connect(|client| {
         // Get distinct values for this attribute
         let query = "\
-            SELECT DISTINCT v, value_type_tag \
+            SELECT value_type_tag, \
+                   v_ref, v_bool, v_long, v_double, \
+                   v_text, v_keyword, \
+                   EXTRACT(EPOCH FROM v_instant)::BIGINT * 1000000 + \
+                   EXTRACT(MICROSECOND FROM v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                   v_uuid::TEXT, v_bytes \
             FROM mentat.datoms \
             WHERE a = $1 AND added = true \
-            ORDER BY v";
+            ORDER BY value_type_tag, v_ref, v_long, v_text, v_keyword";
 
         let mut values = Vec::new();
 
         for row in client.select(query, None, &[DatumWithOid::from(attr_id)])? {
-            if let (Ok(Some(value_bytes)), Ok(Some(type_tag))) =
-                (row.get::<Vec<u8>>(1), row.get::<i16>(2))
-            {
-                // Decode value based on type tag
-                if let Ok(decoded) = decode_typed_value(&value_bytes, type_tag) {
+            if let Ok(Some(type_tag)) = row.get::<i16>(1) {
+                if let Ok(decoded) = decode_row_value(&row, type_tag, 2) {
                     values.push(decoded);
                 }
             }
@@ -138,18 +153,27 @@ fn attribute_values(attr_ident: &str) -> JsonB {
 fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     // Get all current facts for this entity
     let facts_query = "\
-        SELECT a, v, value_type_tag \
+        SELECT a, value_type_tag, \
+               v_ref, v_bool, v_long, v_double, \
+               v_text, v_keyword, \
+               EXTRACT(EPOCH FROM v_instant)::BIGINT * 1000000 + \
+               EXTRACT(MICROSECOND FROM v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+               v_uuid::TEXT, v_bytes \
         FROM mentat.datoms \
         WHERE e = $1 AND added = true";
 
-    let retractions: Vec<(i64, Vec<u8>, i16)> = Spi::connect(|client| {
+    // Collect (attr_id, edn_value_repr) pairs
+    let retractions: Vec<(i64, String)> = Spi::connect(|client| {
         let mut retract_list = Vec::new();
 
         for row in client.select(facts_query, None, &[DatumWithOid::from(entity_id)])? {
-            if let (Ok(Some(attr_id)), Ok(Some(value_bytes)), Ok(Some(type_tag))) =
-                (row.get::<i64>(1), row.get::<Vec<u8>>(2), row.get::<i16>(3))
+            if let (Ok(Some(attr_id)), Ok(Some(type_tag))) =
+                (row.get::<i64>(1), row.get::<i16>(2))
             {
-                retract_list.push((attr_id, value_bytes, type_tag));
+                if let Ok(decoded) = decode_row_value(&row, type_tag, 3) {
+                    let edn_repr = format_edn_value(&decoded);
+                    retract_list.push((attr_id, edn_repr));
+                }
             }
         }
 
@@ -167,7 +191,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     // Build EDN retraction transaction
     let mut tx_data = String::from("[");
 
-    for (i, (attr_id, value_bytes, type_tag)) in retractions.iter().enumerate() {
+    for (i, (attr_id, value_repr)) in retractions.iter().enumerate() {
         if i > 0 {
             tx_data.push_str("\n  ");
         }
@@ -182,12 +206,6 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
                     suggestion: None,
                 }.into()
             })?;
-
-        // Decode value for EDN representation
-        let value_repr = match decode_typed_value(value_bytes, *type_tag) {
-            Ok(val) => format_edn_value(&val),
-            Err(_) => "nil".to_string(),
-        };
 
         // Format as retraction: [:db/retract entity attr value]
         tx_data.push_str(&format!(
@@ -204,84 +222,70 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     Ok(count)
 }
 
-/// Helper to decode BYTEA values based on type tag
-/// Type tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, 8=keyword, 10=uuid, 11=bytes
-fn decode_typed_value(
-    bytes: &[u8],
+/// Decode a typed value from an SPI row.
+///
+/// Columns at col_offset:
+///   +0 = v_ref, +1 = v_bool, +2 = v_long, +3 = v_double,
+///   +4 = v_text, +5 = v_keyword, +6 = v_instant_micros, +7 = v_uuid::TEXT, +8 = v_bytes
+fn decode_row_value(
+    row: &pgrx::spi::SpiHeapTupleData<'_>,
     type_tag: i16,
+    col_offset: usize,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
-        1 => {
-            // boolean
-            if bytes.is_empty() {
-                return Err(MentatError::DataCorruption {
-                    message: "Invalid boolean value: empty bytes. The datoms table may contain corrupted data.".to_string(),
-                }.into());
-            }
-            Ok(json!(bytes[0] != 0))
+        type_tag::REF => {
+            let ref_id: i64 = row.get(col_offset)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_ref for ref type".to_string(),
+            })?;
+            Ok(json!(ref_id))
         }
-        0 | 2 => {
-            // ref or long (both i64 little-endian)
-            if bytes.len() != 8 {
-                return Err(MentatError::DataCorruption {
-                    message: format!("Invalid i64 value: expected 8 bytes, got {}", bytes.len()),
-                }.into());
-            }
-            let val = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::BOOLEAN => {
+            let b: bool = row.get(col_offset + 1)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bool for boolean type".to_string(),
+            })?;
+            Ok(json!(b))
         }
-        3 => {
-            // double (f64 little-endian)
-            if bytes.len() != 8 {
-                return Err(MentatError::DataCorruption {
-                    message: format!("Invalid double value: expected 8 bytes, got {}", bytes.len()),
-                }.into());
-            }
-            let val = f64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::LONG => {
+            let n: i64 = row.get(col_offset + 2)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_long for long type".to_string(),
+            })?;
+            Ok(json!(n))
         }
-        4 => {
-            // instant (i64 microseconds since epoch, little-endian)
-            if bytes.len() != 8 {
-                return Err(MentatError::DataCorruption {
-                    message: format!("Invalid instant value: expected 8 bytes, got {}", bytes.len()),
-                }.into());
-            }
-            let micros = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(micros))
+        type_tag::DOUBLE => {
+            let f: f64 = row.get(col_offset + 3)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_double for double type".to_string(),
+            })?;
+            Ok(json!(f))
         }
-        7 => {
-            // string (UTF-8)
-            let s = String::from_utf8(bytes.to_vec())?;
+        type_tag::STRING => {
+            let s: String = row.get(col_offset + 4)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_text for string type".to_string(),
+            })?;
             Ok(json!(s))
         }
-        8 => {
-            // keyword (UTF-8, prefixed with :)
-            let s = String::from_utf8(bytes.to_vec())?;
-            Ok(json!(if s.starts_with(':') {
-                s
-            } else {
-                format!(":{}", s)
-            }))
+        type_tag::KEYWORD => {
+            let s: String = row.get(col_offset + 5)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_keyword for keyword type".to_string(),
+            })?;
+            Ok(json!(format!(":{s}")))
         }
-        10 => {
-            // uuid (16 bytes)
-            if bytes.len() != 16 {
-                return Err(MentatError::DataCorruption {
-                    message: format!("Invalid UUID value: expected 16 bytes, got {}", bytes.len()),
-                }.into());
-            }
-            Ok(json!(hex::encode(bytes)))
+        type_tag::INSTANT => {
+            let micros: i64 = row.get(col_offset + 6)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_instant_micros for instant type".to_string(),
+            })?;
+            Ok(json!(micros))
         }
-        11 => {
-            // bytes (raw)
-            Ok(json!(hex::encode(bytes)))
+        type_tag::UUID => {
+            let s: String = row.get(col_offset + 7)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_uuid for uuid type".to_string(),
+            })?;
+            Ok(json!(s))
+        }
+        type_tag::BYTES => {
+            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or_else(|| MentatError::DataCorruption {
+                message: "Missing v_bytes for bytes type".to_string(),
+            })?;
+            Ok(json!(hex::encode(b)))
         }
         _ => Err(MentatError::UnsupportedType { type_tag }.into()),
     }

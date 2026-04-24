@@ -124,4 +124,64 @@ impl TestClient {
             content_type,
         }
     }
+
+    pub async fn post_transit_json(&self, path: &str, body: &str) -> TestResponse {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/transit+json")
+            .header("Accept", "application/transit+json")
+            .body(body.to_string())
+            .send()
+            .await
+            .expect("Failed to send Transit+JSON POST request");
+
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = response.text().await.expect("Failed to read response body");
+
+        TestResponse {
+            status,
+            body,
+            content_type,
+        }
+    }
+
+    pub async fn post_transit_msgpack(&self, path: &str, body: Vec<u8>) -> TestRawResponse {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .client
+            .post(&url)
+            .header("Content-Type", "application/transit+msgpack")
+            .header("Accept", "application/transit+msgpack")
+            .body(body)
+            .send()
+            .await
+            .expect("Failed to send Transit+MessagePack POST request");
+
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .map(String::from);
+        let body = response.bytes().await.expect("Failed to read response body");
+
+        TestRawResponse {
+            status,
+            body: body.to_vec(),
+            content_type,
+        }
+    }
+}
+
+pub struct TestRawResponse {
+    pub status: u16,
+    pub body: Vec<u8>,
+    pub content_type: Option<String>,
 }

@@ -1,28 +1,21 @@
+use crate::error::MentatError;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::SpiClient;
 use pgrx::JsonB;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Type tags matching encode_value in transact.rs.
 mod type_tag {
     pub const REF: i16 = 0;
-    #[allow(dead_code)]
     pub const BOOLEAN: i16 = 1;
-    #[allow(dead_code)]
     pub const LONG: i16 = 2;
-    #[allow(dead_code)]
     pub const DOUBLE: i16 = 3;
-    #[allow(dead_code)]
     pub const INSTANT: i16 = 4;
-    #[allow(dead_code)]
     pub const STRING: i16 = 7;
-    #[allow(dead_code)]
     pub const KEYWORD: i16 = 8;
-    #[allow(dead_code)]
     pub const UUID: i16 = 10;
-    #[allow(dead_code)]
     pub const BYTES: i16 = 11;
 }
 
@@ -108,17 +101,21 @@ type PullError = Box<dyn std::error::Error + Send + Sync>;
 #[pg_extern]
 pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     let parsed = edn::parse::value(pattern)
-        .map_err(|e| -> PullError { format!(
-            ":db.error/invalid-pull-pattern Failed to parse pull pattern as EDN: {e}. \
-             Expected a vector like [:person/name :person/age] or [*]."
-        ).into() })?;
+        .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
+            message: format!(
+                "Failed to parse pull pattern as EDN: {e}. \
+                 Expected a vector like [:person/name :person/age] or [*]."
+            ),
+        }.into() })?;
     let pattern_value = parsed.without_spans();
 
     let specs = match &pattern_value {
         edn::Value::Vector(items) => parse_pull_pattern(items)?,
-        _ => return Err(":db.error/invalid-pull-pattern Pull pattern must be a vector. \
-                        Expected: [:person/name :person/age] or [*] or [{:person/friends [:person/name]}]. \
-                        Got a non-vector EDN value.".into()),
+        _ => return Err(MentatError::InvalidPullPattern {
+            message: "Pull pattern must be a vector. \
+                      Expected: [:person/name :person/age] or [*] or [{:person/friends [:person/name]}]. \
+                      Got a non-vector EDN value.".to_string(),
+        }.into()),
     };
 
     let mut result_map = serde_json::Map::new();
@@ -132,6 +129,187 @@ pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     })?;
 
     Ok(JsonB(serde_json::Value::Object(result_map)))
+}
+
+/// Pull entity data for multiple entities using a pull pattern.
+///
+/// This is the batched counterpart to `mentat_pull`. Instead of pulling one entity
+/// at a time (N+1 queries), this function batches attribute lookups for all entities,
+/// resulting in significantly fewer database round-trips.
+///
+/// Returns a JSONB array with one result per entity ID.
+///
+/// Example:
+/// ```sql
+/// SELECT mentat_pull_many('[:person/name :person/age]', ARRAY[100, 101, 102]);
+/// ```
+#[pg_extern]
+pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
+    let parsed = edn::parse::value(pattern)
+        .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
+            message: format!(
+                "Failed to parse pull pattern as EDN: {e}. \
+                 Expected a vector like [:person/name :person/age] or [*]."
+            ),
+        }.into() })?;
+    let pattern_value = parsed.without_spans();
+
+    let specs = match &pattern_value {
+        edn::Value::Vector(items) => parse_pull_pattern(items)?,
+        _ => return Err(MentatError::InvalidPullPattern {
+            message: "Pull pattern must be a vector.".to_string(),
+        }.into()),
+    };
+
+    let has_wildcard = specs.iter().any(|s| matches!(s, PullAttrSpec::Wildcard));
+    let has_map_or_recursive = specs.iter().any(|s| matches!(
+        s,
+        PullAttrSpec::MapSpec { .. } | PullAttrSpec::RecursiveSpec { .. }
+    ));
+
+    // For simple patterns (no wildcard, no map specs, no recursion), use a
+    // batched query that fetches all entities' attributes in one round-trip.
+    if !has_wildcard && !has_map_or_recursive {
+        return pull_many_batched(&specs, &entity_ids);
+    }
+
+    // For complex patterns, fall back to per-entity pull (still sharing one SPI connection).
+    let mut results = Vec::with_capacity(entity_ids.len());
+
+    Spi::connect(|client| {
+        for &eid in &entity_ids {
+            let mut result_map = serde_json::Map::new();
+            result_map.insert(":db/id".to_string(), json!(eid));
+            let mut visited = HashSet::new();
+            visited.insert(eid);
+            execute_pull(&client, eid, &specs, &mut result_map, &mut visited, 0)?;
+            results.push(serde_json::Value::Object(result_map));
+        }
+        Ok::<(), PullError>(())
+    })?;
+
+    Ok(JsonB(serde_json::Value::Array(results)))
+}
+
+/// Batched pull for simple attribute-only patterns.
+///
+/// Fetches all requested attributes for all entities in a single SQL query
+/// using `WHERE d.e IN (...)`, then groups the results client-side.
+/// This eliminates the N+1 query problem when pulling many entities.
+fn pull_many_batched(
+    specs: &[PullAttrSpec],
+    entity_ids: &[i64],
+) -> Result<JsonB, PullError> {
+    if entity_ids.is_empty() {
+        return Ok(JsonB(json!([])));
+    }
+
+    // Collect the idents we need.
+    let mut ident_list: Vec<String> = Vec::new();
+    let mut spec_map: HashMap<String, &PullAttrSpec> = HashMap::new();
+    for spec in specs {
+        if let PullAttrSpec::Attribute { forward_ident, .. } = spec {
+            ident_list.push(forward_ident.clone());
+            spec_map.insert(forward_ident.clone(), spec);
+        }
+    }
+
+    // Build per-entity result maps.
+    let mut results_by_eid: HashMap<i64, serde_json::Map<String, serde_json::Value>> =
+        HashMap::with_capacity(entity_ids.len());
+    for &eid in entity_ids {
+        let mut m = serde_json::Map::new();
+        m.insert(":db/id".to_string(), json!(eid));
+        results_by_eid.insert(eid, m);
+    }
+
+    // Build the IN clause from entity IDs (integers, safe from injection).
+    let eid_csv: String = entity_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Build the IN clause for idents (escape single quotes for safety).
+    let ident_csv: String = ident_list
+        .iter()
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    Spi::connect(|client| {
+        let query = format!(
+            "SELECT d.e, s.ident, s.cardinality::TEXT, d.value_type_tag, \
+                    d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                    d.v_text, d.v_keyword, \
+                    EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                    EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                    d.v_uuid::TEXT, d.v_bytes \
+             FROM mentat.datoms d \
+             JOIN mentat.schema s ON d.a = s.entid \
+             WHERE d.e IN ({eid_csv}) AND s.ident IN ({ident_csv}) AND d.added = true \
+             ORDER BY d.e, s.ident"
+        );
+
+        for row in client.select(&query, None, &[])? {
+            let eid: i64 = row.get(1)?.ok_or("Missing entity id")?;
+            let ident: String = row.get(2)?.ok_or("Missing ident")?;
+            let cardinality: String = row.get(3)?.ok_or("Missing cardinality")?;
+            let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
+
+            let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
+
+            // For ref attributes in simple pulls, return {:db/id N}.
+            let decoded = if v_type_tag == type_tag::REF {
+                let rid = ref_id.ok_or("Missing ref ID")?;
+                json!({":db/id": rid})
+            } else {
+                decoded_val
+            };
+
+            // Determine the output key (handle :as renames).
+            let output_key = if let Some(spec) = spec_map.get(&ident) {
+                if let PullAttrSpec::Attribute { rename, forward_ident, .. } = spec {
+                    rename.as_deref().unwrap_or(forward_ident).to_string()
+                } else {
+                    ident.clone()
+                }
+            } else {
+                ident.clone()
+            };
+
+            if let Some(result_map) = results_by_eid.get_mut(&eid) {
+                insert_value(result_map, &output_key, decoded, &cardinality);
+            }
+        }
+
+        // Apply defaults for missing attributes.
+        for spec in specs {
+            if let PullAttrSpec::Attribute { forward_ident, rename, default: Some(def), .. } = spec {
+                let output_key = rename.as_deref().unwrap_or(forward_ident);
+                for result_map in results_by_eid.values_mut() {
+                    if !result_map.contains_key(output_key) {
+                        result_map.insert(output_key.to_string(), def.clone());
+                    }
+                }
+            }
+        }
+
+        Ok::<(), PullError>(())
+    })?;
+
+    // Preserve input order.
+    let results: Vec<serde_json::Value> = entity_ids
+        .iter()
+        .map(|eid| {
+            results_by_eid
+                .remove(eid)
+                .map(serde_json::Value::Object)
+                .unwrap_or_else(|| json!({":db/id": eid}))
+        })
+        .collect();
+
+    Ok(JsonB(serde_json::Value::Array(results)))
 }
 
 // ---------------------------------------------------------------------------
@@ -549,7 +727,11 @@ fn pull_wildcard(
     depth: usize,
 ) -> Result<(), PullError> {
     let query = "SELECT s.ident, s.cardinality::TEXT, s.value_type::TEXT, s.component, \
-                        d.v, d.value_type_tag \
+                        d.value_type_tag, d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                        d.v_text, d.v_keyword, \
+                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                        d.v_uuid::TEXT, d.v_bytes \
                  FROM mentat.datoms d \
                  JOIN mentat.schema s ON d.a = s.entid \
                  WHERE d.e = $1 AND d.added = true \
@@ -559,21 +741,25 @@ fn pull_wildcard(
     struct DatomRow {
         ident: String,
         cardinality: String,
-        value_type: String,
+        _value_type: String,
         component: bool,
-        v_bytes: Vec<u8>,
         v_type_tag: i16,
+        decoded: serde_json::Value,
+        ref_id: Option<i64>,
     }
 
     let mut rows = Vec::new();
     for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
+        let v_type_tag: i16 = row.get(5)?.ok_or("Missing type tag")?;
+        let (decoded, ref_id) = decode_row_typed_value(&row, v_type_tag, 6)?;
         rows.push(DatomRow {
             ident: row.get(1)?.ok_or("Missing ident")?,
             cardinality: row.get(2)?.ok_or("Missing cardinality")?,
-            value_type: row.get(3)?.ok_or("Missing value_type")?,
+            _value_type: row.get(3)?.ok_or("Missing value_type")?,
             component: row.get(4)?.unwrap_or(false),
-            v_bytes: row.get(5)?.ok_or("Missing value")?,
-            v_type_tag: row.get(6)?.ok_or("Missing type tag")?,
+            v_type_tag,
+            decoded,
+            ref_id,
         });
     }
 
@@ -584,9 +770,8 @@ fn pull_wildcard(
         }
 
         if datom.v_type_tag == type_tag::REF {
-            let ref_id = decode_ref_id(&datom.v_bytes)?;
+            let ref_id = datom.ref_id.ok_or("Missing ref ID")?;
             if datom.component {
-                // Component ref: recursively pull all attributes of the referenced entity.
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(ref_id));
                 if depth < MAX_RECURSION_DEPTH && !visited.contains(&ref_id) {
@@ -603,13 +788,11 @@ fn pull_wildcard(
                 let value = serde_json::Value::Object(sub_map);
                 insert_value(result_map, &datom.ident, value, &datom.cardinality);
             } else {
-                // Non-component ref: return just {:db/id ref_id}.
                 let ref_obj = json!({":db/id": ref_id});
                 insert_value(result_map, &datom.ident, ref_obj, &datom.cardinality);
             }
         } else {
-            let decoded = decode_typed_value(&datom.v_bytes, datom.v_type_tag)?;
-            insert_value(result_map, &datom.ident, decoded, &datom.cardinality);
+            insert_value(result_map, &datom.ident, datom.decoded.clone(), &datom.cardinality);
         }
     }
 
@@ -617,6 +800,10 @@ fn pull_wildcard(
 }
 
 /// Pull a single forward attribute.
+///
+/// When the attribute is a ref type and marked as `:db/isComponent` in the schema,
+/// the referenced entity is recursively pulled with all its attributes (Datomic
+/// component semantics) rather than returning just `{:db/id N}`.
 fn pull_forward_attribute(
     client: &SpiClient<'_>,
     entity_id: i64,
@@ -626,7 +813,12 @@ fn pull_forward_attribute(
     limit: Option<&LimitSpec>,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), PullError> {
-    let query = "SELECT s.cardinality::TEXT, d.v, d.value_type_tag \
+    let query = "SELECT s.cardinality::TEXT, s.component, d.value_type_tag, \
+                        d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                        d.v_text, d.v_keyword, \
+                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                        d.v_uuid::TEXT, d.v_bytes \
                  FROM mentat.datoms d \
                  JOIN mentat.schema s ON d.a = s.entid \
                  WHERE d.e = $1 AND s.ident = $2 AND d.added = true";
@@ -647,15 +839,33 @@ fn pull_forward_attribute(
         }
         found = true;
         let cardinality: String = row.get(1)?.ok_or("Missing cardinality")?;
-        let v_bytes: Vec<u8> = row.get(2)?.ok_or("Missing value")?;
+        let is_component: bool = row.get(2)?.unwrap_or(false);
         let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
+        let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 4)?;
 
-        // Datomic returns {:db/id N} for ref attributes in simple pulls.
         let decoded = if v_type_tag == type_tag::REF {
-            let ref_id = decode_ref_id(&v_bytes)?;
-            json!({":db/id": ref_id})
+            let rid = ref_id.ok_or("Missing ref ID")?;
+            if is_component {
+                // Component refs are recursively pulled with all attributes.
+                let mut sub_map = serde_json::Map::new();
+                sub_map.insert(":db/id".to_string(), json!(rid));
+                let mut visited = HashSet::new();
+                visited.insert(entity_id);
+                visited.insert(rid);
+                pull_wildcard(
+                    client,
+                    rid,
+                    &mut sub_map,
+                    &HashSet::new(),
+                    &mut visited,
+                    1,
+                )?;
+                serde_json::Value::Object(sub_map)
+            } else {
+                json!({":db/id": rid})
+            }
         } else {
-            decode_typed_value(&v_bytes, v_type_tag)?
+            decoded_val
         };
         insert_value(result_map, output_key, decoded, &cardinality);
         count += 1;
@@ -938,7 +1148,7 @@ fn query_forward_refs(
     ident: &str,
     limit: Option<&LimitSpec>,
 ) -> Result<Vec<i64>, PullError> {
-    let query = "SELECT d.v \
+    let query = "SELECT d.v_ref \
                  FROM mentat.datoms d \
                  JOIN mentat.schema s ON d.a = s.entid \
                  WHERE d.e = $1 AND s.ident = $2 AND d.value_type_tag = $3 AND d.added = true";
@@ -958,8 +1168,8 @@ fn query_forward_refs(
         if ref_ids.len() >= max_rows {
             break;
         }
-        let v_bytes: Vec<u8> = row.get(1)?.ok_or("Missing value")?;
-        ref_ids.push(decode_ref_id(&v_bytes)?);
+        let ref_id: i64 = row.get(1)?.ok_or("Missing v_ref")?;
+        ref_ids.push(ref_id);
     }
 
     Ok(ref_ids)
@@ -972,12 +1182,10 @@ fn query_reverse_refs(
     forward_ident: &str,
     limit: Option<&LimitSpec>,
 ) -> Result<Vec<i64>, PullError> {
-    let entity_bytes = entity_id.to_le_bytes().to_vec();
-
     let query = "SELECT d.e \
                  FROM mentat.datoms d \
                  JOIN mentat.schema s ON d.a = s.entid \
-                 WHERE s.ident = $1 AND d.v = $2 AND d.value_type_tag = $3 AND d.added = true";
+                 WHERE s.ident = $1 AND d.v_ref = $2 AND d.value_type_tag = $3 AND d.added = true";
 
     let max_rows = resolve_limit(limit);
     let mut ref_ids = Vec::new();
@@ -987,7 +1195,7 @@ fn query_reverse_refs(
         None,
         &[
             DatumWithOid::from(forward_ident),
-            DatumWithOid::from(entity_bytes),
+            DatumWithOid::from(entity_id),
             DatumWithOid::from(type_tag::REF),
         ],
     )? {
@@ -1021,7 +1229,12 @@ fn pull_all_attributes_simple(
     entity_id: i64,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), PullError> {
-    let query = "SELECT s.ident, s.cardinality::TEXT, d.v, d.value_type_tag \
+    let query = "SELECT s.ident, s.cardinality::TEXT, d.value_type_tag, \
+                        d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                        d.v_text, d.v_keyword, \
+                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                        d.v_uuid::TEXT, d.v_bytes \
                  FROM mentat.datoms d \
                  JOIN mentat.schema s ON d.a = s.entid \
                  WHERE d.e = $1 AND d.added = true \
@@ -1030,15 +1243,14 @@ fn pull_all_attributes_simple(
     for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
         let ident: String = row.get(1)?.ok_or("Missing ident")?;
         let cardinality: String = row.get(2)?.ok_or("Missing cardinality")?;
-        let v_bytes: Vec<u8> = row.get(3)?.ok_or("Missing value")?;
-        let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
+        let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
 
         // Skip ref attributes -- the recursive spec handles those.
         if v_type_tag == type_tag::REF {
             continue;
         }
 
-        let decoded = decode_typed_value(&v_bytes, v_type_tag)?;
+        let (decoded, _) = decode_row_typed_value(&row, v_type_tag, 4)?;
         insert_value(result_map, &ident, decoded, &cardinality);
     }
 
@@ -1057,16 +1269,6 @@ fn resolve_limit(limit: Option<&LimitSpec>) -> usize {
 // ---------------------------------------------------------------------------
 // Value decoding
 // ---------------------------------------------------------------------------
-
-/// Decode a ref value (type_tag 0) to an entity ID.
-fn decode_ref_id(bytes: &[u8]) -> Result<i64, PullError> {
-    if bytes.len() != 8 {
-        return Err(format!(":db.error/data-corruption Invalid ref value: expected 8 bytes, got {}", bytes.len()).into());
-    }
-    Ok(i64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ]))
-}
 
 /// Insert a decoded value into the result map, handling cardinality.
 /// For cardinality "many", values are accumulated into a JSON array.
@@ -1093,104 +1295,63 @@ fn insert_value(
     }
 }
 
-/// Decode a BYTEA value based on value_type_tag.
+/// Decode a typed value from an SPI row based on value_type_tag.
 ///
-/// Type tags (matching encode_value in transact.rs):
-///   0 = ref (i64 entity ID, little-endian)
-///   1 = boolean
-///   2 = long (i64 little-endian)
-///   3 = double (f64 little-endian)
-///   4 = instant (i64 microseconds since epoch, little-endian)
-///   7 = string (UTF-8 bytes)
-///   8 = keyword (UTF-8 bytes, stored without leading colon)
-///  10 = uuid (16 bytes)
-///  11 = bytes (raw)
-fn decode_typed_value(bytes: &[u8], type_tag: i16) -> Result<serde_json::Value, PullError> {
+/// The row is expected to have the typed value columns starting at `col_offset`:
+///   col_offset + 0 = v_ref (BIGINT)
+///   col_offset + 1 = v_bool (BOOLEAN)
+///   col_offset + 2 = v_long (BIGINT)
+///   col_offset + 3 = v_double (DOUBLE PRECISION)
+///   col_offset + 4 = v_text (TEXT)
+///   col_offset + 5 = v_keyword (TEXT)
+///   col_offset + 6 = v_instant_micros (BIGINT, pre-extracted in SQL)
+///   col_offset + 7 = v_uuid (TEXT, cast in SQL)
+///   col_offset + 8 = v_bytes (BYTEA)
+///
+/// Returns (decoded_json_value, optional_ref_id).
+fn decode_row_typed_value(
+    row: &pgrx::spi::SpiHeapTupleData<'_>,
+    type_tag: i16,
+    col_offset: usize,
+) -> Result<(serde_json::Value, Option<i64>), PullError> {
     match type_tag {
-        1 => {
-            // boolean
-            if bytes.is_empty() {
-                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
-                            The datoms table may contain corrupted data.".into());
-            }
-            Ok(json!(bytes[0] != 0))
+        type_tag::REF => {
+            let ref_id: i64 = row.get(col_offset)?.ok_or("Missing v_ref")?;
+            Ok((json!(ref_id), Some(ref_id)))
         }
-        0 | 2 => {
-            // ref or long (both i64 little-endian)
-            if bytes.len() != 8 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
-                );
-            }
-            let val = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::BOOLEAN => {
+            let b: bool = row.get(col_offset + 1)?.ok_or("Missing v_bool")?;
+            Ok((json!(b), None))
         }
-        3 => {
-            // double (f64 little-endian)
-            if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid double value: expected 8 bytes, got {}",
-                    bytes.len()
-                )
-                .into());
-            }
-            let val = f64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(val))
+        type_tag::LONG => {
+            let n: i64 = row.get(col_offset + 2)?.ok_or("Missing v_long")?;
+            Ok((json!(n), None))
         }
-        4 => {
-            // instant (i64 microseconds since epoch, little-endian)
-            if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid instant value: expected 8 bytes, got {}",
-                    bytes.len()
-                )
-                .into());
-            }
-            let micros = i64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]);
-            Ok(json!(micros))
+        type_tag::DOUBLE => {
+            let f: f64 = row.get(col_offset + 3)?.ok_or("Missing v_double")?;
+            Ok((json!(f), None))
         }
-        7 => {
-            // string (UTF-8)
-            let s = String::from_utf8(bytes.to_vec())?;
-            Ok(json!(s))
+        type_tag::STRING => {
+            let s: String = row.get(col_offset + 4)?.ok_or("Missing v_text")?;
+            Ok((json!(s), None))
         }
-        8 => {
-            // keyword - stored without leading colon
-            let s = String::from_utf8(bytes.to_vec())?;
-            Ok(json!(format!(":{s}")))
+        type_tag::KEYWORD => {
+            let s: String = row.get(col_offset + 5)?.ok_or("Missing v_keyword")?;
+            Ok((json!(format!(":{s}")), None))
         }
-        10 => {
-            // uuid (16 bytes)
-            if bytes.len() != 16 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid UUID value: expected 16 bytes, got {}", bytes.len()).into(),
-                );
-            }
-            let uuid_str = format!(
-                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                bytes[0], bytes[1], bytes[2], bytes[3],
-                bytes[4], bytes[5],
-                bytes[6], bytes[7],
-                bytes[8], bytes[9],
-                bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-            );
-            Ok(json!(uuid_str))
+        type_tag::INSTANT => {
+            let micros: i64 = row.get(col_offset + 6)?.ok_or("Missing v_instant_micros")?;
+            Ok((json!(micros), None))
         }
-        11 => {
-            // raw bytes - return as hex string
-            Ok(json!(hex::encode(bytes)))
+        type_tag::UUID => {
+            let s: String = row.get(col_offset + 7)?.ok_or("Missing v_uuid")?;
+            Ok((json!(s), None))
         }
-        _ => Err(format!(
-            ":db.error/unsupported-type Unsupported value type tag: {type_tag}. \
-             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
-             8=keyword, 10=uuid, 11=bytes. This may indicate data corruption."
-        ).into()),
+        type_tag::BYTES => {
+            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or("Missing v_bytes")?;
+            Ok((json!(hex::encode(b)), None))
+        }
+        _ => Err(MentatError::UnsupportedType { type_tag }.into()),
     }
 }
 
@@ -1324,14 +1485,6 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_decode_ref_id() -> Result<(), PullError> {
-        let id: i64 = 42;
-        let bytes = id.to_le_bytes().to_vec();
-        assert_eq!(super::decode_ref_id(&bytes)?, 42);
-        Ok(())
-    }
-
-    #[pg_test]
     fn test_edn_to_json() {
         assert_eq!(edn_to_json(&edn::Value::Integer(42)), json!(42));
         assert_eq!(edn_to_json(&edn::Value::Boolean(true)), json!(true));
@@ -1363,9 +1516,9 @@ mod tests {
 
     /// Test that cycle detection prevents infinite loops on circular references.
     ///
-    /// Creates a graph: A→B→C→A and verifies that recursive pull:
+    /// Creates a graph: A->B->C->A and verifies that recursive pull:
     /// 1. Completes without infinite loop
-    /// 2. Marks cycles with _cycle: true
+    /// 2. Returns {:db/id N} stubs for cycles (Datomic-compatible)
     /// 3. Works at various recursion depths
     #[pg_test]
     fn test_recursive_pull_cycle_detection() -> spi::Result<()> {
@@ -1385,14 +1538,21 @@ mod tests {
              CREATE TABLE IF NOT EXISTS mentat.datoms (
                  e BIGINT NOT NULL,
                  a BIGINT NOT NULL,
-                 v BYTEA NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
                  tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL,
-                 value_type_tag SMALLINT NOT NULL
+                 added BOOLEAN NOT NULL
              );
              CREATE INDEX IF NOT EXISTS idx_datoms_e ON mentat.datoms(e);
-             CREATE INDEX IF NOT EXISTS idx_datoms_a ON mentat.datoms(a);
-             CREATE INDEX IF NOT EXISTS idx_datoms_v ON mentat.datoms(v);",
+             CREATE INDEX IF NOT EXISTS idx_datoms_a ON mentat.datoms(a);",
         )?;
 
         // Insert schema for :person/friend attribute
@@ -1405,54 +1565,35 @@ mod tests {
              ON CONFLICT (ident) DO NOTHING;",
         )?;
 
-        // Create circular graph: A(1000)→B(1001)→C(1002)→A(1000)
-        // Entity 1000 (Alice) → friend → 1001
-        // Entity 1001 (Bob) → friend → 1002
-        // Entity 1002 (Carol) → friend → 1000
-        let alice_name_hex = hex::encode("Alice".as_bytes());
-        let bob_name_hex = hex::encode("Bob".as_bytes());
-        let carol_name_hex = hex::encode("Carol".as_bytes());
-        let ref_1000_hex = hex::encode(1000i64.to_le_bytes());
-        let ref_1001_hex = hex::encode(1001i64.to_le_bytes());
-        let ref_1002_hex = hex::encode(1002i64.to_le_bytes());
-
-        Spi::run(&format!(
+        // Create circular graph: A(1000)->B(1001)->C(1002)->A(1000)
+        Spi::run(
             "DELETE FROM mentat.datoms WHERE e IN (1000, 1001, 1002);
-             INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) VALUES
-             (1000, 101, decode('{alice_name_hex}', 'hex'), 5000, true, 7),
-             (1001, 101, decode('{bob_name_hex}', 'hex'), 5000, true, 7),
-             (1002, 101, decode('{carol_name_hex}', 'hex'), 5000, true, 7),
-             (1000, 100, decode('{ref_1001_hex}', 'hex'), 5000, true, 0),
-             (1001, 100, decode('{ref_1002_hex}', 'hex'), 5000, true, 0),
-             (1002, 100, decode('{ref_1000_hex}', 'hex'), 5000, true, 0);",
-        ))?;
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (1000, 101, 7, 'Alice', 5000, true),
+             (1001, 101, 7, 'Bob', 5000, true),
+             (1002, 101, 7, 'Carol', 5000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (1000, 100, 0, 1001, 5000, true),
+             (1001, 100, 0, 1002, 5000, true),
+             (1002, 100, 0, 1000, 5000, true);",
+        )?;
 
         // Test 1: Pull with depth 10 - should not infinite loop
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend 10}]', 1000)")?;
 
-        // Verify we got a result (didn't infinite loop)
         assert!(
             result.is_some(),
             "Pull should complete without infinite loop"
         );
 
         if let Some(JsonB(json_val)) = result {
-            // Verify the result structure
             let obj = json_val.as_object().expect("result should be an object");
-
-            // Should have :db/id
             assert!(obj.contains_key(":db/id"), "result should contain :db/id");
-
-            // Should have :person/friend
             assert!(
                 obj.contains_key(":person/friend"),
                 "result should contain :person/friend"
             );
-
-            // Verify that the recursive chain terminates with a {:db/id N} stub
-            // (Datomic returns just {:db/id N} for cycles, no extra markers)
             let json_str = serde_json::to_string(&json_val).unwrap();
-            // The chain A->B->C->A should show A's :db/id as a leaf stub
             assert!(
                 json_str.contains(":db/id"),
                 "result should contain :db/id references: {}",
@@ -1470,13 +1611,11 @@ mod tests {
 
         if let Some(JsonB(json_val)) = result {
             let json_str = serde_json::to_string(&json_val).unwrap();
-            // Verify chain terminates (has nested :db/id stubs)
             assert!(
                 json_str.contains(":db/id"),
                 "unbounded pull should contain :db/id stubs for cycles: {}",
                 json_str
             );
-            // Verify no _cycle markers (Datomic-compatible behavior)
             assert!(
                 !json_str.contains("_cycle"),
                 "should not contain non-standard _cycle markers: {}",
@@ -1486,21 +1625,17 @@ mod tests {
 
         // Test 3: Pull with depth 1 - should get one level without cycles
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend 1}]', 1000)")?;
-
         assert!(result.is_some(), "Depth-1 pull should complete");
 
         // Test 4: Verify that non-cyclic paths in the same graph work correctly
-        // Create a diamond pattern: D→A, D→B, A→C, B→C
-        Spi::run(&format!(
-            "INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) VALUES
-             (1003, 100, decode('{ref_1000_hex}', 'hex'), 5001, true, 0),
-             (1003, 100, decode('{ref_1001_hex}', 'hex'), 5001, true, 0)
+        Spi::run(
+            "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (1003, 100, 0, 1000, 5001, true),
+             (1003, 100, 0, 1001, 5001, true)
              ON CONFLICT DO NOTHING;",
-        ))?;
+        )?;
 
-        // Pull from D - should see both A and B without cycle markers
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend 5}]', 1003)")?;
-
         assert!(result.is_some(), "Diamond pattern pull should complete");
 
         Ok(())
@@ -1525,10 +1660,18 @@ mod tests {
              CREATE TABLE IF NOT EXISTS mentat.datoms (
                  e BIGINT NOT NULL,
                  a BIGINT NOT NULL,
-                 v BYTEA NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
                  tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL,
-                 value_type_tag SMALLINT NOT NULL
+                 added BOOLEAN NOT NULL
              );",
         )?;
 
@@ -1543,19 +1686,15 @@ mod tests {
         // A has friends [B, C]
         // B has friends [C, A] (cycle to A)
         // C has friends [A]     (cycle to A)
-        let ref_2000_hex = hex::encode(2000i64.to_le_bytes());
-        let ref_2001_hex = hex::encode(2001i64.to_le_bytes());
-        let ref_2002_hex = hex::encode(2002i64.to_le_bytes());
-
-        Spi::run(&format!(
+        Spi::run(
             "DELETE FROM mentat.datoms WHERE e IN (2000, 2001, 2002);
-             INSERT INTO mentat.datoms (e, a, v, tx, added, value_type_tag) VALUES
-             (2000, 200, decode('{ref_2001_hex}', 'hex'), 6000, true, 0),  -- A → B
-             (2000, 200, decode('{ref_2002_hex}', 'hex'), 6000, true, 0),  -- A → C
-             (2001, 200, decode('{ref_2002_hex}', 'hex'), 6000, true, 0),  -- B → C
-             (2001, 200, decode('{ref_2000_hex}', 'hex'), 6000, true, 0),  -- B → A (cycle)
-             (2002, 200, decode('{ref_2000_hex}', 'hex'), 6000, true, 0);  -- C → A (cycle)",
-        ))?;
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (2000, 200, 0, 2001, 6000, true),
+             (2000, 200, 0, 2002, 6000, true),
+             (2001, 200, 0, 2002, 6000, true),
+             (2001, 200, 0, 2000, 6000, true),
+             (2002, 200, 0, 2000, 6000, true);",
+        )?;
 
         // Pull from A with depth 5
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friends 5}]', 2000)")?;
@@ -1567,13 +1706,11 @@ mod tests {
 
         if let Some(JsonB(json_val)) = result {
             let json_str = serde_json::to_string(&json_val).unwrap();
-            // Verify chain terminates with {:db/id N} stubs (Datomic-compatible)
             assert!(
                 json_str.contains(":db/id"),
                 "many-cardinality result should contain :db/id stubs: {}",
                 json_str
             );
-            // Verify no _cycle markers (Datomic-compatible behavior)
             assert!(
                 !json_str.contains("_cycle"),
                 "should not contain non-standard _cycle markers: {}",
@@ -1581,6 +1718,191 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Test that component attributes are automatically pulled recursively.
+    ///
+    /// Creates an Order entity with component LineItem entities. When pulling
+    /// :order/items (marked as component), the referenced line items should be
+    /// fully expanded with all their attributes, not returned as bare {:db/id N}.
+    #[pg_test]
+    fn test_component_auto_pull() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        // Schema: :order/items is a component ref (many), :item/name is a string
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (300, ':order/items', 'ref', 'many', true)
+             ON CONFLICT (ident) DO NOTHING;
+             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (301, ':item/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;
+             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (302, ':item/qty', 'long', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;
+             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (303, ':order/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Order 3000 has two line items: 3001 and 3002
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (3000, 3001, 3002);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (3000, 303, 7, 'Order-1', 7000, true),
+             (3001, 301, 7, 'Widget', 7000, true),
+             (3002, 301, 7, 'Gadget', 7000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
+             (3001, 302, 2, 5, 7000, true),
+             (3002, 302, 2, 3, 7000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (3000, 300, 0, 3001, 7000, true),
+             (3000, 300, 0, 3002, 7000, true);",
+        )?;
+
+        // Pull :order/items -- should recursively expand component entities
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[:order/name :order/items]', 3000)",
+        )?;
+
+        assert!(result.is_some(), "Component pull should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let obj = json_val.as_object().expect("result should be object");
+
+            // :order/name should be present
+            assert_eq!(obj.get(":order/name"), Some(&json!("Order-1")));
+
+            // :order/items should be an array of fully-expanded component entities
+            let items = obj.get(":order/items").expect("should have :order/items");
+            let arr = items.as_array().expect("items should be array");
+            assert_eq!(arr.len(), 2, "should have 2 line items");
+
+            // Each item should have :db/id, :item/name, :item/qty (fully expanded)
+            for item in arr {
+                let item_obj = item.as_object().expect("item should be object");
+                assert!(item_obj.contains_key(":db/id"), "item should have :db/id");
+                assert!(item_obj.contains_key(":item/name"), "item should have :item/name");
+                assert!(item_obj.contains_key(":item/qty"), "item should have :item/qty");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Test mentat_pull_many: batched pull of multiple entities.
+    #[pg_test]
+    fn test_pull_many_basic() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (400, ':person/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;
+             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
+             VALUES (401, ':person/age', 'long', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (4000, 4001, 4002);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (4000, 400, 7, 'Alice', 8000, true),
+             (4001, 400, 7, 'Bob', 8000, true),
+             (4002, 400, 7, 'Carol', 8000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
+             (4000, 401, 2, 30, 8000, true),
+             (4001, 401, 2, 25, 8000, true),
+             (4002, 401, 2, 35, 8000, true);",
+        )?;
+
+        // Pull multiple entities at once
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull_many('[:person/name :person/age]', ARRAY[4000, 4001, 4002])",
+        )?;
+
+        assert!(result.is_some(), "Pull many should return results");
+        if let Some(JsonB(json_val)) = result {
+            let arr = json_val.as_array().expect("result should be array");
+            assert_eq!(arr.len(), 3, "should have 3 entities");
+
+            // Results should be in input order
+            let first = arr[0].as_object().expect("first should be object");
+            assert_eq!(first.get(":person/name"), Some(&json!("Alice")));
+            assert_eq!(first.get(":person/age"), Some(&json!(30)));
+
+            let second = arr[1].as_object().expect("second should be object");
+            assert_eq!(second.get(":person/name"), Some(&json!("Bob")));
+
+            let third = arr[2].as_object().expect("third should be object");
+            assert_eq!(third.get(":person/name"), Some(&json!("Carol")));
+        }
+
+        Ok(())
+    }
+
+    /// Test mentat_pull_many with empty entity list.
+    #[pg_test]
+    fn test_pull_many_empty() -> Result<(), PullError> {
+        let result = mentat_pull_many("[:person/name]", vec![])?;
+        let arr = result.0.as_array().expect("should be array");
+        assert!(arr.is_empty(), "empty input should produce empty output");
         Ok(())
     }
 }

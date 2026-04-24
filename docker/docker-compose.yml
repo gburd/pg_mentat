@@ -1,8 +1,15 @@
-# docker-compose.yml -- pg_mentat full stack
+# docker-compose.yml -- pg_mentat full stack with monitoring
 #
 # Start everything:  docker compose -f docker/docker-compose.yml up -d
 # Stop:              docker compose -f docker/docker-compose.yml down
 # Logs:              docker compose -f docker/docker-compose.yml logs -f
+#
+# Services:
+#   postgres          - PostgreSQL 16 with pg_mentat extension  (port 5432)
+#   mentatd           - Datomic-compatible HTTP API server       (port 8080)
+#   prometheus        - Metrics collection and alerting          (port 9090)
+#   grafana           - Dashboards and visualization             (port 3000)
+#   postgres-exporter - PostgreSQL metrics for Prometheus        (port 9187)
 #
 # Build context is the repository root (set via context: ..).
 
@@ -81,6 +88,69 @@ services:
           cpus: "0.25"
           memory: "64m"
 
+  # ---------------------------------------------------------------------------
+  # Prometheus -- metrics collection and alerting
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: pg_mentat_prometheus
+    restart: unless-stopped
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/mentatd_alerts.yml:/etc/prometheus/mentatd_alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    depends_on:
+      mentatd:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Grafana -- dashboards and visualization
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: pg_mentat_grafana
+    restart: unless-stopped
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-mentat}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Exporter -- exports PG metrics for Prometheus
+  # ---------------------------------------------------------------------------
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: pg_mentat_pg_exporter
+    restart: unless-stopped
+    ports:
+      - "${PG_EXPORTER_PORT:-9187}:9187"
+    environment:
+      # SECURITY: Use sslmode=prefer in production. Within a Docker network
+      # sslmode=disable is acceptable if the network is trusted, but prefer
+      # encrypted connections when possible.
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-mentat}?sslmode=${PG_SSLMODE:-prefer}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
     driver: local

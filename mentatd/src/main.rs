@@ -40,6 +40,14 @@ async fn main() -> anyhow::Result<()> {
         config.cache.capacity,
         config.cache.ttl_secs
     );
+    info!(
+        "  API key auth: {}",
+        if config.server.api_key.is_some() {
+            "enabled"
+        } else {
+            "disabled (set MENTATD_API_KEY to enable)"
+        }
+    );
 
     let pool = create_pool(
         &config.database.connection_string,

@@ -1,5 +1,6 @@
 pub mod parser;
 pub mod serializer;
+pub mod transit_parser;
 pub mod transit_serializer;
 
 use serde::{Deserialize, Serialize};
@@ -78,8 +79,39 @@ pub enum Operation {
         end: Option<i64>,
     },
 
+    // Speculative transaction (d/with)
+    With {
+        tx_data: String,
+    },
+
+    // Database filtering (d/filter)
+    Filter {
+        predicate: FilterPredicate,
+        query: String,
+        args: Vec<String>,
+    },
+
+    // Basis timestamp (d/basis-t)
+    BasisT,
+
     // Health check
     Health,
+}
+
+/// Predicate for d/filter operations.
+///
+/// Filters restrict the datoms visible to subsequent queries by applying
+/// a WHERE-clause predicate. Supported predicates:
+///   - AttrEquals: only datoms with a specific attribute
+///   - EntityEquals: only datoms for a specific entity
+///   - Since: only datoms from transactions after a given t
+///   - Custom: arbitrary SQL predicate expression (validated)
+#[derive(Debug, Clone)]
+pub enum FilterPredicate {
+    AttrEquals(String),
+    EntityEquals(i64),
+    Since(i64),
+    Custom(String),
 }
 
 #[derive(Debug, Clone, Copy)]

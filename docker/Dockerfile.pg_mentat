@@ -63,4 +63,7 @@ EXPOSE 5432
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
     CMD pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" || exit 1
 
-ENV POSTGRES_HOST_AUTH_METHOD=trust
+# SECURITY: Use scram-sha-256 for password authentication.
+# The 'trust' method should NEVER be used in production as it allows
+# unauthenticated access. Set POSTGRES_PASSWORD at runtime.
+ENV POSTGRES_HOST_AUTH_METHOD=scram-sha-256

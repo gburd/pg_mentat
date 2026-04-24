@@ -22,13 +22,24 @@ from collections import defaultdict
 from pathlib import Path
 
 
-# Performance targets
+# Performance targets (general - read-heavy scenarios)
 TARGETS = {
     "tps": 50,
     "p99_ms": 100,
     "p50_ms": 50,
     "error_rate": 0.001,
 }
+
+# Performance targets for write-heavy scenarios (post-sequence optimization)
+WRITE_TARGETS = {
+    "tps": 500,
+    "p99_ms": 200,
+    "p50_ms": 50,
+    "error_rate": 0.001,
+}
+
+# Scenarios that should use write-specific targets
+WRITE_SCENARIOS = {"concurrent_writes", "writes"}
 
 
 def parse_dat_file(filepath: str) -> list[dict]:
@@ -98,29 +109,33 @@ def analyze_records(records: list[dict], duration_secs: int | None = None) -> di
     return stats
 
 
-def check_targets(stats: dict) -> list[tuple[str, bool, str]]:
-    """Check stats against performance targets. Returns list of (name, passed, detail)."""
+def check_targets(stats: dict, scenario_name: str = "") -> list[tuple[str, bool, str]]:
+    """Check stats against performance targets. Returns list of (name, passed, detail).
+
+    Uses write-specific targets for write-heavy scenarios (concurrent_writes, writes).
+    """
+    targets = WRITE_TARGETS if scenario_name in WRITE_SCENARIOS else TARGETS
     checks = []
 
     tps = stats.get("tps", 0)
     if tps:
-        passed = tps >= TARGETS["tps"]
-        checks.append(("Throughput", passed, f"{tps:.1f} TPS (target: >= {TARGETS['tps']})"))
+        passed = tps >= targets["tps"]
+        checks.append(("Throughput", passed, f"{tps:.1f} TPS (target: >= {targets['tps']})"))
 
     lat = stats.get("latency_ms", {})
     p99 = lat.get("p99", 0)
     if p99:
-        passed = p99 < TARGETS["p99_ms"]
-        checks.append(("p99 Latency", passed, f"{p99:.1f}ms (target: < {TARGETS['p99_ms']}ms)"))
+        passed = p99 < targets["p99_ms"]
+        checks.append(("p99 Latency", passed, f"{p99:.1f}ms (target: < {targets['p99_ms']}ms)"))
 
     p50 = lat.get("p50", 0)
     if p50:
-        passed = p50 < TARGETS["p50_ms"]
-        checks.append(("p50 Latency", passed, f"{p50:.1f}ms (target: < {TARGETS['p50_ms']}ms)"))
+        passed = p50 < targets["p50_ms"]
+        checks.append(("p50 Latency", passed, f"{p50:.1f}ms (target: < {targets['p50_ms']}ms)"))
 
     err_rate = stats.get("error_rate", 0)
-    passed = err_rate < TARGETS["error_rate"]
-    checks.append(("Error Rate", passed, f"{err_rate:.4f} (target: < {TARGETS['error_rate']})"))
+    passed = err_rate < targets["error_rate"]
+    checks.append(("Error Rate", passed, f"{err_rate:.4f} (target: < {targets['error_rate']})"))
 
     return checks
 
@@ -156,8 +171,10 @@ def format_report(scenario: str, stats: dict) -> str:
         lines.append(f"  Max: {sz['max']}")
         lines.append("")
 
-    checks = check_targets(stats)
+    checks = check_targets(stats, scenario)
     lines.append("Target Validation:")
+    if scenario in WRITE_SCENARIOS:
+        lines.append("  (Using write-heavy targets: 500+ TPS, p99 < 200ms)")
     for name, passed, detail in checks:
         marker = "PASS" if passed else "FAIL"
         lines.append(f"  [{marker}] {name}: {detail}")
@@ -369,7 +386,7 @@ def main():
             continue
         report = format_report(scenario_name, stats)
         print(report)
-        checks = check_targets(stats)
+        checks = check_targets(stats, scenario_name)
         if not all(p for _, p, _ in checks):
             all_pass = False
 

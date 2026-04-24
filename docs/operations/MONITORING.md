@@ -2,6 +2,27 @@
 
 Practical guide for monitoring pg_mentat and mentatd in production.
 
+## Quick Start with Docker
+
+The docker-compose stack includes a complete monitoring setup:
+
+```bash
+# Start the full stack with monitoring
+docker compose -f docker/docker-compose.yml up -d
+
+# Access points:
+#   mentatd:    http://localhost:8080
+#   Prometheus: http://localhost:9090
+#   Grafana:    http://localhost:3000 (admin/mentat)
+#   PG Metrics: http://localhost:9187/metrics
+```
+
+The stack auto-provisions:
+- **Prometheus** scraping mentatd `/metrics` every 10s and PostgreSQL exporter every 15s
+- **Grafana** with a pre-built "mentatd Overview" dashboard and Prometheus datasource
+- **postgres_exporter** for PostgreSQL-level metrics
+- **Alert rules** for error rate, latency, pool exhaustion, cache, and PostgreSQL health
+
 ## Metrics Overview
 
 mentatd exposes Prometheus-format metrics at the `/metrics` endpoint. These are registered in `mentatd/src/metrics.rs` and updated throughout the request lifecycle.
@@ -14,10 +35,20 @@ mentatd exposes Prometheus-format metrics at the `/metrics` endpoint. These are 
 | `mentatd_errors_total` | Counter | Total errors (parse, database, internal) |
 | `mentatd_query_total` | Counter | Total Datalog queries executed |
 | `mentatd_query_duration_seconds` | Histogram | Query execution duration (includes cache misses only) |
+| `mentatd_operation_duration_seconds` | HistogramVec | Duration of operations by type (query, transact, pull, etc.) |
+| `mentatd_operations_total` | CounterVec | Total operations by type |
 | `mentatd_cache_hits_total` | Counter | Query cache hits |
 | `mentatd_cache_misses_total` | Counter | Query cache misses |
+| `mentatd_cache_entries` | Gauge | Current number of entries in the query cache |
+| `mentatd_cache_targeted_invalidations_total` | Counter | Entity-level cache invalidations |
+| `mentatd_cache_full_invalidations_total` | Counter | Full cache invalidations |
+| `mentatd_cache_tracked_entries` | Gauge | Cache entries with entity dependency tracking |
+| `mentatd_cache_hit_rate` | Gauge | Query cache hit rate (0.0-1.0) |
 | `mentatd_transactions_total` | Counter | Total transactions executed |
+| `mentatd_transaction_duration_seconds` | Histogram | Transaction execution duration |
 | `mentatd_connection_pool_size` | Gauge | Current connections in the pool |
+| `mentatd_connection_pool_available` | Gauge | Idle connections available |
+| `mentatd_connection_pool_waiting` | Gauge | Tasks waiting for a connection |
 | `mentatd_stream_queries_total` | Counter | Total streaming queries |
 | `mentatd_stream_rows_sent_total` | Counter | Total rows sent via streaming |
 | `mentatd_stream_duration_seconds` | Histogram | Streaming query duration |
@@ -164,8 +195,12 @@ Key PostgreSQL metrics to collect:
 
 ## Prometheus Alert Rules
 
+The full alert rules file is at `docker/prometheus/mentatd_alerts.yml` and is auto-loaded by the Docker monitoring stack. It includes additional alerts for transaction latency, pool exhaustion, cache thrashing, throughput drops, and replication lag.
+
+Below is a summary of the core rules:
+
 ```yaml
-# mentatd_alerts.yml
+# docker/prometheus/mentatd_alerts.yml (excerpt)
 groups:
   - name: mentatd
     rules:
@@ -368,53 +403,25 @@ Replace `<configured_pool_size>` with your actual pool size value.
    LIMIT 10;
    ```
 
-### Grafana Dashboard JSON
+### Grafana Dashboard
 
-A minimal dashboard definition for import:
+When using the Docker stack, the "mentatd Overview" dashboard is automatically provisioned with 14 panels covering all key metrics. See `docker/grafana/dashboards/mentatd-overview.json`.
 
-```json
-{
-  "dashboard": {
-    "title": "mentatd Overview",
-    "panels": [
-      {
-        "title": "Request Rate",
-        "type": "timeseries",
-        "targets": [{"expr": "rate(mentatd_requests_total[5m])"}],
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
-      },
-      {
-        "title": "Error Rate",
-        "type": "timeseries",
-        "targets": [{"expr": "rate(mentatd_errors_total[5m]) / rate(mentatd_requests_total[5m])"}],
-        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
-      },
-      {
-        "title": "Query Latency (p50 / p95 / p99)",
-        "type": "timeseries",
-        "targets": [
-          {"expr": "histogram_quantile(0.5, rate(mentatd_query_duration_seconds_bucket[5m]))", "legendFormat": "p50"},
-          {"expr": "histogram_quantile(0.95, rate(mentatd_query_duration_seconds_bucket[5m]))", "legendFormat": "p95"},
-          {"expr": "histogram_quantile(0.99, rate(mentatd_query_duration_seconds_bucket[5m]))", "legendFormat": "p99"}
-        ],
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
-      },
-      {
-        "title": "Cache Hit Ratio",
-        "type": "gauge",
-        "targets": [{"expr": "rate(mentatd_cache_hits_total[5m]) / (rate(mentatd_cache_hits_total[5m]) + rate(mentatd_cache_misses_total[5m]))"}],
-        "gridPos": {"h": 8, "w": 6, "x": 12, "y": 8}
-      },
-      {
-        "title": "Connection Pool Size",
-        "type": "stat",
-        "targets": [{"expr": "mentatd_connection_pool_size"}],
-        "gridPos": {"h": 8, "w": 6, "x": 18, "y": 8}
-      }
-    ]
-  }
-}
+For manual Grafana installations, import the dashboard JSON from:
 ```
+docker/grafana/dashboards/mentatd-overview.json
+```
+
+**Dashboard panels include:**
+- Request Rate and Error Rate
+- Query Latency Percentiles (p50/p95/p99)
+- Transaction Latency Percentiles
+- Cache Hit Ratio (gauge with color thresholds)
+- Cache Size and Invalidation Rates
+- Connection Pool (total/available/waiting)
+- Transaction Rate
+- Operations by Type (rate and p99 latency per operation)
+- Streaming Queries and Duration
 
 ## Query Performance Analysis
 

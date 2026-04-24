@@ -1,3 +1,4 @@
+use crate::error::MentatError;
 use edn::parse;
 use edn::query::{
     Binding, Direction, Element, FindSpec, FnArg, Limit, NonIntegerConstant, OrWhereClause, Order,
@@ -145,6 +146,18 @@ impl<'a> SqlBuilder<'a> {
         self.params.push(DatumWithOid::from(value));
         format!("${}", self.params.len())
     }
+
+    /// Add a BOOLEAN parameter and return the placeholder string ($N).
+    fn bind_bool(&mut self, value: bool) -> String {
+        self.params.push(DatumWithOid::from(value));
+        format!("${}", self.params.len())
+    }
+
+    /// Add a DOUBLE PRECISION parameter and return the placeholder string ($N).
+    fn bind_double(&mut self, value: f64) -> String {
+        self.params.push(DatumWithOid::from(value));
+        format!("${}", self.params.len())
+    }
 }
 
 // ============================================================================
@@ -195,8 +208,12 @@ fn apply_optimizer_hints(
     // sorts and hash tables.
     if complexity.is_complex() {
         let work_mem = crate::planner::default_work_mem();
-        let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
-        let _ = client.select(&set_sql, None, &[]);
+        // Defensive: only pass values that look like a memory size
+        // (digits optionally followed by a unit suffix).
+        if work_mem.chars().all(|c| c.is_ascii_alphanumeric()) {
+            let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
+            let _ = client.select(&set_sql, None, &[]);
+        }
     }
 }
 
@@ -297,34 +314,30 @@ fn bind_input_value(
         serde_json::Value::String(s) => {
             // Check if it looks like a keyword (starts with ':')
             if let Some(stripped) = s.strip_prefix(':') {
-                let bytes = stripped.as_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_text(stripped.to_string());
                 Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_keyword = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::KEYWORD
                 ))
             } else {
-                let bytes = s.as_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_text(s.clone());
                 Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_text = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::STRING
                 ))
             }
         }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                let bytes = i.to_le_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_bigint(i);
                 Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::LONG
                 ))
             } else if let Some(f) = n.as_f64() {
-                let bytes = f.to_le_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_double(f);
                 Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_double = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::DOUBLE
                 ))
             } else {
@@ -332,21 +345,18 @@ fn bind_input_value(
             }
         }
         serde_json::Value::Bool(b) => {
-            let bytes = vec![if *b { 1u8 } else { 0u8 }];
-            let param = builder.bind_bytea(bytes);
+            let param = builder.bind_bool(*b);
             Some(format!(
-                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                "({alias}.v_bool = {param} AND {alias}.value_type_tag = {tag})",
                 tag = type_tag::BOOLEAN
             ))
         }
         serde_json::Value::Array(arr) => {
             // Lookup ref in value position: [":person/email", "alice@example.com"]
-            // Resolve to entity ID and bind as ref value (i64 LE bytes, tag=0).
             let eid = resolve_lookup_ref_to_eid(arr)?;
-            let bytes = eid.to_le_bytes().to_vec();
-            let param = builder.bind_bytea(bytes);
+            let param = builder.bind_bigint(eid);
             Some(format!(
-                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                "({alias}.v_ref = {param} AND {alias}.value_type_tag = {tag})",
                 tag = type_tag::REF
             ))
         }
@@ -398,48 +408,51 @@ fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value]) -> Option<i64> {
     // Resolve the attribute ident to an entid via cache
     let attr_entid = crate::cache::get_cache().resolve_ident(attr_str)?;
 
-    // Encode the lookup value
-    let (v_bytes, v_type_tag) = encode_json_value_for_lookup(&arr[1])?;
-
-    // Query for the entity with this unique attribute value
-    Spi::get_one_with_args::<i64>(
-        "SELECT e FROM mentat.datoms \
-         WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
-         LIMIT 1",
-        &[
-            DatumWithOid::from(attr_entid),
-            DatumWithOid::from(v_bytes),
-            DatumWithOid::from(v_type_tag),
-        ],
-    )
-    .ok()
-    .flatten()
+    // Query for the entity with this unique attribute value using typed columns
+    lookup_ref_query(attr_entid, &arr[1])
 }
 
-/// Encode a JSON value into (bytes, type_tag) for lookup ref resolution.
-///
-/// Supports the same value types as bind_input_value: strings, integers,
-/// doubles, booleans, and keywords (strings starting with ':').
-fn encode_json_value_for_lookup(value: &serde_json::Value) -> Option<(Vec<u8>, i16)> {
+/// Perform a lookup ref query against the typed value columns.
+fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value) -> Option<i64> {
     match value {
         serde_json::Value::String(s) => {
             if let Some(stripped) = s.strip_prefix(':') {
-                Some((stripped.as_bytes().to_vec(), type_tag::KEYWORD))
+                Spi::get_one_with_args::<i64>(
+                    "SELECT e FROM mentat.datoms \
+                     WHERE a = $1 AND v_keyword = $2 AND value_type_tag = 8 AND added = true LIMIT 1",
+                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(stripped)],
+                ).ok().flatten()
             } else {
-                Some((s.as_bytes().to_vec(), type_tag::STRING))
+                Spi::get_one_with_args::<i64>(
+                    "SELECT e FROM mentat.datoms \
+                     WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
+                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(s.as_str())],
+                ).ok().flatten()
             }
         }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Some((i.to_le_bytes().to_vec(), type_tag::LONG))
+                Spi::get_one_with_args::<i64>(
+                    "SELECT e FROM mentat.datoms \
+                     WHERE a = $1 AND v_long = $2 AND value_type_tag = 2 AND added = true LIMIT 1",
+                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(i)],
+                ).ok().flatten()
             } else if let Some(f) = n.as_f64() {
-                Some((f.to_le_bytes().to_vec(), type_tag::DOUBLE))
+                Spi::get_one_with_args::<i64>(
+                    "SELECT e FROM mentat.datoms \
+                     WHERE a = $1 AND v_double = $2 AND value_type_tag = 3 AND added = true LIMIT 1",
+                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(f)],
+                ).ok().flatten()
             } else {
                 None
             }
         }
         serde_json::Value::Bool(b) => {
-            Some((vec![if *b { 1u8 } else { 0u8 }], type_tag::BOOLEAN))
+            Spi::get_one_with_args::<i64>(
+                "SELECT e FROM mentat.datoms \
+                 WHERE a = $1 AND v_bool = $2 AND value_type_tag = 1 AND added = true LIMIT 1",
+                &[DatumWithOid::from(attr_entid), DatumWithOid::from(*b)],
+            ).ok().flatten()
         }
         _ => None,
     }
@@ -703,50 +716,30 @@ fn keyword_to_ident(kw: &edn::Keyword) -> String {
     format!("{}", kw)
 }
 
-/// Build a SQL expression that decodes a BYTEA value as a BIGINT (for arithmetic).
-/// Assumes the value is a long/integer type (type_tag=2). Returns the decoded i64.
+/// Build a SQL expression that reads a numeric value from the typed columns.
+/// Returns the value as BIGINT, using COALESCE across ref/long columns.
 fn build_numeric_value_decode_expr(alias: &str) -> String {
     format!(
-        "(CASE WHEN octet_length({alias}.v) >= 8 THEN \
-         get_byte({alias}.v, 0)::BIGINT | \
-         (get_byte({alias}.v, 1)::BIGINT << 8) | \
-         (get_byte({alias}.v, 2)::BIGINT << 16) | \
-         (get_byte({alias}.v, 3)::BIGINT << 24) | \
-         (get_byte({alias}.v, 4)::BIGINT << 32) | \
-         (get_byte({alias}.v, 5)::BIGINT << 40) | \
-         (get_byte({alias}.v, 6)::BIGINT << 48) | \
-         (get_byte({alias}.v, 7)::BIGINT << 56) \
-         ELSE NULL END)"
+        "COALESCE({alias}.v_ref, {alias}.v_long, \
+         {alias}.v_double::BIGINT, \
+         EXTRACT(EPOCH FROM {alias}.v_instant)::BIGINT * 1000000)"
     )
 }
 
-/// Build a SQL CASE expression that decodes a BYTEA value column based on
-/// the value_type_tag for the given table alias.
+/// Build a SQL CASE expression that reads from typed value columns and returns TEXT.
+/// Each type-specific column is read directly with appropriate formatting.
 fn build_value_decode_expr(alias: &str) -> String {
-    let i64_decode = format!(
-        "(get_byte({alias}.v, 0)::BIGINT | \
-         (get_byte({alias}.v, 1)::BIGINT << 8) | \
-         (get_byte({alias}.v, 2)::BIGINT << 16) | \
-         (get_byte({alias}.v, 3)::BIGINT << 24) | \
-         (get_byte({alias}.v, 4)::BIGINT << 32) | \
-         (get_byte({alias}.v, 5)::BIGINT << 40) | \
-         (get_byte({alias}.v, 6)::BIGINT << 48) | \
-         (get_byte({alias}.v, 7)::BIGINT << 56))"
-    );
-
-    let double_decode = format!("'d:' || ({i64_decode})::TEXT");
-
     format!(
         "CASE {alias}.value_type_tag \
-         WHEN {ref_tag} THEN {i64_expr}::TEXT \
-         WHEN {bool_tag} THEN (get_byte({alias}.v, 0) != 0)::TEXT \
-         WHEN {long_tag} THEN {i64_expr}::TEXT \
-         WHEN {double_tag} THEN {double_expr} \
-         WHEN {instant_tag} THEN to_char(to_timestamp(({i64_expr})::DOUBLE PRECISION / 1000000.0), 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
-         WHEN {str_tag} THEN convert_from({alias}.v, 'UTF8') \
-         WHEN {kw_tag} THEN ':' || convert_from({alias}.v, 'UTF8') \
-         WHEN {uuid_tag} THEN encode({alias}.v, 'hex') \
-         WHEN {bytes_tag} THEN encode({alias}.v, 'hex') \
+         WHEN {ref_tag} THEN {alias}.v_ref::TEXT \
+         WHEN {bool_tag} THEN {alias}.v_bool::TEXT \
+         WHEN {long_tag} THEN {alias}.v_long::TEXT \
+         WHEN {double_tag} THEN 'd:' || {alias}.v_double::BIGINT::TEXT \
+         WHEN {instant_tag} THEN to_char({alias}.v_instant, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+         WHEN {str_tag} THEN {alias}.v_text \
+         WHEN {kw_tag} THEN ':' || {alias}.v_keyword \
+         WHEN {uuid_tag} THEN {alias}.v_uuid::TEXT \
+         WHEN {bytes_tag} THEN encode({alias}.v_bytes, 'hex') \
          ELSE NULL::TEXT \
          END",
         alias = alias,
@@ -754,18 +747,16 @@ fn build_value_decode_expr(alias: &str) -> String {
         bool_tag = type_tag::BOOLEAN,
         long_tag = type_tag::LONG,
         double_tag = type_tag::DOUBLE,
-        double_expr = double_decode,
         instant_tag = type_tag::INSTANT,
         str_tag = type_tag::STRING,
         kw_tag = type_tag::KEYWORD,
         uuid_tag = type_tag::UUID,
         bytes_tag = type_tag::BYTES,
-        i64_expr = i64_decode,
     )
 }
 
-/// Encode a constant value from a pattern's value position into BYTEA + type tag,
-/// and bind it as a parameter. Returns a WHERE clause fragment.
+/// Bind a constant value from a pattern's value position to the appropriate typed column.
+/// Returns a WHERE clause fragment comparing against the correct typed column.
 fn bind_constant_value(
     alias: &str,
     place: &PatternValuePlace,
@@ -773,66 +764,60 @@ fn bind_constant_value(
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     match place {
         PatternValuePlace::EntidOrInteger(i) => {
-            let bytes = i.to_le_bytes().to_vec();
-            let param = builder.bind_bytea(bytes);
+            let param = builder.bind_bigint(*i);
             Ok(Some(format!(
-                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
                 tag = type_tag::LONG
             )))
         }
         PatternValuePlace::IdentOrKeyword(kw) => {
             let ident_str = keyword_to_ident(kw);
             let stored = if ident_str.starts_with(':') {
-                &ident_str[1..]
+                ident_str[1..].to_string()
             } else {
-                &ident_str
+                ident_str
             };
-            let bytes = stored.as_bytes().to_vec();
-            let param = builder.bind_bytea(bytes);
+            let param = builder.bind_text(stored);
             Ok(Some(format!(
-                "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                "({alias}.v_keyword = {param} AND {alias}.value_type_tag = {tag})",
                 tag = type_tag::KEYWORD
             )))
         }
         PatternValuePlace::Constant(constant) => match constant {
             NonIntegerConstant::Boolean(b) => {
-                let bytes = vec![if *b { 1u8 } else { 0u8 }];
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_bool(*b);
                 Ok(Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_bool = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::BOOLEAN
                 )))
             }
             NonIntegerConstant::Float(f) => {
-                let bytes = f.into_inner().to_le_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_double(f.into_inner());
                 Ok(Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_double = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::DOUBLE
                 )))
             }
             NonIntegerConstant::Text(s) => {
-                let bytes = s.as_ref().as_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_text(s.as_ref().clone());
                 Ok(Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_text = {param} AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::STRING
                 )))
             }
             NonIntegerConstant::Instant(dt) => {
                 let micros = dt.timestamp_micros();
-                let bytes = micros.to_le_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let param = builder.bind_bigint(micros);
                 Ok(Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_instant = to_timestamp({param}::DOUBLE PRECISION / 1000000.0) AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::INSTANT
                 )))
             }
             NonIntegerConstant::Uuid(u) => {
-                let bytes = u.as_bytes().to_vec();
-                let param = builder.bind_bytea(bytes);
+                let uuid_str = u.to_string();
+                let param = builder.bind_text(uuid_str);
                 Ok(Some(format!(
-                    "({alias}.v = {param} AND {alias}.value_type_tag = {tag})",
+                    "({alias}.v_uuid = {param}::UUID AND {alias}.value_type_tag = {tag})",
                     tag = type_tag::UUID
                 )))
             }
@@ -1100,7 +1085,7 @@ fn build_fulltext_join(
         type_tag::STRING
     ));
     where_parts.push(format!(
-        "{fts_alias}.text_value = convert_from({datoms_alias}.v, 'UTF8')"
+        "{fts_alias}.text_value = {datoms_alias}.v_text"
     ));
 
     if !search_term.is_empty() {
@@ -1409,10 +1394,10 @@ fn build_extended_pattern_query(
                 if let Some((existing_alias, col)) = var_to_alias.get(&var_name) {
                     if *col == "v" {
                         // Variable was bound from a value column (BYTEA ref).
-                        // Decode it as BIGINT for comparison with entity column.
+                        // Variable was bound from a value column (ref type).
+                        // Use v_ref directly for comparison with entity column.
                         where_clauses.push(format!(
-                            "{alias}.e = {decode}",
-                            decode = build_numeric_value_decode_expr(existing_alias)
+                            "{alias}.e = {existing_alias}.v_ref"
                         ));
                     } else {
                         where_clauses.push(format!(
@@ -1472,12 +1457,23 @@ fn build_extended_pattern_query(
                 if let Some((existing_alias, col)) = var_to_alias.get(&var_name) {
                     if *col == "v" {
                         where_clauses.push(format!(
-                            "{alias}.v = {existing}.v AND {alias}.value_type_tag = {existing}.value_type_tag",
+                            "{alias}.value_type_tag = {existing}.value_type_tag \
+AND {alias}.v_ref IS NOT DISTINCT FROM {existing}.v_ref \
+AND {alias}.v_bool IS NOT DISTINCT FROM {existing}.v_bool \
+AND {alias}.v_long IS NOT DISTINCT FROM {existing}.v_long \
+AND {alias}.v_double IS NOT DISTINCT FROM {existing}.v_double \
+AND {alias}.v_text IS NOT DISTINCT FROM {existing}.v_text \
+AND {alias}.v_keyword IS NOT DISTINCT FROM {existing}.v_keyword \
+AND {alias}.v_instant IS NOT DISTINCT FROM {existing}.v_instant \
+AND {alias}.v_uuid IS NOT DISTINCT FROM {existing}.v_uuid \
+AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                             existing = existing_alias
                         ));
                     } else {
+                        // Variable was bound to a non-value column (e, a, tx)
+                        // In value position, this means the value is a ref to that entity/attr/tx
                         where_clauses.push(format!(
-                            "{alias}.v = {existing}.{col}",
+                            "{alias}.v_ref = {existing}.{col}",
                             existing = existing_alias
                         ));
                     }
@@ -1671,15 +1667,19 @@ fn build_extended_pattern_query(
     }
 
     if select_exprs.is_empty() {
-        return Err(":db.error/unresolved-vars No :find variables could be resolved to \
-                    pattern bindings. Ensure every variable in :find also appears in a :where \
-                    pattern. Example: [:find ?name :where [?e :person/name ?name]]".into());
+        return Err(MentatError::InvalidQuery {
+            message: "No :find variables could be resolved to pattern bindings. \
+                      Ensure every variable in :find also appears in a :where pattern.".to_string(),
+            suggestion: Some("Example: [:find ?name :where [?e :person/name ?name]]".to_string()),
+        }.into());
     }
 
     if joins.is_empty() && fts_joins.is_empty() {
-        return Err(":db.error/empty-where No :where clauses produced any datom table joins. \
-                    Ensure your query has at least one data pattern like [?e :attr ?v]. \
-                    Pure predicate or function-only queries are not supported.".into());
+        return Err(MentatError::InvalidQuery {
+            message: "No :where clauses produced any datom table joins. \
+                      Ensure your query has at least one data pattern like [?e :attr ?v].".to_string(),
+            suggestion: Some("Pure predicate or function-only queries are not supported.".to_string()),
+        }.into());
     }
 
     let distinct = if !has_aggregates && find_spec.requires_distinct() {
@@ -1960,10 +1960,20 @@ fn build_not_exists_subquery(
                         if let Some((outer_alias, outer_col)) = outer_var_to_alias.get(&var_name) {
                             if *outer_col == "v" {
                                 sub_where.push(format!(
-                                    "{alias}.v = {outer_alias}.v AND {alias}.value_type_tag = {outer_alias}.value_type_tag"
+                                    "{alias}.value_type_tag = {outer_alias}.value_type_tag \
+                                     AND {alias}.v_ref IS NOT DISTINCT FROM {outer_alias}.v_ref \
+                                     AND {alias}.v_bool IS NOT DISTINCT FROM {outer_alias}.v_bool \
+                                     AND {alias}.v_long IS NOT DISTINCT FROM {outer_alias}.v_long \
+                                     AND {alias}.v_double IS NOT DISTINCT FROM {outer_alias}.v_double \
+                                     AND {alias}.v_text IS NOT DISTINCT FROM {outer_alias}.v_text \
+                                     AND {alias}.v_keyword IS NOT DISTINCT FROM {outer_alias}.v_keyword \
+                                     AND {alias}.v_instant IS NOT DISTINCT FROM {outer_alias}.v_instant \
+                                     AND {alias}.v_uuid IS NOT DISTINCT FROM {outer_alias}.v_uuid \
+                                     AND {alias}.v_bytes IS NOT DISTINCT FROM {outer_alias}.v_bytes"
                                 ));
                             } else {
-                                sub_where.push(format!("{alias}.v = {outer_alias}.{outer_col}"));
+                                // Non-value column (e, a, tx) used in value position = ref lookup
+                                sub_where.push(format!("{alias}.v_ref = {outer_alias}.{outer_col}"));
                             }
                         }
                     }
@@ -2079,6 +2089,8 @@ fn build_predicate_clause(
 }
 
 /// Convert a predicate argument to a SQL expression.
+/// With typed columns, value comparisons use COALESCE across the native typed columns,
+/// which gives correct range semantics (numeric < on numbers, text < on strings, etc).
 fn pred_arg_to_sql(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
@@ -2088,9 +2100,16 @@ fn pred_arg_to_sql(
             let var_name = format!("{}", v);
             if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
                 if *col == "v" {
-                    // For value comparisons, decode to text then cast to numeric
-                    // This works for integer and double types
-                    Ok(format!("({})", build_value_decode_expr(alias)))
+                    // For value comparisons, use COALESCE across typed columns
+                    // This produces the native typed value for correct comparisons
+                    Ok(format!(
+                        "COALESCE({alias}.v_ref::NUMERIC, \
+                         CASE WHEN {alias}.v_bool THEN 1 ELSE 0 END::NUMERIC, \
+                         {alias}.v_long::NUMERIC, \
+                         {alias}.v_double::NUMERIC, \
+                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC, \
+                         NULL)"
+                    ))
                 } else {
                     Ok(format!("{}.{}", alias, col))
                 }
@@ -2103,15 +2122,16 @@ fn pred_arg_to_sql(
                 ).into())
             }
         }
-        FnArg::EntidOrInteger(i) => Ok(format!("'{}'", i)),
-        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("'{}'", f.into_inner())),
+        FnArg::EntidOrInteger(i) => Ok(format!("{}", i)),
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("{}", f.into_inner())),
         FnArg::Constant(NonIntegerConstant::Text(s)) => {
             // SECURITY: Escape single quotes to prevent SQL injection
-            // PostgreSQL escapes ' as ''
             let escaped = s.as_ref().replace('\'', "''");
             Ok(format!("'{}'", escaped))
         }
-        FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(format!("'{}'", b)),
+        FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
+            Ok(format!("{}", if *b { 1 } else { 0 }))
+        }
         _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type. \
                   Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
     }
@@ -2318,10 +2338,20 @@ fn build_rule_clause_sql(
                         if let Some((existing, col)) = body_var_to_alias.get(&var_name) {
                             if *col == "v" {
                                 where_parts.push(format!(
-                                    "{alias}.v = {existing}.v AND {alias}.value_type_tag = {existing}.value_type_tag"
+                                    "{alias}.value_type_tag = {existing}.value_type_tag \
+AND {alias}.v_ref IS NOT DISTINCT FROM {existing}.v_ref \
+AND {alias}.v_bool IS NOT DISTINCT FROM {existing}.v_bool \
+AND {alias}.v_long IS NOT DISTINCT FROM {existing}.v_long \
+AND {alias}.v_double IS NOT DISTINCT FROM {existing}.v_double \
+AND {alias}.v_text IS NOT DISTINCT FROM {existing}.v_text \
+AND {alias}.v_keyword IS NOT DISTINCT FROM {existing}.v_keyword \
+AND {alias}.v_instant IS NOT DISTINCT FROM {existing}.v_instant \
+AND {alias}.v_uuid IS NOT DISTINCT FROM {existing}.v_uuid \
+AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                                 ));
                             } else {
-                                where_parts.push(format!("{alias}.v = {existing}.{col}"));
+                                // Non-value column used in value position = ref lookup
+                                where_parts.push(format!("{alias}.v_ref = {existing}.{col}"));
                             }
                         } else {
                             body_var_to_alias.insert(var_name, (alias.clone(), "v"));
@@ -2389,9 +2419,8 @@ fn build_rule_clause_sql(
                         // Link the recursive CTE column to the body variable
                         if let Some((alias, col)) = body_var_to_alias.get(&var_name) {
                             if *col == "v" {
-                                // Value column: decode ref entity ID from BYTEA
-                                let decoded_v = build_numeric_value_decode_expr(alias);
-                                where_parts.push(format!("{col_ref}::BIGINT = {decoded_v}"));
+                                // Value column: use v_ref for ref-type recursive joins
+                                where_parts.push(format!("{col_ref}::BIGINT = {alias}.v_ref"));
                             } else {
                                 where_parts.push(format!("{col_ref}::BIGINT = {alias}.{col}",));
                             }
@@ -2424,8 +2453,8 @@ fn build_rule_clause_sql(
                     // Recursive variable mapped directly
                     select_parts.push(format!("{}.col{}::BIGINT", recursive_alias, i));
                 } else if *col == "v" {
-                    // Value column: for ref-type, decode the entity reference
-                    select_parts.push(build_numeric_value_decode_expr(alias));
+                    // Value column: for ref-type, use v_ref directly
+                    select_parts.push(format!("{alias}.v_ref"));
                 } else {
                     select_parts.push(format!("{alias}.{col}"));
                 }
