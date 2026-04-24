@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mentatd-config
+  namespace: pg-mentat
+  labels:
+    app.kubernetes.io/name: mentatd
+    app.kubernetes.io/component: server
+data:
+  mentatd.toml: |
+    [server]
+    host = "0.0.0.0"
+    port = 8080
+    timeout = 30
+
+    [database]
+    connection_string = "postgresql://mentat:mentat@pg-mentat-postgres:5432/mentat"
+    pool_size = 20
+    max_lifetime_secs = 1800
+
+    [logging]
+    level = "info"
+    format = "json"
+
+    [cache]
+    enabled = true
+    capacity = 5000
+    ttl_secs = 300

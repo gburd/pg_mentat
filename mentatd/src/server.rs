@@ -76,11 +76,17 @@ impl AppState {
             query_cache: Arc::new(QueryCache::new(cache_capacity, cache_ttl)),
         }
     }
+
+    /// Returns a reference to the database connection pool.
+    pub fn pool(&self) -> &DbPool {
+        &self.pool
+    }
 }
 
 pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", post(handle_request))
+        .route("/stream/query", post(crate::stream::handle_stream_query))
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_endpoint))
         .with_state(state)
@@ -91,9 +97,14 @@ async fn health_check() -> impl IntoResponse {
 }
 
 async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
-    // Update pool gauge before rendering
+    // Update pool gauges before rendering
     let pool_status = state.pool.status();
     metrics::CONNECTION_POOL_SIZE.set(f64::from(pool_status.size as u32));
+    metrics::CONNECTION_POOL_AVAILABLE.set(i64::from(pool_status.available as u32));
+    metrics::CONNECTION_POOL_WAITING.set(i64::from(pool_status.waiting as u32));
+
+    // Update cache size gauge
+    metrics::CACHE_SIZE.set(state.query_cache.len() as i64);
 
     let body = metrics::render_metrics();
     (
@@ -171,8 +182,10 @@ async fn handle_request(
 }
 
 async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseValue, ServerError> {
-    match op {
-        Operation::Health => Ok(ResponseValue::String("healthy".to_string())),
+    let op_start = Instant::now();
+
+    let (op_name, result) = match op {
+        Operation::Health => ("health", Ok(ResponseValue::String("healthy".to_string()))),
 
         Operation::ListDatabases => {
             let client = state.pool.get().await?;
@@ -189,7 +202,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .map(|row| ResponseValue::String(row.get::<_, String>(0)))
                 .collect();
 
-            Ok(ResponseValue::Vector(databases))
+            ("list_databases", Ok(ResponseValue::Vector(databases)))
         }
 
         Operation::CreateDatabase { db_name } => {
@@ -203,7 +216,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .execute(&format!("CREATE DATABASE {}", db_name), &[])
                 .await?;
 
-            Ok(ResponseValue::Boolean(true))
+            ("create_database", Ok(ResponseValue::Boolean(true)))
         }
 
         Operation::DeleteDatabase { db_name } => {
@@ -217,7 +230,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .execute(&format!("DROP DATABASE {}", db_name), &[])
                 .await?;
 
-            Ok(ResponseValue::Boolean(true))
+            ("delete_database", Ok(ResponseValue::Boolean(true)))
         }
 
         Operation::Connect { db_name } => {
@@ -240,7 +253,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let connection_id = Uuid::new_v4().to_string();
 
-            Ok(ResponseValue::Map(vec![
+            ("connect", Ok(ResponseValue::Map(vec![
                 (
                     ResponseValue::Keyword("connection-id".to_string()),
                     ResponseValue::String(connection_id),
@@ -253,10 +266,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                     ResponseValue::Keyword("status".to_string()),
                     ResponseValue::String("connected".to_string()),
                 ),
-            ]))
+            ])))
         }
 
-        Operation::Db { connection_id } => Ok(ResponseValue::Map(vec![
+        Operation::Db { connection_id } => ("db", Ok(ResponseValue::Map(vec![
             (
                 ResponseValue::Keyword("connection-id".to_string()),
                 ResponseValue::String(connection_id.to_string()),
@@ -265,7 +278,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 ResponseValue::Keyword("status".to_string()),
                 ResponseValue::String("active".to_string()),
             ),
-        ])),
+        ]))),
 
         Operation::Query { query, args, .. } => {
             info!("Executing query: {} with args: {:?}", query, args);
@@ -282,6 +295,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 metrics::CACHE_HITS.inc();
                 let elapsed = query_start.elapsed().as_secs_f64();
                 metrics::QUERY_DURATION.observe(elapsed);
+                metrics::observe_operation("query", elapsed);
                 let result_json: serde_json::Value = serde_json::from_str(&cached_json)
                     .map_err(|e| {
                         ServerError::Internal(format!("Failed to parse cached result: {}", e))
@@ -314,7 +328,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let elapsed = query_start.elapsed().as_secs_f64();
             metrics::QUERY_DURATION.observe(elapsed);
 
-            Ok(ResponseValue::Vector(result))
+            ("query", Ok(ResponseValue::Vector(result)))
         }
 
         Operation::Transact {
@@ -326,6 +340,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 connection_id, tx_data
             );
             metrics::TRANSACTION_COUNT.inc();
+            let tx_start = Instant::now();
 
             let client = state.pool.get().await?;
 
@@ -336,12 +351,15 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let report_str: String = row.get(0);
             let result = parse_tx_report(&report_str)?;
 
+            let tx_elapsed = tx_start.elapsed().as_secs_f64();
+            metrics::TRANSACTION_DURATION.observe(tx_elapsed);
+
             // Invalidate query cache after successful transaction since
             // data has changed and cached query results may be stale
             state.query_cache.invalidate();
             debug!("Query cache invalidated after transaction");
 
-            Ok(result)
+            ("transact", Ok(result))
         }
 
         Operation::Pull { pattern, entity_id } => {
@@ -356,7 +374,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let result_json: serde_json::Value = row.get(0);
             let result = json_to_response_value(&result_json);
 
-            Ok(result)
+            ("pull", Ok(result))
         }
 
         Operation::Datoms { index, components } => {
@@ -406,7 +424,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 })
                 .collect();
 
-            Ok(ResponseValue::Vector(datoms))
+            ("datoms", Ok(ResponseValue::Vector(datoms)))
         }
 
         Operation::AsOf { query, args, t } => {
@@ -432,7 +450,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let result_json: serde_json::Value = row.get(0);
             let result = parse_query_results(&result_json)?;
 
-            Ok(ResponseValue::Vector(result))
+            ("as_of", Ok(ResponseValue::Vector(result)))
         }
 
         Operation::Since { query, args, t } => {
@@ -456,7 +474,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let result_json: serde_json::Value = row.get(0);
             let result = parse_query_results(&result_json)?;
 
-            Ok(ResponseValue::Vector(result))
+            ("since", Ok(ResponseValue::Vector(result)))
         }
 
         Operation::History { query, args } => {
@@ -480,7 +498,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let result_json: serde_json::Value = row.get(0);
             let result = parse_query_results(&result_json)?;
 
-            Ok(ResponseValue::Vector(result))
+            ("history", Ok(ResponseValue::Vector(result)))
         }
 
         Operation::TxRange { start, end } => {
@@ -532,9 +550,15 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 })
                 .collect();
 
-            Ok(ResponseValue::Vector(transactions))
+            ("tx_range", Ok(ResponseValue::Vector(transactions)))
         }
-    }
+    };
+
+    // Record per-operation duration and count
+    let elapsed = op_start.elapsed().as_secs_f64();
+    metrics::observe_operation(op_name, elapsed);
+
+    result
 }
 
 /// Convert a JSON value from `mentat_query()` to a native `ResponseValue`.

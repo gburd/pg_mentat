@@ -147,6 +147,59 @@ impl<'a> SqlBuilder<'a> {
     }
 }
 
+// ============================================================================
+// Query Complexity and Optimizer Hints
+// ============================================================================
+
+/// Describes the complexity of a generated SQL query, used to decide
+/// which optimizer hints (SET LOCAL) to apply before execution.
+#[derive(Default)]
+struct QueryComplexity {
+    /// Number of datom table joins (pattern clauses).
+    join_count: usize,
+    /// Whether the query uses aggregates (COUNT, SUM, etc.).
+    has_aggregates: bool,
+    /// Whether the query uses CTEs (recursive rules).
+    has_cte: bool,
+    /// Whether the query uses UNION (OR-join clauses).
+    has_union: bool,
+}
+
+impl QueryComplexity {
+    /// A query is considered "complex" when it has multiple joins,
+    /// aggregates, CTEs, or unions -- situations where extra work_mem
+    /// and index-scan encouragement tend to help.
+    fn is_complex(&self) -> bool {
+        self.join_count > 2 || self.has_aggregates || self.has_cte || self.has_union
+    }
+}
+
+/// Apply SET LOCAL optimizer hints before executing a Mentat query.
+///
+/// Uses `Spi::run` to issue SET LOCAL statements in the current
+/// transaction.  These settings revert automatically at transaction end.
+fn apply_optimizer_hints(
+    client: &pgrx::spi::SpiClient<'_>,
+    complexity: &QueryComplexity,
+) {
+    if !crate::planner::optimizer_hints_enabled() {
+        return;
+    }
+
+    // For any Mentat query that touches the datoms table, discourage
+    // sequential scans so the planner prefers the covering indexes
+    // (EAVT, AEVT, AVET, VAET).
+    let _ = client.select("SET LOCAL enable_seqscan = off", None, &[]);
+
+    // For complex queries, bump work_mem to allow larger in-memory
+    // sorts and hash tables.
+    if complexity.is_complex() {
+        let work_mem = crate::planner::default_work_mem();
+        let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
+        let _ = client.select(&set_sql, None, &[]);
+    }
+}
+
 /// Temporal query options parsed from the inputs JSON parameter.
 #[derive(Default)]
 struct TemporalOption {
@@ -421,7 +474,7 @@ pub fn mentat_query(
     let pagination = parse_pagination_options(&inputs.0);
 
     let mut builder = SqlBuilder::new();
-    let mut sql_query = build_sql_from_datalog(
+    let (mut sql_query, complexity) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -446,6 +499,10 @@ pub fn mentat_query(
 
     let params = builder.params;
     let results = Spi::connect(|client| {
+        // Apply optimizer hints (SET LOCAL) before executing the query.
+        // These are transaction-local and revert automatically.
+        apply_optimizer_hints(&client, &complexity);
+
         let mut rows_json = Vec::new();
 
         for row in execute_cached_query(&client, &sql_query, &params)? {
@@ -796,13 +853,16 @@ fn bind_constant_value(
 ///
 /// Supports: patterns, OR, NOT, predicates, where-functions (fulltext,
 /// arithmetic), aggregates, ORDER BY, LIMIT, and temporal options.
+///
+/// Returns the generated SQL string and a `QueryComplexity` descriptor
+/// so the caller can apply appropriate optimizer hints.
 fn build_sql_from_datalog(
     parsed: &ParsedQuery,
     find_vars: &[String],
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     input_bindings: &HashMap<String, serde_json::Value>,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, QueryComplexity), Box<dyn std::error::Error + Send + Sync>> {
     // Separate clause types
     let mut pattern_clauses = Vec::new();
     let mut or_joins = Vec::new();
@@ -980,7 +1040,14 @@ fn build_sql_from_datalog(
     // Append LIMIT
     let query_sql = append_limit(query_sql, &parsed.limit, &parsed.find_spec);
 
-    Ok(query_sql)
+    let complexity = QueryComplexity {
+        join_count: pattern_clauses.len(),
+        has_aggregates: find_spec_has_aggregates(&parsed.find_spec),
+        has_cte: !cte_prefix.is_empty(),
+        has_union,
+    };
+
+    Ok((query_sql, complexity))
 }
 
 // ============================================================================

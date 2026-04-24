@@ -1,3 +1,4 @@
+use crate::error::{self, MentatError};
 use edn::entities::OpType;
 use edn::parse;
 use pgrx::datum::DatumWithOid;
@@ -100,32 +101,15 @@ fn value_type_name(value: &edn::Value) -> &'static str {
 
 /// Retrieve available attribute idents from the cache for use in error messages.
 fn get_available_attributes_hint() -> String {
-    let cache = crate::cache::get_cache();
-    // We can't directly iterate the cache, so do a quick DB query
-    let result: Result<Vec<String>, _> = pgrx::spi::Spi::connect(|client| {
-        let mut idents = Vec::new();
-        let rows = client.select(
-            "SELECT ident FROM mentat.schema ORDER BY ident LIMIT 20",
-            None,
-            &[],
-        )?;
-        for row in rows {
-            if let Ok(Some(ident)) = row.get::<String>(1) {
-                idents.push(ident);
-            }
-        }
-        Ok::<_, pgrx::spi::SpiError>(idents)
-    });
-    match result {
-        Ok(idents) if !idents.is_empty() => {
-            let shown: Vec<&str> = idents.iter().map(|s| s.as_str()).collect();
-            if idents.len() >= 20 {
-                format!("Available attributes (first 20): {}", shown.join(", "))
-            } else {
-                format!("Available attributes: {}", shown.join(", "))
-            }
-        }
-        _ => "No schema attributes found. Did you forget to define schema with mentat_transact?".to_string(),
+    let available = error::get_available_attributes();
+    if available.is_empty() {
+        "No schema attributes found. Did you forget to define schema with mentat_transact?".to_string()
+    } else if available.len() > 20 {
+        let shown: Vec<&str> = available.iter().take(20).map(|s| s.as_str()).collect();
+        format!("Available attributes (first 20): {}", shown.join(", "))
+    } else {
+        let shown: Vec<&str> = available.iter().map(|s| s.as_str()).collect();
+        format!("Available attributes: {}", shown.join(", "))
     }
 }
 
@@ -173,19 +157,22 @@ fn execute_transaction_body(
     // Validate it's a vector
     let entities = match value {
         edn::Value::Vector(ref vec) => vec,
-        _ => return Err(format!(
-            ":db.error/invalid-transaction Transaction must be a vector of entities, \
-             got {}. Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
-            value_type_name(&value)
-        ).into()),
+        _ => return Err(MentatError::InvalidTransaction {
+            message: format!(
+                "Transaction must be a vector of entities, got {}. \
+                 Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
+                value_type_name(&value)
+            ),
+        }.into()),
     };
 
     // Allocate transaction ID
     let tx_id = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/tx')")
         .ok()
         .flatten()
-        .ok_or(":db.error/allocation-failed Failed to allocate transaction ID. \
-                Check that the 'db.part/tx' partition exists and has available IDs.")?;
+        .ok_or_else(|| MentatError::AllocationFailed {
+            partition: "db.part/tx".to_string(),
+        })?;
 
     // Create transaction record and get the timestamp as microseconds since epoch
     let tx_instant_micros = Spi::get_one_with_args::<i64>(
@@ -195,8 +182,10 @@ fn execute_transaction_body(
     )
     .ok()
     .flatten()
-    .ok_or(":db.error/tx-creation-failed Failed to create transaction record. \
-             The mentat.transactions table may be missing or the insert failed.")?;
+    .ok_or_else(|| MentatError::TransactionFailed {
+        message: "Failed to create transaction record. \
+                  The mentat.transactions table may be missing or the insert failed.".to_string(),
+    })?;
 
     // Insert :db/txInstant datom for this transaction
     let instant_bytes = tx_instant_micros.to_le_bytes().to_vec();
@@ -258,8 +247,9 @@ fn execute_transaction_body(
                     Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                         .ok()
                         .flatten()
-                        .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
-                         Check that the 'db.part/user' partition exists and has available IDs.")?
+                        .ok_or_else(|| MentatError::AllocationFailed {
+                            partition: "db.part/user".to_string(),
+                        })?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -366,12 +356,19 @@ fn execute_transaction_body(
                 // Check cardinality -- CAS on cardinality-many with multiple values is an error
                 if let Some(attr_info) = lookup_attribute_info(a) {
                     if attr_info.cardinality == "many" && current_values.len() > 1 {
-                        return Err(format!(
-                            ":db.fn/cas failed on entity {} attribute {}: \
-                             cardinality-many attribute has {} values; \
-                             CAS requires at most one existing value",
-                            e, a, current_values.len()
-                        ).into());
+                        let attr_name = crate::cache::get_cache()
+                            .get_ident(a)
+                            .unwrap_or_else(|| format!("entid:{}", a));
+                        return Err(MentatError::CasFailed {
+                            entity: e,
+                            attr: attr_name,
+                            expected: format!("at most one existing value"),
+                            actual: format!(
+                                "cardinality-many attribute has {} values; \
+                                 CAS requires at most one existing value",
+                                current_values.len()
+                            ),
+                        }.into());
                     }
                 }
 
@@ -410,10 +407,15 @@ fn execute_transaction_body(
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
-                    return Err(format!(
-                        ":db.fn/cas failed on entity {} attribute {}: expected {:?}, found {}",
-                        e, a, old_edn, current_desc
-                    ).into());
+                    let attr_name = crate::cache::get_cache()
+                        .get_ident(a)
+                        .unwrap_or_else(|| format!("entid:{}", a));
+                    return Err(MentatError::CasFailed {
+                        entity: e,
+                        attr: attr_name,
+                        expected: format!("{:?}", old_edn),
+                        actual: current_desc,
+                    }.into());
                 }
 
                 // CAS matched -- retract old value (if not nil) and assert new value
@@ -477,8 +479,9 @@ fn execute_transaction_body(
                     Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                         .ok()
                         .flatten()
-                        .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
-                         Check that the 'db.part/user' partition exists and has available IDs.")?
+                        .ok_or_else(|| MentatError::AllocationFailed {
+                            partition: "db.part/user".to_string(),
+                        })?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -587,11 +590,10 @@ fn insert_datoms(
                         }
                     }
                     _ => {
-                        return Err(format!(
-                            ":db.error/invalid-cardinality Unknown cardinality '{}' for attribute entid {}. \
-                             Valid cardinalities are 'one' and 'many'. This may indicate schema corruption.",
-                            attr_info.cardinality, datom.a
-                        ).into());
+                        return Err(MentatError::InvalidCardinality {
+                            cardinality: attr_info.cardinality.clone(),
+                            attr_entid: datom.a,
+                        }.into());
                     }
                 }
             }
@@ -792,8 +794,9 @@ fn resolve_entity_place(
                 let entid = Spi::get_one::<i64>("SELECT mentat.allocate_entid('db.part/user')")
                     .ok()
                     .flatten()
-                    .ok_or(":db.error/allocation-failed Failed to allocate entity ID. \
-                         Check that the 'db.part/user' partition exists and has available IDs.")?;
+                    .ok_or_else(|| MentatError::AllocationFailed {
+                            partition: "db.part/user".to_string(),
+                        })?;
                 tempid_map.insert(s.to_string(), entid);
                 Ok(entid)
             }
@@ -807,11 +810,10 @@ fn resolve_entity_place(
             )
             .ok()
             .flatten()
-            .ok_or_else(|| format!(
-                ":db.error/ident-not-found Entity ident '{}' not found in mentat.idents. \
-                 Ensure this ident was previously defined via mentat_transact with :db/ident.",
-                ident_str
-            ))?;
+            .ok_or_else(|| MentatError::EntityNotFound {
+                ident: ident_str.clone(),
+                message: "Ensure this ident was previously defined via mentat_transact with :db/ident.".to_string(),
+            })?;
             Ok(entid)
         }
         edn::Value::Vector(ref vec) if vec.len() == 2 => {
@@ -819,11 +821,10 @@ fn resolve_entity_place(
             // Example: [:person/email "alice@example.com"]
             match &vec[0] {
                 edn::Value::Keyword(_) => {}
-                other => return Err(format!(
-                    ":db.error/invalid-lookup-ref Lookup ref first element must be a keyword attribute, \
-                     got {}. Expected format: [:attribute-keyword value]",
-                    value_type_name(other)
-                ).into()),
+                other => return Err(MentatError::InvalidEntityPlace {
+                    got_type: value_type_name(other).to_string(),
+                    got_value: format!("Lookup ref first element must be a keyword attribute, got {}", other),
+                }.into()),
             }
 
             let a = resolve_attribute(&vec[0])?;
@@ -833,19 +834,13 @@ fn resolve_entity_place(
                 .get_ident(a)
                 .unwrap_or_else(|| format!("entid:{}", a));
             let attr_info = lookup_attribute_info(a)
-                .ok_or_else(|| format!(
-                    ":db.error/attribute-not-found Lookup ref attribute '{}' (entid {}) not found in schema. \
-                     {}",
-                    attr_ident_display, a, get_available_attributes_hint()
-                ))?;
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    error::attribute_not_found(&attr_ident_display).into()
+                })?;
             if attr_info.unique_constraint.is_none() {
-                return Err(format!(
-                    ":db.error/lookup-ref-requires-unique Lookup ref attribute '{}' does not have \
-                     a unique constraint. Only attributes with :db.unique/identity or :db.unique/value \
-                     can be used in lookup refs. Add a unique constraint to the attribute definition, e.g.:\n  \
-                     [:db/add \"attr\" :db/unique :db.unique/identity]",
-                    attr_ident_display
-                ).into());
+                return Err(MentatError::LookupRefRequiresUnique {
+                    attr: attr_ident_display,
+                }.into());
             }
 
             let (v_bytes, v_type_tag) = encode_value(&vec[1])?;
@@ -863,26 +858,22 @@ fn resolve_entity_place(
             )
             .ok()
             .flatten()
-            .ok_or_else(|| {
+            .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
                 let attr_ident_display = crate::cache::get_cache()
                     .get_ident(a)
                     .unwrap_or_else(|| format!("entid:{}", a));
-                format!(
-                    ":db.error/lookup-ref-not-found Lookup ref did not match any existing entity \
-                     for attribute '{}' with the given value. \
-                     Ensure an entity with this attribute value has been transacted.",
-                    attr_ident_display
-                )
+                MentatError::LookupRefNotFound {
+                    attr: attr_ident_display,
+                    message: "Ensure an entity with this attribute value has been transacted.".to_string(),
+                }.into()
             })?;
 
             Ok(eid)
         }
-        other => Err(format!(
-            ":db.error/invalid-entity-place Invalid entity place: got {} (value: {}). \
-             Entity position must be an integer (entity ID), string (tempid), \
-             keyword (ident), or 2-element vector (lookup ref like [:attr value]).",
-            value_type_name(other), other
-        ).into()),
+        other => Err(MentatError::InvalidEntityPlace {
+            got_type: value_type_name(other).to_string(),
+            got_value: other.to_string(),
+        }.into()),
     }
 }
 
@@ -895,19 +886,14 @@ fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Erro
             let ident_str = format!("{}", kw);
             crate::cache::get_cache()
                 .resolve_ident(&ident_str)
-                .ok_or_else(|| {
-                    let hint = get_available_attributes_hint();
-                    format!(
-                        ":db.error/attribute-not-found Attribute '{}' not found in schema. {}",
-                        ident_str, hint
-                    ).into()
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    error::attribute_not_found(&ident_str).into()
                 })
         }
-        other => Err(format!(
-            ":db.error/invalid-attribute Invalid attribute: got {} (value: {}). \
-             Attribute position must be an integer (entid) or keyword (e.g. :person/name).",
-            value_type_name(other), other
-        ).into()),
+        other => Err(MentatError::InvalidAttribute {
+            got_type: value_type_name(other).to_string(),
+            got_value: other.to_string(),
+        }.into()),
     }
 }
 
@@ -956,12 +942,10 @@ fn encode_value(
             };
             Ok((s.as_bytes().to_vec(), 8)) // keyword = 8
         }
-        other => Err(format!(
-            ":db.error/unsupported-value-type Cannot encode value of type {} (value: {}). \
-             Supported types: boolean, integer (long), double (float), instant, uuid, string, keyword. \
-             For ref values, use an entity ID, tempid string, or keyword ident.",
-            value_type_name(other), other
-        ).into()),
+        other => Err(MentatError::UnsupportedValueType {
+            got_type: value_type_name(other).to_string(),
+            got_value: other.to_string(),
+        }.into()),
     }
 }
 
@@ -1003,18 +987,11 @@ fn validate_datom_constraints(
     all_pending: &[PendingDatom],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let attr_info = lookup_attribute_info(datom.a)
-        .ok_or_else(|| {
+        .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
             let ident_name = crate::cache::get_cache()
                 .get_ident(datom.a)
                 .unwrap_or_else(|| format!("entid:{}", datom.a));
-            let hint = get_available_attributes_hint();
-            format!(
-                ":db.error/attribute-not-found Attribute {} (entid {}) not found in schema. \
-                 {} \
-                 If this is a new attribute, define it first with :db/ident, :db/valueType, \
-                 and :db/cardinality in the same or prior transaction.",
-                ident_name, datom.a, hint
-            )
+            error::attribute_not_found(&ident_name).into()
         })?;
 
     // 1. Type validation
@@ -1024,14 +1001,13 @@ fn validate_datom_constraints(
             .get_ident(datom.a)
             .unwrap_or_else(|| format!("entid:{}", datom.a));
         let got_type_name = tag_to_value_type_name(datom.v_type_tag);
-        return Err(format!(
-            ":db.error/wrong-type-for-attribute Type mismatch for attribute '{}': \
-             schema declares :db/valueType :db.type/{} (tag {}), but the asserted value \
-             has type {} (tag {}). Ensure the value matches the attribute's declared type.",
-            ident_name, attr_info.value_type, expected_type_tag,
-            got_type_name, datom.v_type_tag
-        )
-        .into());
+        return Err(MentatError::TypeMismatch {
+            attr: ident_name,
+            expected: attr_info.value_type.clone(),
+            got: got_type_name.to_string(),
+            expected_tag: expected_type_tag,
+            got_tag: datom.v_type_tag,
+        }.into());
     }
 
     // 2. Cardinality validation
@@ -1047,14 +1023,11 @@ fn validate_datom_constraints(
                 let ident_name = crate::cache::get_cache()
                     .get_ident(datom.a)
                     .unwrap_or_else(|| format!("entid:{}", datom.a));
-                return Err(format!(
-                    ":db.error/cardinality-violation Attribute '{}' has :db/cardinality :db.cardinality/one \
-                     but this transaction contains {} assertions for entity {}. \
-                     Cardinality-one attributes can only have a single value per entity. \
-                     Either remove duplicate assertions or change the attribute to :db.cardinality/many.",
-                    ident_name, count_in_tx, datom.e
-                )
-                .into());
+                return Err(MentatError::CardinalityViolation {
+                    attr: ident_name,
+                    entity: datom.e,
+                    count: count_in_tx,
+                }.into());
             }
 
             // Note: existing values for cardinality-one attributes are handled by
@@ -1066,12 +1039,10 @@ fn validate_datom_constraints(
             // No validation needed - just add new datoms without retracting existing ones.
         }
         _ => {
-            return Err(format!(
-                ":db.error/invalid-cardinality Unknown cardinality '{}' for attribute entid {}. \
-                 Valid cardinalities are 'one' and 'many'. This may indicate schema corruption.",
-                attr_info.cardinality, datom.a
-            )
-            .into());
+            return Err(MentatError::InvalidCardinality {
+                cardinality: attr_info.cardinality.clone(),
+                attr_entid: datom.a,
+            }.into());
         }
     }
 
@@ -1087,13 +1058,12 @@ fn validate_datom_constraints(
             let ident_name = crate::cache::get_cache()
                 .get_ident(datom.a)
                 .unwrap_or_else(|| format!("entid:{}", datom.a));
-            return Err(format!(
-                ":db.error/unique-conflict Unique constraint violation for attribute '{}' \
-                 (unique type: :db.unique/{}). This transaction asserts the same value for \
-                 {} different entities. Each value must belong to exactly one entity.",
-                ident_name, unique_type, dups_in_tx + 1
-            )
-            .into());
+            return Err(MentatError::UniqueConstraintViolation {
+                attr: ident_name,
+                unique_type: unique_type.clone(),
+                existing_eid: datom.e,
+                new_eid: datom.e,
+            }.into());
         }
 
         // Check existing datoms in database (use advisory lock to prevent races)
@@ -1123,14 +1093,12 @@ fn validate_datom_constraints(
                 let ident_name = crate::cache::get_cache()
                     .get_ident(datom.a)
                     .unwrap_or_else(|| format!("entid:{}", datom.a));
-                return Err(format!(
-                    ":db.error/unique-conflict Unique constraint violation for attribute '{}' \
-                     (unique type: :db.unique/{}). The asserted value already exists on entity {} \
-                     but is being asserted for entity {}. \
-                     To reassign the value, first retract it from entity {}.",
-                    ident_name, unique_type, existing_e, datom.e, existing_e
-                )
-                .into());
+                return Err(MentatError::UniqueConstraintViolation {
+                    attr: ident_name,
+                    unique_type: unique_type.clone(),
+                    existing_eid: existing_e,
+                    new_eid: datom.e,
+                }.into());
             }
         }
     }

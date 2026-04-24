@@ -1,13 +1,14 @@
 {
   "permissions": {
+    "allow": [
+      "WebFetch(domain:static.crates.io)",
+      "WebFetch(domain:index.crates.io)",
+      "Bash(cargo outdated:*)"
+    ],
     "additionalDirectories": [
       "/tmp",
       "/home/gburd/.cargo",
       "/home/gburd/.pgrx"
-    ],
-    "allow": [
-      "WebFetch(domain:static.crates.io)",
-      "WebFetch(domain:index.crates.io)"
     ]
   },
   "sandbox": {

@@ -126,6 +126,7 @@ extension_sql!(
 mod cache;
 #[cfg(any(test, feature = "pg_test"))]
 mod cache_tests;
+pub mod error;
 mod functions;
 mod operators;
 mod planner;
@@ -2454,6 +2455,221 @@ mod tests {
             .expect("Age should be integer");
 
         assert_eq!(age, 30, "Lookup ref should have updated Alice's age to 30");
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_in_map_entity() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with unique email attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+            {:db/ident :person/age
+             :db/valueType :db.type/long
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create an entity with a unique email
+        let data_tx = r#"[
+            {:db/id "alice"
+             :person/name "Alice"
+             :person/email "alice@example.com"
+             :person/age 25}
+        ]"#;
+
+        let tx_result =
+            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+                .expect("Data transaction failed")
+                .expect("Transaction returned NULL");
+
+        let tx_json: serde_json::Value =
+            serde_json::from_str(&tx_result).expect("Failed to parse tx result");
+        let alice_eid = tx_json["tempids"]["alice"]
+            .as_i64()
+            .expect("Missing alice tempid");
+
+        // Use lookup ref in map entity form with :db/id
+        let update_tx = r#"[
+            {:db/id [:person/email "alice@example.com"]
+             :person/age 31}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(update_tx)],
+        )
+        .expect("Map-form lookup ref transaction failed");
+
+        // Verify the update happened on the correct entity
+        let query_result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query(
+                    '[:find ?age .
+                      :where
+                      [{} :person/age ?age]]'::TEXT,
+                    '{{}}' ::jsonb
+                )::TEXT",
+            alice_eid
+        ))
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_result).expect("Failed to parse query result");
+        let age = query_json["result"]
+            .as_i64()
+            .expect("Age should be integer");
+
+        assert_eq!(age, 31, "Map-form lookup ref should have updated Alice's age to 31");
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_as_ref_value() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with unique email and ref attribute
+        let schema_tx = r#"[
+            {:db/ident :person/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+            {:db/ident :person/email
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/identity}
+            {:db/ident :person/friend
+             :db/valueType :db.type/ref
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create Alice
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(r#"[
+                {:db/id "alice"
+                 :person/name "Alice"
+                 :person/email "alice@example.com"}
+            ]"#)],
+        )
+        .expect("Alice transaction failed");
+
+        // Create Bob with :person/friend pointing to Alice via lookup ref
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(r#"[
+                {:db/id "bob"
+                 :person/name "Bob"
+                 :person/email "bob@example.com"
+                 :person/friend [:person/email "alice@example.com"]}
+            ]"#)],
+        )
+        .expect("Bob transaction with lookup ref as ref value failed");
+
+        // Verify Bob's friend is Alice by querying for Alice's name via the ref
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?friend-name .
+                  :where [?bob :person/name \"Bob\"]
+                         [?bob :person/friend ?friend]
+                         [?friend :person/name ?friend-name]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse query result");
+        let friend_name = json["result"].as_str().expect("Expected string result");
+
+        assert_eq!(
+            friend_name, "Alice",
+            "Lookup ref as ref value should resolve to Alice"
+        );
+    }
+
+    #[pg_test]
+    fn test_lookup_ref_with_unique_value() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+
+        // Define schema with :db.unique/value (not identity)
+        let schema_tx = r#"[
+            {:db/ident :product/sku
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one
+             :db/unique :db.unique/value}
+            {:db/ident :product/name
+             :db/valueType :db.type/string
+             :db/cardinality :db.cardinality/one}
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(schema_tx)],
+        )
+        .expect("Schema transaction failed");
+
+        // Create a product
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(r#"[
+                {:db/id "widget"
+                 :product/sku "WIDGET-001"
+                 :product/name "Widget"}
+            ]"#)],
+        )
+        .expect("Product transaction failed");
+
+        // Use lookup ref with :db.unique/value attribute to update the product name
+        let update_tx = r#"[
+            [:db/add [:product/sku "WIDGET-001"] :product/name "Super Widget"]
+        ]"#;
+
+        Spi::run_with_args(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(update_tx)],
+        )
+        .expect("Lookup ref with unique/value should succeed");
+
+        // Verify the update
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name .
+                  :where [?p :product/sku \"WIDGET-001\"]
+                         [?p :product/name ?name]]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value =
+            serde_json::from_str(&result).expect("Failed to parse query result");
+        let name = json["result"].as_str().expect("Expected string result");
+
+        assert_eq!(
+            name, "Super Widget",
+            "Lookup ref with :db.unique/value should resolve correctly"
+        );
     }
 
     #[pg_test]

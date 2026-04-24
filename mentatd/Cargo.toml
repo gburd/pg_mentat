@@ -19,6 +19,7 @@ path = "src/main.rs"
 # HTTP server
 axum = "0.8.2"
 tokio = { version = "1.45.0", features = ["full"] }
+tokio-stream = "0.1"
 tower = "0.5.3"
 tower-http = { version = "0.6.2", features = ["trace", "timeout"] }
 
@@ -40,6 +41,9 @@ lru = "0.12"
 # Metrics
 prometheus = "0.13"
 lazy_static = "1.5"
+
+# Streaming
+async-stream = "0.3"
 
 # Utilities
 thiserror = "2.0.18"

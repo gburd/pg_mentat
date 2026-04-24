@@ -7,6 +7,9 @@
 #   - Latency:   p99 < 100ms, p50 < 50ms
 #   - Error rate: < 0.1%
 #   - Memory:    Stable (no leaks)
+#   - Write throughput: >= 10K datoms/sec
+#   - Simple queries:   < 50ms p50
+#   - Complex queries:  < 500ms p99
 #
 # Usage:
 #   ./benchmarks/load_test.sh [scenario] [options]
@@ -26,6 +29,7 @@
 #   --concurrency N    Number of concurrent workers (default: 50)
 #   --output DIR       Results output directory (default: benchmarks/results)
 #   --db-name NAME     Database name to test against (default: mentat)
+#   --k6               Use k6 for load testing (requires k6 installed)
 #   --verbose          Enable verbose output
 #   --no-setup         Skip schema/data setup
 #   --dry-run          Print what would be run without executing
@@ -46,6 +50,7 @@ DB_NAME="mentat"
 VERBOSE=false
 NO_SETUP=false
 DRY_RUN=false
+USE_K6=false
 SCENARIO="all"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 RUN_DIR=""
@@ -87,6 +92,7 @@ parse_args() {
             --concurrency) CONCURRENCY="$2"; shift 2 ;;
             --output)     OUTPUT_DIR="$2"; shift 2 ;;
             --db-name)    DB_NAME="$2"; shift 2 ;;
+            --k6)         USE_K6=true; shift ;;
             --verbose)    VERBOSE=true; shift ;;
             --no-setup)   NO_SETUP=true; shift ;;
             --dry-run)    DRY_RUN=true; shift ;;
@@ -610,6 +616,168 @@ scenario_mixed() {
     analyze_results "$datafile" "mixed_workload" "$RUN_DIR/mixed_report.txt"
 }
 
+# ── k6 runner ──────────────────────────────────────────────────────
+# Runs a k6 scenario .js file with appropriate environment variables
+run_k6_scenario() {
+    local scenario_name="$1"
+    local js_file="$2"
+
+    if [[ ! -f "$js_file" ]]; then
+        log_fail "k6 scenario file not found: $js_file"
+        return 1
+    fi
+
+    log_info "Running k6 scenario: $scenario_name ($js_file)"
+
+    local k6_json="$RUN_DIR/${scenario_name}_k6.json"
+    local k6_summary="$RUN_DIR/${scenario_name}_k6_summary.json"
+
+    k6 run \
+        --out "json=${k6_json}" \
+        --summary-export="${k6_summary}" \
+        -e "BASE_URL=${BASE_URL}" \
+        -e "DURATION=${DURATION}s" \
+        -e "TARGET_TPS=${TARGET_TPS}" \
+        -e "CONCURRENCY=${CONCURRENCY}" \
+        "$js_file" 2>&1 | tee "$RUN_DIR/${scenario_name}_k6.log"
+
+    local exit_code=${PIPESTATUS[0]}
+
+    if [[ $exit_code -eq 0 ]]; then
+        log_ok "k6 scenario $scenario_name: PASS (thresholds met)"
+    else
+        log_fail "k6 scenario $scenario_name: FAIL (thresholds breached or error)"
+    fi
+
+    # Generate a report from the k6 summary JSON
+    if [[ -f "$k6_summary" ]]; then
+        generate_k6_report "$scenario_name" "$k6_summary" "$RUN_DIR/${scenario_name}_report.txt"
+    fi
+
+    return $exit_code
+}
+
+generate_k6_report() {
+    local scenario_name="$1"
+    local summary_json="$2"
+    local report_file="$3"
+
+    # Use python to parse k6 summary JSON and produce a human-readable report
+    python3 - "$summary_json" "$scenario_name" "$report_file" "$TARGET_TPS" "$TARGET_P99_MS" "$TARGET_P50_MS" "$TARGET_ERROR_RATE" <<'PYEOF'
+import json, sys
+
+summary_file = sys.argv[1]
+scenario = sys.argv[2]
+report_file = sys.argv[3]
+target_tps = float(sys.argv[4])
+target_p99 = float(sys.argv[5])
+target_p50 = float(sys.argv[6])
+target_err = float(sys.argv[7])
+
+with open(summary_file) as f:
+    data = json.load(f)
+
+metrics = data.get("metrics", {})
+dur = metrics.get("http_req_duration", {})
+reqs = metrics.get("http_reqs", {})
+fails = metrics.get("http_req_failed", {})
+
+total = reqs.get("count", 0)
+rate = reqs.get("rate", 0)
+p50 = dur.get("med", 0)
+p95 = dur.get("p(95)", 0)
+p99 = dur.get("p(99)", 0)
+avg = dur.get("avg", 0)
+min_lat = dur.get("min", 0)
+max_lat = dur.get("max", 0)
+err_rate = fails.get("rate", 0) if fails else 0
+
+lines = []
+lines.append("=" * 55)
+lines.append(f"  Load Test Report: {scenario} (k6)")
+lines.append("=" * 55)
+lines.append("")
+lines.append("Results:")
+lines.append(f"  Total requests: {total}")
+lines.append(f"  Error rate:     {err_rate:.4f}")
+lines.append(f"  Throughput:     {rate:.1f} TPS")
+lines.append("")
+lines.append("Latency (ms):")
+lines.append(f"  Min:  {min_lat:.2f}")
+lines.append(f"  Avg:  {avg:.2f}")
+lines.append(f"  p50:  {p50:.2f}")
+lines.append(f"  p95:  {p95:.2f}")
+lines.append(f"  p99:  {p99:.2f}")
+lines.append(f"  Max:  {max_lat:.2f}")
+lines.append("")
+lines.append("Target Validation:")
+
+all_pass = True
+if rate >= target_tps:
+    lines.append(f"  [PASS] Throughput:  {rate:.1f} TPS >= {target_tps:.0f} TPS")
+else:
+    lines.append(f"  [FAIL] Throughput:  {rate:.1f} TPS < {target_tps:.0f} TPS")
+    all_pass = False
+
+if p99 < target_p99:
+    lines.append(f"  [PASS] p99 Latency: {p99:.1f}ms < {target_p99:.0f}ms")
+else:
+    lines.append(f"  [FAIL] p99 Latency: {p99:.1f}ms >= {target_p99:.0f}ms")
+    all_pass = False
+
+if p50 < target_p50:
+    lines.append(f"  [PASS] p50 Latency: {p50:.1f}ms < {target_p50:.0f}ms")
+else:
+    lines.append(f"  [FAIL] p50 Latency: {p50:.1f}ms >= {target_p50:.0f}ms")
+    all_pass = False
+
+if err_rate < target_err:
+    lines.append(f"  [PASS] Error rate:  {err_rate:.4f} < {target_err}")
+else:
+    lines.append(f"  [FAIL] Error rate:  {err_rate:.4f} >= {target_err}")
+    all_pass = False
+
+lines.append("")
+lines.append(f"Overall: {'PASS' if all_pass else 'FAIL'}")
+
+report = "\n".join(lines)
+with open(report_file, "w") as f:
+    f.write(report)
+print(report)
+PYEOF
+}
+
+# ── k6 scenario dispatch ──────────────────────────────────────────
+run_k6_scenarios() {
+    local scenarios_dir="$SCRIPT_DIR/scenarios"
+    local any_fail=false
+
+    case "$SCENARIO" in
+        all)
+            run_k6_scenario "steady_state" "$scenarios_dir/steady_state.js" || any_fail=true
+            echo ""
+            run_k6_scenario "spike" "$scenarios_dir/spike.js" || any_fail=true
+            echo ""
+            run_k6_scenario "large_queries" "$scenarios_dir/large_queries.js" || any_fail=true
+            echo ""
+            run_k6_scenario "mixed_workload" "$scenarios_dir/mixed_workload.js" || any_fail=true
+            ;;
+        steady) run_k6_scenario "steady_state" "$scenarios_dir/steady_state.js" || any_fail=true ;;
+        spike)  run_k6_scenario "spike" "$scenarios_dir/spike.js" || any_fail=true ;;
+        large)  run_k6_scenario "large_queries" "$scenarios_dir/large_queries.js" || any_fail=true ;;
+        mixed)  run_k6_scenario "mixed_workload" "$scenarios_dir/mixed_workload.js" || any_fail=true ;;
+        health)
+            log_warn "No k6 health scenario; falling back to curl-based health test"
+            scenario_health
+            ;;
+    esac
+
+    if $any_fail; then
+        return 1
+    fi
+    return 0
+}
+
 # ── Generate combined summary ───────────────────────────────────────
 generate_summary() {
     local summary_file="$RUN_DIR/summary.txt"
@@ -671,41 +839,56 @@ generate_summary() {
 main() {
     parse_args "$@"
 
+    local mode="curl"
+    if $USE_K6; then
+        if command -v k6 &>/dev/null; then
+            mode="k6"
+        else
+            log_warn "k6 not found; falling back to curl-based tests"
+            log_info "Install k6: https://grafana.com/docs/k6/latest/set-up/install-k6/"
+        fi
+    fi
+
     echo ""
-    log_info "mentatd Load Test Suite"
+    log_info "mentatd Load Test Suite (mode: $mode)"
     log_info "Scenario: $SCENARIO | Duration: ${DURATION}s | Concurrency: $CONCURRENCY"
     echo ""
 
     if $DRY_RUN; then
-        log_info "[DRY RUN] Would run scenario '$SCENARIO' against ${BASE_URL}"
+        log_info "[DRY RUN] Would run scenario '$SCENARIO' against ${BASE_URL} (mode: $mode)"
         log_info "[DRY RUN] Results would be written to $RUN_DIR"
         exit 0
     fi
 
     preflight
 
-    if [[ "$SCENARIO" != "health" ]]; then
-        setup_test_data
-    fi
+    if [[ "$mode" == "k6" ]]; then
+        # k6 scenarios handle their own setup in the setup() function
+        run_k6_scenarios
+    else
+        if [[ "$SCENARIO" != "health" ]]; then
+            setup_test_data
+        fi
 
-    case "$SCENARIO" in
-        all)
-            scenario_health
-            echo ""
-            scenario_steady
-            echo ""
-            scenario_spike
-            echo ""
-            scenario_large
-            echo ""
-            scenario_mixed
-            ;;
-        health)  scenario_health ;;
-        steady)  scenario_steady ;;
-        spike)   scenario_spike ;;
-        large)   scenario_large ;;
-        mixed)   scenario_mixed ;;
-    esac
+        case "$SCENARIO" in
+            all)
+                scenario_health
+                echo ""
+                scenario_steady
+                echo ""
+                scenario_spike
+                echo ""
+                scenario_large
+                echo ""
+                scenario_mixed
+                ;;
+            health)  scenario_health ;;
+            steady)  scenario_steady ;;
+            spike)   scenario_spike ;;
+            large)   scenario_large ;;
+            mixed)   scenario_mixed ;;
+        esac
+    fi
 
     echo ""
     generate_summary

@@ -83,7 +83,6 @@ impl QueryCache {
     }
 
     /// Return the number of entries currently in the cache.
-    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.cache.lock().map_or(0, |c| c.len())
     }

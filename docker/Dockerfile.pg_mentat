@@ -1,0 +1,66 @@
+# Dockerfile for pg_mentat: PostgreSQL 16 with the Mentat Datalog extension
+#
+# Build context must be the repository root:
+#   docker build -f docker/Dockerfile.pg_mentat -t pg_mentat .
+#
+# Multi-stage build:
+#   1. builder  -- compiles Rust + pgrx extension against PG16 headers
+#   2. runtime  -- clean postgres:16 image with only the extension artefacts
+
+# =============================================================================
+# Stage 1: Build the extension
+# =============================================================================
+FROM postgres:16-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    gcc g++ make pkg-config \
+    libssl-dev libclang-dev llvm-dev \
+    postgresql-server-dev-16 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust (version pinned to match rust-toolchain)
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:${PATH}"
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --default-toolchain 1.90.0
+
+# Install cargo-pgrx matching the version in pg_mentat/Cargo.toml
+RUN cargo install --locked cargo-pgrx --version '~0.17'
+
+# Initialize pgrx for the system PG16 installation
+RUN cargo pgrx init --pg16 /usr/bin/pg_config
+
+# Copy the full source tree and build the extension
+COPY . /build/pg_mentat
+WORKDIR /build/pg_mentat/pg_mentat
+
+RUN cargo pgrx install --release --pg-config /usr/bin/pg_config
+
+# =============================================================================
+# Stage 2: Runtime image -- only PostgreSQL + compiled extension
+# =============================================================================
+FROM postgres:16-bookworm
+
+COPY --from=builder /usr/lib/postgresql/16/lib/pg_mentat.so \
+                    /usr/lib/postgresql/16/lib/pg_mentat.so
+COPY --from=builder /usr/share/postgresql/16/extension/pg_mentat.control \
+                    /usr/share/postgresql/16/extension/pg_mentat.control
+COPY --from=builder /usr/share/postgresql/16/extension/pg_mentat--0.1.0.sql \
+                    /usr/share/postgresql/16/extension/pg_mentat--0.1.0.sql
+
+# Bootstrap script: creates extension + demo schema on first start
+COPY demo.sql /docker-entrypoint-initdb.d/00_demo.sql
+
+# Tune shared_preload_libraries if needed (uncomment to preload)
+# RUN echo "shared_preload_libraries = 'pg_mentat'" >> /usr/share/postgresql/postgresql.conf.sample
+
+EXPOSE 5432
+
+# Health-check: verifies PostgreSQL is accepting connections
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+    CMD pg_isready -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-postgres}" || exit 1
+
+ENV POSTGRES_HOST_AUTH_METHOD=trust

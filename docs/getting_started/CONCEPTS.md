@@ -1,244 +1,160 @@
 # pg_mentat Core Concepts
 
-Understanding the fundamental concepts behind pg_mentat will help you use it effectively.
+This document explains the ideas behind pg_mentat: why data is stored as datoms, how Datalog queries work, what schema evolution looks like, and when to use Datalog versus SQL.
 
 ## The EAVT Model
 
-pg_mentat stores data using the **Entity-Attribute-Value-Time** (EAVT) model, inspired by Datomic.
+### Datoms
 
-### What is EAVT?
+pg_mentat stores every piece of data as a **datom** -- an atomic fact with five components:
 
-Instead of traditional tables with fixed columns, every piece of data is stored as a **datom** (atomic fact) with four components:
+| Component | Meaning | Type |
+|-----------|---------|------|
+| **E** (Entity) | Which thing | 64-bit integer |
+| **A** (Attribute) | Which property | 64-bit integer (resolves to keyword like `:person/name`) |
+| **V** (Value) | What value | Typed: string, long, double, boolean, instant, ref, keyword, uuid, bytes |
+| **Tx** (Transaction) | When asserted | 64-bit transaction ID |
+| **Added** | Assertion or retraction | Boolean |
 
-- **E**ntity: Which thing (entity ID as integer)
-- **A**ttribute: Which property (attribute ID as integer)
-- **V**alue: What value (typed data: string, number, ref, etc.)
-- **T**ime: When it was asserted (transaction ID)
+A single datom is equivalent to the statement: "In transaction Tx, we assert (or retract) that entity E has value V for attribute A."
 
-Plus a fifth component:
-- **added**: Boolean flag (true = assertion, false = retraction)
+### Example: Relational vs EAVT
 
-### Example
+A row in a relational table:
 
-Traditional relational model:
+| person_id | name | age | email |
+|-----------|------|-----|-------|
+| 42 | Alice | 30 | alice@example.com |
 
-| person_id | name  | age | email |
-|-----------|-------|-----|-------|
-| 1         | Alice | 30  | a@e.com |
+The same data as datoms:
 
-EAVT model:
+| E | A | V | Tx | Added |
+|---|---|---|-----|-------|
+| 42 | `:person/name` | "Alice" | 1000001 | true |
+| 42 | `:person/age` | 30 | 1000001 | true |
+| 42 | `:person/email` | "alice@example.com" | 1000001 | true |
 
-| E (entity) | A (attribute) | V (value) | T (tx) | added |
-|------------|---------------|-----------|--------|-------|
-| 1          | :person/name  | "Alice"   | 1000   | true  |
-| 1          | :person/age   | 30        | 1000   | true  |
-| 1          | :person/email | "a@e.com" | 1000   | true  |
+When Alice turns 31:
 
-### Benefits of EAVT
+| E | A | V | Tx | Added |
+|---|---|---|-----|-------|
+| 42 | `:person/age` | 30 | 1000002 | **false** |
+| 42 | `:person/age` | 31 | 1000002 | true |
 
-1. **Schema flexibility** - Add new attributes without ALTER TABLE
-2. **Sparse data** - No NULL columns, only store what exists
-3. **Full history** - Every change is a new datom, nothing is deleted
-4. **Time travel** - Query data as it existed at any point in time
-5. **Audit trail** - Complete history of all changes
+The old value is retracted (added=false) and the new value is asserted (added=true). Neither row is deleted. The complete history is preserved.
 
-## Schema as Data
+### Storage in PostgreSQL
 
-In pg_mentat, schema definitions are just data (datoms) like everything else.
-
-### Schema Attributes
-
-When you define a new attribute:
+Datoms are stored in `mentat.datoms`:
 
 ```sql
-{:db/ident :person/name
- :db/valueType :db.type/string
- :db/cardinality :db.cardinality/one}
+CREATE TABLE mentat.datoms (
+    e         BIGINT   NOT NULL,  -- entity ID
+    a         BIGINT   NOT NULL,  -- attribute ID
+    v         BYTEA    NOT NULL,  -- value (binary-encoded)
+    value_type_tag SMALLINT NOT NULL,  -- type discriminator
+    tx        BIGINT   NOT NULL,  -- transaction ID
+    added     BOOLEAN  NOT NULL DEFAULT TRUE
+);
 ```
 
-This creates an entity with attributes describing the schema:
+Four covering indexes support different access patterns:
 
-```
-Entity 100 (the :person/name attribute definition):
-  [100 :db/ident :person/name]
-  [100 :db/valueType :db.type/string]
-  [100 :db/cardinality :db.cardinality/one]
-```
+| Index | Columns | Use Case |
+|-------|---------|----------|
+| EAVT | `(e, a, v, tx)` | "What do I know about entity 42?" |
+| AEVT | `(a, e, v, tx)` | "Which entities have a `:person/name`?" |
+| AVET | `(a, v, e, tx)` | "Which entity has email 'alice@example.com'?" |
+| VAET | `(v, a, e, tx)` | "Which entities reference entity 42?" (refs only) |
 
-### Value Types
+### Why EAVT?
 
-pg_mentat supports these value types:
-
-| Type | Description | Example |
-|------|-------------|---------|
-| `:db.type/string` | Text | `"Hello"` |
-| `:db.type/long` | 64-bit integer | `42`, `-1000` |
-| `:db.type/double` | 64-bit float | `3.14`, `-2.5` |
-| `:db.type/boolean` | True/false | `true`, `false` |
-| `:db.type/instant` | Timestamp | `#inst "2024-01-15T10:30:00Z"` |
-| `:db.type/keyword` | EDN keyword | `:status/active` |
-| `:db.type/uuid` | UUID | `#uuid "550e8400-e29b-41d4-a716-446655440000"` |
-| `:db.type/bytes` | Binary data | `#bytes [0x01 0x02 0x03]` |
-| `:db.type/ref` | Reference to another entity | Entity ID |
-
-### Cardinality
-
-Attributes have cardinality specifying how many values they can hold:
-
-- **`:db.cardinality/one`** - Single value (like a column in SQL)
-  - Example: `:person/name`, `:person/age`
-
-- **`:db.cardinality/many`** - Multiple values (like a one-to-many relationship)
-  - Example: `:person/hobbies`, `:person/friend`
-
-### Unique Constraints
-
-Attributes can have uniqueness constraints:
-
-- **`:db.unique/value`** - Value must be unique (like UNIQUE constraint in SQL)
-  - Example: `:user/username`
-  - Upsert: No (throws error on duplicate)
-
-- **`:db.unique/identity`** - Value must be unique AND enables upsert
-  - Example: `:person/email`
-  - Upsert: Yes (automatically updates existing entity)
-
-### Indexes
-
-By default, pg_mentat creates indexes on:
-- EAVT (entity-attribute-value-time)
-- AEVT (attribute-entity-value-time)
-- AVET (attribute-value-entity-time) - for attributes marked with `:db/index true`
-
-You can add custom indexes with:
-
-```sql
-{:db/ident :person/email
- :db/valueType :db.type/string
- :db/cardinality :db.cardinality/one
- :db/index true}  -- Creates AVET index for fast lookups by value
-```
+1. **Schema flexibility** -- Add new attributes at any time. No ALTER TABLE, no migrations, no downtime.
+2. **Sparse data** -- Entities only have the attributes they need. No NULLs.
+3. **Complete history** -- Every change is recorded. Nothing is overwritten or deleted.
+4. **Time travel** -- Query the database as it existed at any past transaction.
+5. **Audit trail** -- Know who changed what and when, built into the data model.
+6. **Graph traversal** -- References between entities are first-class, not bolted on with JOIN tables.
 
 ## Datalog Query Language
 
-pg_mentat uses Datalog, a declarative logic-based query language.
+pg_mentat uses Datalog, a declarative logic programming language for querying data.
 
-### Basic Structure
+### Structure of a Query
 
-```clojure
-[:find ?variables-to-return
- :where
- [patterns-to-match]]
+```
+[:find  <what to return>
+ :in    <input parameters>       -- optional
+ :where <patterns to match>]
 ```
 
-### Pattern Matching
+### Patterns
 
-The `:where` clause contains **patterns** that match datoms:
+A pattern matches datoms in the database:
 
 ```clojure
 [?e :person/name ?name]
 ```
 
-This pattern matches all datoms where:
-- `?e` = any entity (variable)
-- `:person/name` = specific attribute (constant)
-- `?name` = any value (variable)
+This reads: "Find datoms where the attribute is `:person/name`, binding the entity to `?e` and the value to `?name`."
 
-### Variables vs Constants
+- **Variables** start with `?` -- they bind to values and can be reused across patterns.
+- **Constants** are literal values -- they must match exactly.
+- **`_`** is a wildcard -- matches anything, binds to nothing.
 
-- **Variables** start with `?` (e.g., `?e`, `?name`, `?age`)
-  - Bind to values during pattern matching
-  - Can be reused across patterns (creates joins)
+A pattern has up to 5 positions: `[entity attribute value transaction added]`.
 
-- **Constants** are literal values (e.g., `:person/name`, `"Alice"`, `30`)
-  - Must match exactly
+### Implicit Joins
 
-### Pattern Positions
-
-A pattern has up to 5 positions: `[E A V T added]`
-
-Common uses:
-```clojure
-[?e :person/name ?name]        ; Find all names
-[?e :person/name "Alice"]      ; Find entities named "Alice"
-[10001 ?a ?v]                  ; Find all attributes/values for entity 10001
-[?e ?a ?v]                     ; Find ALL datoms (usually not what you want!)
-```
-
-### Joins
-
-Variables used in multiple patterns create implicit joins:
+When the same variable appears in multiple patterns, it creates a join:
 
 ```clojure
-[:find ?person-name ?friend-name
+[:find ?name ?email
  :where
- [?person :person/name ?person-name]      ; Find person's name
- [?person :person/friend ?friend-entity]  ; Find person's friend
- [?friend-entity :person/name ?friend-name]] ; Find friend's name
+ [?e :person/name ?name]     ;; pattern 1: bind ?e and ?name
+ [?e :person/email ?email]]  ;; pattern 2: same ?e, bind ?email
 ```
 
-This is like SQL:
+Because `?e` appears in both patterns, only datoms where the entity ID matches in both patterns are returned. This is equivalent to:
+
 ```sql
-SELECT p1.name, p2.name
-FROM person p1
-JOIN person_friends pf ON p1.id = pf.person_id
-JOIN person p2 ON pf.friend_id = p2.id
+SELECT d1.v AS name, d2.v AS email
+FROM mentat.datoms d1
+JOIN mentat.datoms d2 ON d1.e = d2.e
+WHERE d1.a = resolve(':person/name')
+  AND d2.a = resolve(':person/email');
 ```
+
+The Datalog version is shorter and the join is implicit -- no ON clause needed.
 
 ### Predicates
 
-Filter results with predicate expressions:
+Filter results with expressions:
 
 ```clojure
-[:find ?name
+[:find ?name ?age
  :where
  [?e :person/name ?name]
  [?e :person/age ?age]
- [(> ?age 25)]]           ; Only people older than 25
+ [(> ?age 25)]]
 ```
 
-Supported predicates:
-- Comparison: `<`, `>`, `<=`, `>=`, `=`, `!=`
-- Arithmetic: `+`, `-`, `*`, `/`
-- String: `str/starts-with?`, `str/ends-with?`, `str/includes?`
-- Logic: `and`, `or`, `not`
-
-### Aggregates
-
-Aggregate functions in `:find` clause:
-
-```clojure
-[:find (count ?e) .           ; Count entities
- :where [?e :person/name]]
-
-[:find (avg ?age) .           ; Average age
- :where [?e :person/age ?age]]
-
-[:find ?age (count ?e)        ; Count by age (GROUP BY)
- :where [?e :person/age ?age]]
-```
-
-Aggregates:
-- `count` - Count values
-- `sum` - Sum numeric values
-- `avg` - Average
-- `min` - Minimum
-- `max` - Maximum
+Supported predicates: `<`, `>`, `<=`, `>=`, `=`, `!=`.
 
 ### Find Specifications
 
-Different ways to return results:
+The `:find` clause controls the shape of the result:
 
-| Find Spec | Returns | Example |
-|-----------|---------|---------|
-| `[:find ?a ?b]` | Collection of tuples | `[[1 "Alice"] [2 "Bob"]]` |
-| `[:find [?a ...]]` | Collection of scalars | `[1 2 3]` |
-| `[:find ?a .]` | Single scalar | `42` |
-| `[:find [?a ?b]]` | Single tuple | `[1 "Alice"]` |
+| Spec | Syntax | Returns |
+|------|--------|---------|
+| Relation | `[:find ?a ?b ...]` | Collection of tuples: `[["Alice" 30] ["Bob" 25]]` |
+| Scalar | `[:find ?a . ...]` | Single value: `"Alice"` |
+| Collection | `[:find [?a ...] ...]` | Flat list: `["Alice" "Bob" "Carol"]` |
+| Tuple | `[:find [?a ?b] ...]` | Single tuple: `["Alice" 30]` |
 
-### Inputs
+### Input Parameters
 
-Pass parameters to queries with `:in`:
+Pass values into queries with `:in`:
 
 ```clojure
 [:find ?name
@@ -251,346 +167,408 @@ Pass parameters to queries with `:in`:
 ```
 
 Called with:
+
 ```sql
-SELECT mentat.mentat_query(
-  '[:find ?name :in ?min-age ?max-age :where ...]',
+SELECT mentat_query(
+  '[:find ?name :in ?min-age ?max-age
+    :where [?e :person/name ?name] [?e :person/age ?age]
+    [(>= ?age ?min-age)] [(<= ?age ?max-age)]]',
   '{"inputs": [25, 35]}'::jsonb
 );
 ```
 
+Parameters are bound positionally: first `:in` variable gets `inputs[0]`, second gets `inputs[1]`.
+
+### Aggregates
+
+Aggregate functions wrap variables in the `:find` clause:
+
+```clojure
+[:find (count ?e)  :where [?e :person/name]]      ;; count
+[:find (avg ?age)  :where [?e :person/age ?age]]   ;; average
+[:find (sum ?age)  :where [?e :person/age ?age]]   ;; sum
+[:find (min ?age)  :where [?e :person/age ?age]]   ;; minimum
+[:find (max ?age)  :where [?e :person/age ?age]]   ;; maximum
+```
+
+Group-by is implicit: unaggregated variables in `:find` become grouping keys:
+
+```clojure
+[:find ?department (count ?e) (avg ?salary)
+ :where
+ [?e :employee/department ?department]
+ [?e :employee/salary ?salary]]
+```
+
+### OR and NOT Clauses
+
+Compose constraints with logical operators:
+
+```clojure
+;; OR: match either condition
+[:find ?name
+ :where
+ [?e :person/name ?name]
+ (or [?e :person/age 30]
+     [?e :person/age 35])]
+
+;; NOT: exclude matches
+[:find ?name
+ :where
+ [?e :person/name ?name]
+ (not [?e :person/email _])]  ;; people without an email
+```
+
 ### Rules
 
-Define reusable query logic with rules:
+Rules define reusable, composable query logic. They are especially powerful for recursive patterns:
 
 ```clojure
-[:find ?descendant-name
- :with [[(descendant ?ancestor ?descendant)
-         [?ancestor :person/child ?descendant]]
-        [(descendant ?ancestor ?descendant)
-         [?ancestor :person/child ?x]
-         (descendant ?x ?descendant)]]  ; Recursive!
+[:find ?ancestor-name
+ :in $ ?person-name
  :where
- (descendant ?alice ?desc)
- [?desc :person/name ?descendant-name]]
+ [?person :person/name ?person-name]
+ (ancestor ?person ?ancestor)
+ [?ancestor :person/name ?ancestor-name]]
+
+:rules [
+  ;; Base case: parent is an ancestor
+  [(ancestor ?d ?a) [?d :person/parent ?a]]
+
+  ;; Recursive case: ancestor of my parent is also my ancestor
+  [(ancestor ?d ?a)
+   [?d :person/parent ?p]
+   (ancestor ?p ?a)]]
 ```
 
-Rules enable:
-- Code reuse across queries
-- Recursive logic (transitive closures)
-- Complex derived relationships
+This computes the transitive closure of the `:person/parent` relationship -- something that requires `WITH RECURSIVE` in SQL.
 
-## Transactions
+## Datalog vs SQL
 
-Transactions in pg_mentat are atomic and create a new transaction entity.
+| Aspect | Datalog (pg_mentat) | SQL (PostgreSQL) |
+|--------|---------------------|------------------|
+| **Joins** | Implicit via shared variables | Explicit `JOIN ... ON` |
+| **Recursion** | Native via rules | `WITH RECURSIVE` (more verbose) |
+| **Schema changes** | Transact new attributes | `ALTER TABLE` (may lock) |
+| **History** | Built-in (time travel) | Manual (trigger-based audit tables) |
+| **Negation** | `(not ...)` | `NOT EXISTS (...)` |
+| **Window functions** | Not available | Full support |
+| **Bulk updates** | One datom at a time | `UPDATE ... SET ... WHERE` |
+| **Analytics** | Basic aggregates | Full analytical SQL |
 
-### Transaction Entities
+### When to use Datalog
 
-Every transaction is itself an entity with a special attribute `:db/txInstant`:
+- **Graph traversal**: following references across entities (friends-of-friends, org charts, dependency trees)
+- **Recursive relationships**: transitive closure without hand-writing `WITH RECURSIVE`
+- **Flexible schema**: entities with varying attributes
+- **Audit/compliance**: built-in history and time travel
+- **Multi-model queries**: combining different entity types in one query
 
-```clojure
-[tx-entity-id :db/txInstant #inst "2024-01-15T10:30:00Z"]
+### When to use SQL
+
+- **Complex aggregations**: window functions, CTEs, ROLLUP
+- **Bulk operations**: updating millions of rows
+- **Analytical queries**: reporting, OLAP patterns
+- **Integration**: existing SQL tools, BI, ETL pipelines
+
+### Combining both
+
+pg_mentat runs inside PostgreSQL. You can use both in the same session:
+
+```sql
+-- Datalog to find entity IDs
+SELECT mentat_query(
+  '[:find [?e ...] :where [?e :person/age ?age] [(> ?age 25)]]',
+  '{}'::jsonb
+) AS person_ids;
+
+-- SQL for analytics on the raw datom table
+SELECT a, COUNT(*) as datom_count
+FROM mentat.datoms
+WHERE added = true
+GROUP BY a
+ORDER BY datom_count DESC;
 ```
 
-You can query transactions:
+## Schema Evolution
 
-```clojure
-[:find ?tx ?time
- :where
- [_ _ _ ?tx]              ; Any datom in transaction ?tx
- [?tx :db/txInstant ?time]]
+### Adding attributes
+
+New attributes are added by transacting their definitions. No downtime, no migration:
+
+```sql
+SELECT mentat_transact('[
+  {:db/ident :person/phone
+   :db/valueType :db.type/string
+   :db/cardinality :db.cardinality/one}
+]');
 ```
 
-### Transaction Functions
+Existing entities are unaffected. They simply do not have the new attribute until you assert it.
 
-Special operations in transactions:
+### Schema is data
 
-| Operation | Description | Example |
-|-----------|-------------|---------|
-| `:db/add` | Assert a fact | `[:db/add "tempid" :person/name "Alice"]` |
-| `:db/retract` | Retract a fact | `[:db/retract 10001 :person/age 30]` |
-| `:db/retractEntity` | Retract all facts about entity | `[:db/retractEntity 10001]` |
-| `:db.fn/cas` | Compare-and-swap | `[:db.fn/cas 10001 :person/age 30 31]` |
+Schema definitions are themselves datoms. The `:person/name` attribute is an entity with attributes like `:db/ident`, `:db/valueType`, and `:db/cardinality`:
 
-### Tempids
-
-Temporary IDs are strings used within a transaction:
-
-```clojure
-[{:db/id "alice"              ; Tempid
-  :person/name "Alice"}
- {:db/id "bob"                 ; Tempid
-  :person/friend "alice"}]    ; Reference Alice's tempid
+```
+Entity 100 (the attribute definition):
+  [100 :db/ident       :person/name]
+  [100 :db/valueType   :db.type/string]
+  [100 :db/cardinality :db.cardinality/one]
 ```
 
-Transaction returns mapping of tempids to real entity IDs:
+You can query the schema the same way you query data:
 
-```json
-{
-  "tempids": {
-    "alice": 10001,
-    "bob": 10002
-  }
-}
+```sql
+SELECT mentat_schema();
 ```
 
-### Upsert Semantics
+Or directly:
 
-For attributes with `:db.unique/identity`:
-
-```clojure
-{:person/email "alice@example.com"  ; Unique identity
- :person/name "Alice Updated"}
+```sql
+SELECT * FROM mentat.schema;
 ```
 
-If an entity with this email exists → UPDATE
-If not → INSERT
+### Value types
 
-For cardinality-one attributes:
+| Type | EDN Syntax | PostgreSQL Storage |
+|------|-----------|-------------------|
+| `:db.type/string` | `"hello"` | BYTEA (UTF-8) |
+| `:db.type/long` | `42` | BYTEA (LE i64) |
+| `:db.type/double` | `3.14` | BYTEA (LE f64) |
+| `:db.type/boolean` | `true`, `false` | BYTEA (1 byte) |
+| `:db.type/instant` | `#inst "2024-01-15T10:30:00Z"` | BYTEA (microseconds since epoch) |
+| `:db.type/keyword` | `:status/active` | BYTEA (UTF-8) |
+| `:db.type/uuid` | `#uuid "550e8400-..."` | BYTEA (16 bytes) |
+| `:db.type/bytes` | Binary data | BYTEA (raw) |
+| `:db.type/ref` | Entity ID | BYTEA (LE i64) |
 
-```clojure
-{:db/id 10001
- :person/name "New Name"}  ; Automatically retracts old name
-```
+### Cardinality
+
+- **`:db.cardinality/one`** -- Single value. Asserting a new value for the same entity+attribute automatically retracts the old value. Like a column in SQL.
+- **`:db.cardinality/many`** -- Set of values. Multiple values coexist. Like a join table in SQL.
+
+### Uniqueness and upsert
+
+- **`:db.unique/value`** -- Enforces that no two entities share this value. Attempting a duplicate raises an error.
+- **`:db.unique/identity`** -- Same uniqueness guarantee, plus **upsert semantics**: transacting a value that already exists updates the existing entity instead of creating a new one. This is the idiomatic way to handle "insert or update."
 
 ## Time Travel
 
-pg_mentat maintains complete history, enabling time-travel queries.
+### How it works
 
-### Database Basis
+Every assertion and retraction is a datom with a transaction ID. pg_mentat never deletes datoms. Current state is the set of datoms where `added = true` and no later retraction exists.
 
-A "database basis" is a point-in-time view identified by transaction ID.
+### Three temporal modes
 
-### As-Of Queries
-
-Query data as it existed at a specific transaction:
+**As-of**: See the database as it existed at a specific transaction.
 
 ```sql
-SELECT mentat.mentat_query(
+SELECT mentat_query(
   '[:find ?name :where [?e :person/name ?name]]',
-  '{"asOf": 1000005}'::jsonb
+  '{"asOf": 1000001}'::jsonb
 );
 ```
 
-Returns data from transaction 1000005 or earlier, ignoring later changes.
+Returns only datoms with `tx <= 1000001`, applying retractions up to that point.
 
-### Since Queries
-
-Query only changes that occurred after a transaction:
+**Since**: See only changes after a specific transaction.
 
 ```sql
-SELECT mentat.mentat_query(
-  '[:find ?e ?a ?v :where [?e ?a ?v]]',
-  '{"since": 1000010}'::jsonb
+SELECT mentat_query(
+  '[:find ?e ?name :where [?e :person/name ?name]]',
+  '{"since": 1000001}'::jsonb
 );
 ```
 
-Returns datoms with transaction ID > 1000010.
+Returns datoms with `tx > 1000001`.
 
-### History Queries
-
-Include both assertions AND retractions:
+**History**: See all datoms including retractions.
 
 ```sql
-SELECT mentat.mentat_query(
-  '[:find ?e ?a ?v ?tx ?added
-    :where [?e ?a ?v ?tx ?added]]',
+SELECT mentat_query(
+  '[:find ?e ?name ?tx ?added
+    :where [?e :person/name ?name ?tx ?added]]',
   '{"history": true}'::jsonb
 );
 ```
 
-Returns all datoms including retracted ones (added=false).
+Returns every datom ever written, with the `?added` flag distinguishing assertions from retractions.
 
-### Use Cases
+### Use cases
 
-- **Audit trails** - Who changed what and when
-- **Debugging** - See what data looked like when a bug occurred
-- **Compliance** - Legal requirements for data retention
-- **Analytics** - Analyze trends over time
-- **Undo/rollback** - Revert to previous state
+| Use Case | Temporal Mode |
+|----------|---------------|
+| "What was Alice's age on January 1?" | As-of |
+| "What changed since my last sync?" | Since |
+| "Show me the full edit history of this entity" | History |
+| "Reproduce the bug that was reported yesterday" | As-of (with yesterday's tx) |
+| "Regulatory audit: prove data was correct at time T" | As-of + History |
 
-## Pull API
+## Transaction Semantics
 
-The Pull API retrieves entity data by pattern, complementing Datalog queries.
+### Atomicity
 
-### When to Use Pull
+Each `mentat_transact()` call is a single PostgreSQL transaction. All assertions and retractions within it succeed or fail together.
 
-- **After a query** - Query finds entity IDs, pull gets their attributes
-- **Nested data** - Traverse relationships in one call
-- **Known entity ID** - Lookup by unique attribute first, then pull
+### Transaction entities
 
-### Basic Pull
-
-```clojure
-[:person/name :person/age]  ; Specific attributes
-[*]                         ; All attributes
-```
-
-### Wildcard
+Every transaction is itself an entity with a `:db/txInstant` attribute recording when it occurred. You can query transactions:
 
 ```clojure
-[*]                                    ; All attributes
-[* {:exclude [:person/password]}]     ; All except password
+[:find ?tx ?time
+ :where
+ [_ _ _ ?tx]                  ;; any datom in transaction ?tx
+ [?tx :db/txInstant ?time]]   ;; timestamp of that transaction
 ```
 
-### Navigation
+### Tempids
 
-Follow references (`:db.type/ref` attributes):
+Temporary IDs are strings used within a single transaction to reference entities before they have permanent IDs:
+
+```clojure
+[{:db/id "alice" :person/name "Alice"}
+ {:db/id "bob" :person/friend "alice"}]  ;; bob references alice
+```
+
+The transaction report maps each tempid to its permanent entity ID.
+
+### Transaction operations
+
+| Operation | Syntax | Effect |
+|-----------|--------|--------|
+| Assert (map) | `{:db/id "t" :attr val}` | Assert multiple attributes on an entity |
+| Assert (vector) | `[:db/add eid :attr val]` | Assert a single fact |
+| Retract | `[:db/retract eid :attr val]` | Retract a specific fact |
+| Retract entity | `[:db/retractEntity eid]` | Retract all facts about an entity |
+
+## Pull API Patterns
+
+The Pull API complements Datalog queries. Queries find entity IDs; pulls retrieve structured data for those entities.
+
+### Basic pull
+
+```clojure
+[:person/name :person/age]           ;; specific attributes
+[*]                                   ;; all attributes
+```
+
+### Navigation (following refs)
 
 ```clojure
 [:person/name
- {:person/friend [:person/name :person/email]}]  ; Follow friend ref
+ {:person/friend [:person/name :person/email]}]
 ```
 
-### Reverse Lookups
+Follows `:person/friend` references and pulls the specified attributes from the referenced entities.
 
-Find entities that reference this entity:
+### Reverse lookups
 
 ```clojure
-[:person/name
- :person/_friend]  ; Find all entities with :person/friend pointing here
+[:person/name :person/_friend]
 ```
 
-The underscore prefix (`_`) means "reverse lookup."
+The `_` prefix reverses the direction: "find entities whose `:person/friend` points to this entity."
 
-### Recursion (Planned Feature)
+### Combining query and pull
 
-```clojure
-[:person/name
- {:person/friend ...}]  ; Recursively follow friends
+A common pattern is to query for entity IDs, then pull their data:
+
+```sql
+-- Step 1: Find entity IDs
+SELECT mentat_query(
+  '[:find [?e ...] :where [?e :person/age ?age] [(> ?age 25)]]',
+  '{}'::jsonb
+);
+-- Returns: [10000, 10002]
+
+-- Step 2: Pull each entity
+SELECT mentat_pull('[*]', 10000);
+SELECT mentat_pull('[*]', 10002);
 ```
 
-### Limits (Planned Feature)
+Or use `mentat_entity()` for a simpler all-attributes view:
 
-```clojure
-[{:person/friend [:limit 5]}]  ; At most 5 friends
+```sql
+SELECT mentat_entity(10000);
 ```
-
-### Defaults (Planned Feature)
-
-```clojure
-[{:person/email :default "no-email@example.com"}]
-```
-
-## Datalog vs SQL
-
-| Aspect | Datalog | SQL |
-|--------|---------|-----|
-| **Style** | Declarative logic | Declarative relational |
-| **Joins** | Implicit (shared variables) | Explicit (JOIN clauses) |
-| **Recursion** | Native support (rules) | Limited (WITH RECURSIVE) |
-| **Negation** | `not` clause | `NOT EXISTS` |
-| **Aggregation** | In `:find` clause | `GROUP BY` + `HAVING` |
-| **Schema** | Flexible (add attributes anytime) | Fixed (ALTER TABLE) |
-| **History** | Built-in (time travel) | Manual (audit tables) |
-
-### When to Use Each
-
-**Use Datalog when:**
-- Traversing graphs or hierarchies
-- Recursive relationships (ancestors, dependencies)
-- Flexible schema needed
-- History/audit trail important
-- Logic programming paradigm fits
-
-**Use SQL when:**
-- Complex aggregations and window functions
-- Bulk operations (INSERT/UPDATE many rows)
-- Integration with existing SQL tools
-- Performance-critical analytical queries
-
-**Combine both:**
-- Datalog for graph traversal, SQL for aggregation
-- SQL for bulk operations, Datalog for validation
-- Use both in the same database!
 
 ## EDN (Extensible Data Notation)
 
-pg_mentat uses EDN for data representation.
+pg_mentat uses EDN for schemas, transactions, and queries. EDN is a data format from the Clojure ecosystem -- similar to JSON but with richer types.
 
-### Basic Types
-
-```clojure
-; Numbers
-42
-3.14
--1000
-
-; Strings
-"hello"
-"multi\nline"
-
-; Booleans
-true
-false
-
-; Keywords (like symbols/enums)
-:person/name
-:status/active
-:db.cardinality/one
-
-; Vectors (ordered collection)
-[1 2 3]
-["Alice" 30 "alice@example.com"]
-
-; Maps (key-value pairs)
-{:name "Alice" :age 30}
-
-; Sets
-#{1 2 3}
-
-; Nil (null)
-nil
-```
-
-### Tagged Literals
-
-Special values with type tags:
+### Syntax reference
 
 ```clojure
-#inst "2024-01-15T10:30:00Z"                           ; Instant (timestamp)
-#uuid "550e8400-e29b-41d4-a716-446655440000"          ; UUID
+;; Comments start with semicolons
+
+;; Scalars
+42                                     ;; integer
+3.14                                   ;; float
+"hello"                                ;; string
+true false                             ;; booleans
+nil                                    ;; null
+
+;; Keywords (like enums or symbols)
+:person/name                           ;; namespaced keyword
+:db.cardinality/one                    ;; multi-segment namespace
+
+;; Collections
+[1 2 3]                                ;; vector (ordered)
+{:name "Alice" :age 30}               ;; map (key-value)
+#{1 2 3}                               ;; set (unique, unordered)
+
+;; Tagged literals
+#inst "2024-01-15T10:30:00Z"          ;; timestamp
+#uuid "550e8400-e29b-41d4-a716-446655440000"  ;; UUID
 ```
 
-### Why EDN?
+### EDN vs JSON
 
-- Human-readable
-- Compact syntax
-- Rich type system
-- Same format for schema, data, and queries
-- Compatible with Clojure and Datomic
+| Feature | EDN | JSON |
+|---------|-----|------|
+| Keywords | `:person/name` | `"person/name"` (string) |
+| Comments | `;; comment` | Not supported |
+| Sets | `#{1 2 3}` | Not supported |
+| Integers | Exact `42` | Number `42` (float) |
+| Tagged values | `#inst "..."` | Not supported |
+| Trailing commas | Allowed (whitespace) | Not allowed |
 
 ## Performance Considerations
 
-### Indexes
+### Index selection
 
-pg_mentat creates these indexes automatically:
-- **EAVT** - Lookup all facts about an entity
-- **AEVT** - Lookup all entities with an attribute
-- **AVET** - Lookup entities by attribute value (if indexed)
+pg_mentat automatically creates four indexes. Marking an attribute with `:db/index true` optimizes AVET lookups (find entity by attribute value):
 
-Mark frequently-queried attributes with `:db/index true`.
-
-### Query Planning
-
-Datalog patterns are converted to SQL with CTEs. PostgreSQL's query planner optimizes the execution.
-
-View query plan:
 ```sql
-EXPLAIN ANALYZE
-SELECT mentat.mentat_query('[:find ?e :where [?e :person/name]]', '{}');
+{:db/ident :person/email
+ :db/valueType :db.type/string
+ :db/cardinality :db.cardinality/one
+ :db/unique :db.unique/identity
+ :db/index true}
 ```
 
-### Best Practices
+### Query tips
 
-1. **Be specific** - Use constants where possible
-2. **Index appropriately** - Mark commonly-queried attributes
-3. **Limit results** - Use predicates to filter early
-4. **Batch transactions** - Group multiple assertions
-5. **Use Pull API** - More efficient than multiple queries
+1. **Be specific in patterns** -- use constants where possible to let indexes narrow the search early.
+2. **Order patterns** -- place the most selective patterns first.
+3. **Use input parameters** -- they enable prepared statement reuse.
+4. **Batch transactions** -- group multiple assertions in one `mentat_transact()` call.
+5. **Use Pull for nested data** -- more efficient than multiple round-trip queries.
+
+### Viewing query plans
+
+Since Datalog queries compile to SQL under the hood, you can use PostgreSQL's EXPLAIN:
+
+```sql
+EXPLAIN ANALYZE SELECT mentat_query(
+  '[:find ?e :where [?e :person/name "Alice"]]',
+  '{}'::jsonb
+);
+```
 
 ## Next Steps
 
-- Try the examples in [QUICKSTART.md](./QUICKSTART.md)
-- Explore [SQL + Datalog Integration](../examples/SQL_PLUS_DATALOG.md)
-- Read [API Reference](../api/POSTGRESQL_FUNCTIONS.md)
-- Check [Performance Tuning Guide](../operations/PERFORMANCE_TUNING.md)
+- Follow the hands-on [QUICKSTART.md](./QUICKSTART.md) to try these concepts
+- See [EXAMPLES.md](../../EXAMPLES.md) for real-world patterns
+- Explore the [API reference](../api/) for complete function documentation

@@ -1,0 +1,150 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pg-mentat-postgres
+  namespace: pg-mentat
+  labels:
+    app.kubernetes.io/name: pg-mentat-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: pg-mentat
+spec:
+  serviceName: pg-mentat-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pg-mentat-postgres
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pg-mentat-postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: pg-mentat
+    spec:
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      initContainers:
+        # Copy the pg_mentat extension files into a shared volume
+        # that the main postgres container can access.
+        - name: install-extension
+          image: pg-mentat/pg-mentat:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - |
+              cp /usr/lib/postgresql/16/lib/pg_mentat.so /ext-lib/
+              cp /usr/share/postgresql/16/extension/pg_mentat.control /ext-share/
+              cp /usr/share/postgresql/16/extension/pg_mentat--*.sql /ext-share/
+          volumeMounts:
+            - name: ext-lib
+              mountPath: /ext-lib
+            - name: ext-share
+              mountPath: /ext-share
+      containers:
+        - name: postgres
+          image: postgres:16-bookworm
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: pg-mentat-secrets
+                  key: postgres-user
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: pg-mentat-secrets
+                  key: postgres-password
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: pg-mentat-secrets
+                  key: postgres-db
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: ext-lib
+              mountPath: /usr/lib/postgresql/16/lib/pg_mentat.so
+              subPath: pg_mentat.so
+              readOnly: true
+            - name: ext-share
+              mountPath: /usr/share/postgresql/16/extension/
+              readOnly: true
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mentat
+                - -d
+                - mentat
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mentat
+                - -d
+                - mentat
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: ext-lib
+          emptyDir: {}
+        - name: ext-share
+          emptyDir: {}
+        - name: init-scripts
+          configMap:
+            name: pg-mentat-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: pg-mentat-postgres
+          app.kubernetes.io/component: database
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+---
+# Init script ConfigMap: creates the extension on first startup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pg-mentat-init
+  namespace: pg-mentat
+  labels:
+    app.kubernetes.io/name: pg-mentat-postgres
+    app.kubernetes.io/component: database
+data:
+  01-create-extension.sql: |
+    -- Enable the pg_mentat extension
+    CREATE EXTENSION IF NOT EXISTS pg_mentat;

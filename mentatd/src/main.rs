@@ -4,6 +4,7 @@ pub mod metrics;
 pub mod pool;
 pub mod protocol;
 pub mod server;
+pub mod stream;
 
 use crate::config::Config;
 use crate::pool::create_pool;

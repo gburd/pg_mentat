@@ -170,6 +170,46 @@ def format_report(scenario: str, stats: dict) -> str:
     return "\n".join(lines)
 
 
+def parse_k6_summary(filepath: str, duration: int | None = None) -> dict | None:
+    """Parse a k6 --summary-export JSON file into our standard stats format."""
+    try:
+        with open(filepath) as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    metrics = data.get("metrics", {})
+    dur = metrics.get("http_req_duration", {})
+    reqs = metrics.get("http_reqs", {})
+    fails = metrics.get("http_req_failed", {})
+
+    if not dur or not reqs:
+        return None
+
+    total = reqs.get("count", 0)
+    rate = reqs.get("rate", 0)
+    err_rate = fails.get("rate", 0) if fails else 0
+
+    stats = {
+        "total_requests": total,
+        "errors": int(total * err_rate),
+        "error_rate": err_rate,
+        "latency_ms": {
+            "min": dur.get("min", 0),
+            "max": dur.get("max", 0),
+            "avg": dur.get("avg", 0),
+            "p50": dur.get("med", 0),
+            "p90": dur.get("p(90)", 0),
+            "p95": dur.get("p(95)", 0),
+            "p99": dur.get("p(99)", 0),
+        },
+        "tps": rate,
+        "source": "k6",
+    }
+
+    return stats
+
+
 def analyze_directory(results_dir: str, duration: int | None = None) -> dict:
     """Analyze all .dat files in a results directory."""
     results_path = Path(results_dir)
@@ -185,13 +225,21 @@ def analyze_directory(results_dir: str, duration: int | None = None) -> dict:
             stats = analyze_records(records, duration)
             scenarios[scenario_name] = stats
 
-    # Also load any JSON reports
+    # Also load any JSON reports (from curl-based tests)
     for json_file in sorted(results_path.glob("*_report.json")):
         scenario_name = json_file.stem.replace("_report", "")
         if scenario_name not in scenarios:
             with open(json_file) as f:
                 data = json.load(f)
                 scenarios[scenario_name] = data
+
+    # Also load k6 summary JSON files
+    for k6_file in sorted(results_path.glob("*_k6_summary.json")):
+        scenario_name = k6_file.stem.replace("_k6_summary", "")
+        if scenario_name not in scenarios:
+            stats = parse_k6_summary(str(k6_file), duration)
+            if stats:
+                scenarios[scenario_name] = stats
 
     return scenarios
 

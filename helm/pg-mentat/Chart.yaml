@@ -1,0 +1,16 @@
+apiVersion: v2
+name: pg-mentat
+description: A Helm chart for pg_mentat - Datomic-compatible Datalog database on PostgreSQL
+type: application
+version: 0.1.0
+appVersion: "0.14.0"
+keywords:
+  - mentat
+  - datalog
+  - postgresql
+  - datomic
+  - database
+home: https://github.com/user/pg_mentat
+maintainers:
+  - name: Gregory Burd
+    email: greg@burd.me

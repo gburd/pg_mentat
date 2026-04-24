@@ -4,6 +4,7 @@
 /// - Entity and attribute lookups
 /// - Entity retraction
 /// - Value listing
+use crate::error::MentatError;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::Spi;
@@ -156,11 +157,9 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     })?;
 
     if retractions.is_empty() {
-        return Err(format!(
-            ":db.error/nothing-to-retract Entity {} has no current facts to retract. \
-             The entity may not exist or all its facts have already been retracted.",
-            entity_id
-        ).into());
+        return Err(MentatError::NothingToRetract {
+            entity: entity_id,
+        }.into());
     }
 
     let count = retractions.len() as i64;
@@ -176,11 +175,13 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         // Resolve attribute ident
         let attr_ident = crate::cache::get_cache()
             .get_ident(*attr_id)
-            .ok_or_else(|| format!(
-                ":db.error/attribute-not-found Failed to resolve attribute entid {} to an ident. \
-                 The schema cache may be stale or the attribute was never defined.",
-                attr_id
-            ))?;
+            .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                MentatError::AttributeNotFound {
+                    attr: format!("entid:{}", attr_id),
+                    available: crate::error::get_available_attributes(),
+                    suggestion: None,
+                }.into()
+            })?;
 
         // Decode value for EDN representation
         let value_repr = match decode_typed_value(value_bytes, *type_tag) {
@@ -213,17 +214,18 @@ fn decode_typed_value(
         1 => {
             // boolean
             if bytes.is_empty() {
-                return Err(":db.error/data-corruption Invalid boolean value: empty bytes. \
-                            The datoms table may contain corrupted data.".into());
+                return Err(MentatError::DataCorruption {
+                    message: "Invalid boolean value: empty bytes. The datoms table may contain corrupted data.".to_string(),
+                }.into());
             }
             Ok(json!(bytes[0] != 0))
         }
         0 | 2 => {
             // ref or long (both i64 little-endian)
             if bytes.len() != 8 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid i64 value: expected 8 bytes, got {}", bytes.len()).into(),
-                );
+                return Err(MentatError::DataCorruption {
+                    message: format!("Invalid i64 value: expected 8 bytes, got {}", bytes.len()),
+                }.into());
             }
             let val = i64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -233,11 +235,9 @@ fn decode_typed_value(
         3 => {
             // double (f64 little-endian)
             if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid double value: expected 8 bytes, got {}",
-                    bytes.len()
-                )
-                .into());
+                return Err(MentatError::DataCorruption {
+                    message: format!("Invalid double value: expected 8 bytes, got {}", bytes.len()),
+                }.into());
             }
             let val = f64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -247,11 +247,9 @@ fn decode_typed_value(
         4 => {
             // instant (i64 microseconds since epoch, little-endian)
             if bytes.len() != 8 {
-                return Err(format!(
-                    ":db.error/data-corruption Invalid instant value: expected 8 bytes, got {}",
-                    bytes.len()
-                )
-                .into());
+                return Err(MentatError::DataCorruption {
+                    message: format!("Invalid instant value: expected 8 bytes, got {}", bytes.len()),
+                }.into());
             }
             let micros = i64::from_le_bytes([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
@@ -275,9 +273,9 @@ fn decode_typed_value(
         10 => {
             // uuid (16 bytes)
             if bytes.len() != 16 {
-                return Err(
-                    format!(":db.error/data-corruption Invalid UUID value: expected 16 bytes, got {}", bytes.len()).into(),
-                );
+                return Err(MentatError::DataCorruption {
+                    message: format!("Invalid UUID value: expected 16 bytes, got {}", bytes.len()),
+                }.into());
             }
             Ok(json!(hex::encode(bytes)))
         }
@@ -285,12 +283,7 @@ fn decode_typed_value(
             // bytes (raw)
             Ok(json!(hex::encode(bytes)))
         }
-        _ => Err(format!(
-            ":db.error/unsupported-type Unsupported type tag: {}. \
-             Known tags: 0=ref, 1=boolean, 2=long, 3=double, 4=instant, 7=string, \
-             8=keyword, 10=uuid, 11=bytes.",
-            type_tag
-        ).into()),
+        _ => Err(MentatError::UnsupportedType { type_tag }.into()),
     }
 }
 

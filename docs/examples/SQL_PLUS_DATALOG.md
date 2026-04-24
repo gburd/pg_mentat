@@ -9,6 +9,26 @@ tables. Together they cover use cases that neither can handle well alone.
 This guide shows practical patterns for mixing `mentat_query()`, `mentat_pull()`,
 and `mentat_transact()` with standard SQL.
 
+### Runnable SQL Files
+
+Each pattern has a standalone SQL file in `examples/hybrid_queries/` that you
+can run directly with `psql`:
+
+```bash
+# Set up the shared schema and sample data
+psql -d your_database -f examples/hybrid_queries/00_setup.sql
+
+# Run any example
+psql -d your_database -f examples/hybrid_queries/01_graph_traversal_with_aggregation.sql
+psql -d your_database -f examples/hybrid_queries/02_bulk_filter_with_validation.sql
+psql -d your_database -f examples/hybrid_queries/03_window_functions_over_datalog.sql
+psql -d your_database -f examples/hybrid_queries/04_ctes_combining_sql_and_datalog.sql
+psql -d your_database -f examples/hybrid_queries/05_fulltext_search_with_graph.sql
+psql -d your_database -f examples/hybrid_queries/06_temporal_queries_with_analytics.sql
+psql -d your_database -f examples/hybrid_queries/07_joining_mentat_with_relational.sql
+psql -d your_database -f examples/hybrid_queries/08_pull_api_in_sql_pipelines.sql
+```
+
 ---
 
 ## Table of Contents

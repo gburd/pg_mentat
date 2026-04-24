@@ -1,3 +1,4 @@
+use crate::error::MentatError;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::JsonB;

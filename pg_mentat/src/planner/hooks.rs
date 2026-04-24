@@ -10,21 +10,20 @@
 
 //! PostgreSQL planner hooks for Mentat query optimization.
 //!
-//! Phase 1 Implementation:
-//! This module provides helper SQL functions for query optimization.
-//! Direct planner hook integration is deferred to Phase 2.
-//!
 //! Current features:
 //! - SQL helper functions for index hints and query analysis
 //! - Cost estimation utilities
+//! - GUC configuration parameters for optimizer hints
+//! - Automatic SET LOCAL hints applied during query execution
 //!
-//! Future (Phase 2):
-//! - GUC configuration parameters
-//! - Direct planner hook integration
-//! - Automatic index selection based on query patterns
-//! - Cost estimation based on attribute cardinality
+//! GUC Parameters:
+//! - `mentat.enable_optimizer_hints` (bool, default true): Enable/disable automatic
+//!   optimizer hints (SET LOCAL enable_seqscan, work_mem) during query execution.
+//! - `mentat.default_work_mem` (string, default "64MB"): The work_mem value to
+//!   SET LOCAL for complex Mentat queries (those with joins, aggregates, or CTEs).
 
 use pgrx::prelude::*;
+use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
 /// Detect the optimal index for a datom query pattern.
 ///
@@ -159,17 +158,64 @@ fn get_index_info() -> Result<
     Ok(TableIterator::new(indexes))
 }
 
-/// Initialize planner hooks (Phase 1: stub implementation).
+// ============================================================================
+// GUC Configuration Parameters
+// ============================================================================
+
+/// Whether to apply optimizer hints (SET LOCAL enable_seqscan, work_mem)
+/// during Mentat query execution.
+pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(true);
+
+/// The work_mem value to SET LOCAL for complex Mentat queries.
+/// Only applied when `mentat.enable_optimizer_hints` is true and the query
+/// involves multiple joins, aggregates, or CTEs.
+pub static DEFAULT_WORK_MEM: GucSetting<Option<&'static str>> =
+    GucSetting::<Option<&'static str>>::new(Some("64MB"));
+
+/// Read the current value of `mentat.enable_optimizer_hints`.
+pub fn optimizer_hints_enabled() -> bool {
+    ENABLE_OPTIMIZER_HINTS.get()
+}
+
+/// Read the current value of `mentat.default_work_mem`.
+pub fn default_work_mem() -> String {
+    DEFAULT_WORK_MEM
+        .get()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "64MB".to_string())
+}
+
+/// Initialize planner hooks and register GUC settings.
 ///
 /// This function is called from the extension's `_PG_init` function.
-/// Phase 1: Logs initialization message
-/// Phase 2: Will register GUC settings and install planner hooks
+/// Registers GUC parameters so users can configure optimizer behavior via:
+///   SET mentat.enable_optimizer_hints = off;
+///   SET mentat.default_work_mem = '128MB';
 #[allow(dead_code)]
 pub unsafe fn init_planner_hooks() {
-    // Phase 1: Basic initialization
-    // Phase 2 TODO: Register GUC settings and install planner hook
+    GucRegistry::define_bool_guc(
+        "mentat.enable_optimizer_hints",
+        "Enable automatic optimizer hints for Mentat queries.",
+        "When enabled, Mentat applies SET LOCAL enable_seqscan = off and \
+         SET LOCAL work_mem before executing generated SQL to encourage \
+         index usage on the datoms table.",
+        &ENABLE_OPTIMIZER_HINTS,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
 
-    tracing::info!("Mentat planner optimization functions initialized");
+    GucRegistry::define_string_guc(
+        "mentat.default_work_mem",
+        "Work memory for complex Mentat queries.",
+        "The value passed to SET LOCAL work_mem before executing Mentat \
+         queries that involve multiple pattern joins, aggregates, or CTEs. \
+         Only effective when mentat.enable_optimizer_hints is on.",
+        &DEFAULT_WORK_MEM,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    tracing::info!("Mentat planner optimization hooks initialized with GUC parameters");
 }
 
 #[cfg(test)]

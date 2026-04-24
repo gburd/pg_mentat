@@ -17,3 +17,4 @@ pub mod hooks;
 
 #[allow(unused_imports)]
 pub use hooks::init_planner_hooks;
+pub use hooks::{default_work_mem, optimizer_hints_enabled};

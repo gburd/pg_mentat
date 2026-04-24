@@ -4,8 +4,9 @@ use serde_json::json;
 
 /// Return query performance statistics from pg_stat_statements if available.
 ///
-/// Returns aggregate statistics about mentat query and transaction function calls.
-/// Requires the pg_stat_statements extension to be installed.
+/// Returns aggregate statistics about mentat query and transaction function calls,
+/// including per-function call counts, durations, and cache hit information from
+/// the schema cache.
 ///
 /// Returns JSON like:
 /// ```json
@@ -15,9 +16,8 @@ use serde_json::json;
 ///       "function": "mentat_query",
 ///       "calls": 150,
 ///       "avg_duration_ms": 12.5,
-///       "min_duration_ms": 0.3,
-///       "max_duration_ms": 250.0,
-///       "total_duration_ms": 1875.0
+///       "total_duration_ms": 1875.0,
+///       "self_duration_ms": 1200.0
 ///     },
 ///     ...
 ///   ],
@@ -30,6 +30,9 @@ use serde_json::json;
 ///       "db.part/user": { "next_entid": 10500, "used": 500 },
 ///       "db.part/tx": { "next_entid": 1000042, "used": 42 }
 ///     }
+///   },
+///   "cache": {
+///     "schema_cache_warmed": true
 ///   }
 /// }
 /// ```
@@ -159,44 +162,121 @@ pub fn mentat_query_stats() -> Result<JsonB, Box<dyn std::error::Error + Send + 
         })
     });
 
+    // Cache status from the schema cache
+    let cache = crate::cache::get_cache();
+    let cache_stats = json!({
+        "schema_cache_warmed": cache.is_warmed(),
+    });
+
     let result = json!({
         "functions": functions_arr,
         "database_stats": db_stats,
+        "cache": cache_stats,
     });
 
     Ok(JsonB(result))
 }
 
-/// Find slow queries by analyzing recent transaction history.
+/// Find slow queries by filtering pg_stat_user_functions for mentat functions
+/// whose average execution time exceeds the given threshold.
 ///
-/// Returns the N most recent transactions with their size (datom count)
-/// and timing information from the mentat.transactions table.
+/// Falls back to showing the heaviest recent transactions (by datom count)
+/// when pg_stat_user_functions is unavailable.
 ///
 /// Arguments:
-///   - limit_count: Maximum number of transactions to return (default: 20)
+///   - threshold_ms: Minimum average duration in milliseconds to be considered slow (default: 100)
 ///
 /// Returns JSON like:
 /// ```json
-/// [
-///   {
-///     "tx": 1000042,
-///     "tx_instant": "2025-01-15T10:30:00Z",
-///     "datom_count": 150,
-///     "assertions": 140,
-///     "retractions": 10
-///   },
-///   ...
-/// ]
+/// {
+///   "slow_functions": [
+///     {
+///       "function": "mentat_query",
+///       "calls": 150,
+///       "avg_duration_ms": 125.3,
+///       "total_duration_ms": 18795.0
+///     }
+///   ],
+///   "heavy_transactions": [
+///     {
+///       "tx": 1000042,
+///       "tx_instant": "2025-01-15T10:30:00Z",
+///       "datom_count": 150,
+///       "assertions": 140,
+///       "retractions": 10
+///     }
+///   ]
+/// }
 /// ```
 #[pg_extern]
 pub fn mentat_slow_queries(
-    limit_count: default!(i32, 20),
+    threshold_ms: default!(f64, 100.0),
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
-    let limit_val = if limit_count <= 0 { 20 } else { limit_count };
+    let threshold = if threshold_ms <= 0.0 {
+        100.0
+    } else {
+        threshold_ms
+    };
 
-    let results = Spi::connect(|client| {
+    // Find mentat functions whose average duration exceeds the threshold
+    let slow_functions = Spi::connect(|client| {
         let query = format!(
             r#"
+            SELECT funcname::TEXT,
+                   calls::BIGINT,
+                   total_time::DOUBLE PRECISION,
+                   self_time::DOUBLE PRECISION
+            FROM pg_stat_user_functions
+            WHERE funcname LIKE 'mentat_%'
+              AND calls > 0
+              AND (total_time / calls) > {threshold}
+            ORDER BY (total_time / calls) DESC
+            "#,
+        );
+
+        let mut result_arr = Vec::new();
+        match client.select(&query, None, &[]) {
+            Ok(rows) => {
+                for row in rows {
+                    let funcname: String = match row.get(1) {
+                        Ok(Some(v)) => v,
+                        _ => continue,
+                    };
+                    let calls: i64 = match row.get(2) {
+                        Ok(Some(v)) => v,
+                        _ => 0,
+                    };
+                    let total_time: f64 = match row.get(3) {
+                        Ok(Some(v)) => v,
+                        _ => 0.0,
+                    };
+                    let self_time: f64 = match row.get(4) {
+                        Ok(Some(v)) => v,
+                        _ => 0.0,
+                    };
+
+                    let avg_ms = total_time / calls as f64;
+
+                    result_arr.push(json!({
+                        "function": funcname,
+                        "calls": calls,
+                        "avg_duration_ms": avg_ms,
+                        "total_duration_ms": total_time,
+                        "self_duration_ms": self_time,
+                    }));
+                }
+            }
+            Err(_) => {
+                // pg_stat_user_functions not available
+            }
+        }
+
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(result_arr)
+    })?;
+
+    // Also show the 10 heaviest recent transactions by datom count
+    let heavy_txns = Spi::connect(|client| {
+        let query = r#"
             SELECT t.tx,
                    t.tx_instant::TEXT,
                    (SELECT COUNT(*) FROM mentat.datoms d WHERE d.tx = t.tx)::BIGINT AS datom_count,
@@ -204,13 +284,11 @@ pub fn mentat_slow_queries(
                    (SELECT COUNT(*) FROM mentat.datoms d WHERE d.tx = t.tx AND d.added = false)::BIGINT AS retractions
             FROM mentat.transactions t
             ORDER BY t.tx DESC
-            LIMIT {}
-            "#,
-            limit_val
-        );
+            LIMIT 10
+        "#;
 
         let mut result_arr = Vec::new();
-        for row in client.select(&query, None, &[])? {
+        for row in client.select(query, None, &[])? {
             let tx: i64 = match row.get(1) {
                 Ok(Some(v)) => v,
                 _ => continue,
@@ -244,7 +322,12 @@ pub fn mentat_slow_queries(
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(result_arr)
     })?;
 
-    Ok(JsonB(json!(results)))
+    let result = json!({
+        "slow_functions": slow_functions,
+        "heavy_transactions": heavy_txns,
+    });
+
+    Ok(JsonB(result))
 }
 
 /// Return database size and index statistics.

@@ -1,0 +1,86 @@
+# docker-compose.yml -- pg_mentat full stack
+#
+# Start everything:  docker compose -f docker/docker-compose.yml up -d
+# Stop:              docker compose -f docker/docker-compose.yml down
+# Logs:              docker compose -f docker/docker-compose.yml logs -f
+#
+# Build context is the repository root (set via context: ..).
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 with the pg_mentat Datalog extension
+  # ---------------------------------------------------------------------------
+  postgres:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.pg_mentat
+    image: pg_mentat:latest
+    container_name: pg_mentat_postgres
+    restart: unless-stopped
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-mentat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-mentat}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "${PG_CPU_LIMIT:-2}"
+          memory: "${PG_MEM_LIMIT:-1g}"
+        reservations:
+          cpus: "0.5"
+          memory: "256m"
+
+  # ---------------------------------------------------------------------------
+  # mentatd -- Datomic-compatible HTTP API server
+  # ---------------------------------------------------------------------------
+  mentatd:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mentatd
+    image: mentatd:latest
+    container_name: pg_mentat_mentatd
+    restart: unless-stopped
+    ports:
+      - "${MENTATD_PORT:-8080}:8080"
+    environment:
+      MENTATD_HOST: "0.0.0.0"
+      MENTATD_PORT: "8080"
+      DATABASE_URL: "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-mentat}"
+      DATABASE_POOL_SIZE: "${DATABASE_POOL_SIZE:-10}"
+      DATABASE_MAX_LIFETIME: "${DATABASE_MAX_LIFETIME:-1800}"
+      RUST_LOG: "${RUST_LOG:-info}"
+      LOG_FORMAT: "${LOG_FORMAT:-compact}"
+      MENTATD_CACHE_ENABLED: "${MENTATD_CACHE_ENABLED:-true}"
+      MENTATD_CACHE_CAPACITY: "${MENTATD_CACHE_CAPACITY:-1000}"
+      MENTATD_CACHE_TTL: "${MENTATD_CACHE_TTL:-300}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /health HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200 OK'"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "${MENTATD_CPU_LIMIT:-1}"
+          memory: "${MENTATD_MEM_LIMIT:-512m}"
+        reservations:
+          cpus: "0.25"
+          memory: "64m"
+
+volumes:
+  pgdata:
+    driver: local
