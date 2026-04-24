@@ -195,6 +195,13 @@ fn apply_optimizer_hints(
     client: &pgrx::spi::SpiClient<'_>,
     complexity: &QueryComplexity,
 ) {
+    // Set query timeout first (applies even if optimizer hints are disabled)
+    let timeout_ms = crate::planner::query_timeout_ms();
+    if timeout_ms > 0 {
+        let timeout_sql = format!("SET LOCAL statement_timeout = '{}'", timeout_ms);
+        let _ = client.select(&timeout_sql, None, &[]);
+    }
+
     if !crate::planner::optimizer_hints_enabled() {
         return;
     }
@@ -541,6 +548,78 @@ pub fn mentat_query(
         format_find_response(&parsed_query.find_spec, &find_vars, results, has_aggregates);
 
     Ok(JsonB(response))
+}
+
+/// Get PostgreSQL query plan for a Datalog query (for debugging slow queries)
+///
+/// Returns EXPLAIN output showing how PostgreSQL will execute the generated SQL.
+/// Useful for understanding index usage, join strategies, and query costs.
+///
+/// Example usage:
+/// ```sql
+/// SELECT mentat.mentat_explain(
+///     '[:find ?e ?name :where [?e :person/name ?name]]',
+///     '{}'::jsonb
+/// );
+/// ```
+#[pg_extern]
+pub fn mentat_explain(
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let _parsed_value = parse::value(query)?;
+    let parsed_query = mentat_core::parse_query(query)?;
+
+    let temporal = parse_temporal_options(&inputs.0);
+    let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
+    let find_vars = extract_find_variables(&parsed_query.find_spec);
+    let pagination = parse_pagination_options(&inputs.0);
+
+    let mut builder = SqlBuilder::new();
+    let (mut sql_query, _complexity) = build_sql_from_datalog(
+        &parsed_query,
+        &find_vars,
+        &mut builder,
+        &temporal,
+        &input_bindings,
+    )?;
+
+    // Apply pagination (same logic as mentat_query)
+    if let Some(limit) = pagination.limit {
+        if let Some(pos) = sql_query.rfind(" LIMIT ") {
+            sql_query.truncate(pos);
+        }
+        sql_query.push_str(&format!(" LIMIT {}", limit));
+    }
+    if let Some(offset) = pagination.offset {
+        sql_query.push_str(&format!(" OFFSET {}", offset));
+    }
+
+    // Prepend EXPLAIN (FORMAT JSON) to the query
+    let explain_sql = format!("EXPLAIN (FORMAT JSON, VERBOSE) {}", sql_query);
+    let params = builder.params;
+
+    let plan_json = Spi::connect(|client| {
+        let mut plan_rows = Vec::new();
+
+        for row in client.select(&explain_sql, None, &params)? {
+            if let Ok(Some(plan_str)) = row.get::<String>(1) {
+                plan_rows.push(plan_str);
+            }
+        }
+
+        // EXPLAIN returns multiple rows, concatenate them
+        let full_plan = plan_rows.join("\n");
+        let parsed_plan: serde_json::Value = serde_json::from_str(&full_plan)?;
+
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(json!({
+            "datalog_query": query,
+            "generated_sql": sql_query,
+            "explain_plan": parsed_plan
+        }))
+    })?;
+
+    Ok(JsonB(plan_json))
 }
 
 /// Return prepared statement cache statistics as JSON.

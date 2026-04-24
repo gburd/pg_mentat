@@ -172,6 +172,11 @@ pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(tr
 pub static DEFAULT_WORK_MEM: GucSetting<Option<&'static str>> =
     GucSetting::<Option<&'static str>>::new(Some("64MB"));
 
+/// Query timeout in milliseconds. Prevents runaway queries from blocking backends.
+/// 0 means no timeout (default). Set to positive value (e.g., 30000 for 30 seconds)
+/// to enforce per-query timeout via statement_timeout.
+pub static QUERY_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(0);
+
 /// Read the current value of `mentat.enable_optimizer_hints`.
 pub fn optimizer_hints_enabled() -> bool {
     ENABLE_OPTIMIZER_HINTS.get()
@@ -183,6 +188,11 @@ pub fn default_work_mem() -> String {
         .get()
         .map(|s| s.to_string())
         .unwrap_or_else(|| "64MB".to_string())
+}
+
+/// Read the current value of `mentat.query_timeout_ms`.
+pub fn query_timeout_ms() -> i32 {
+    QUERY_TIMEOUT_MS.get()
 }
 
 /// Initialize planner hooks and register GUC settings.
@@ -211,6 +221,19 @@ pub unsafe fn init_planner_hooks() {
          queries that involve multiple pattern joins, aggregates, or CTEs. \
          Only effective when mentat.enable_optimizer_hints is on.",
         &DEFAULT_WORK_MEM,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        "mentat.query_timeout_ms",
+        "Query timeout in milliseconds.",
+        "Maximum execution time for Mentat queries. Set to 0 (default) for no timeout. \
+         Set to positive value (e.g., 30000 for 30 seconds) to prevent runaway queries. \
+         Enforced via statement_timeout.",
+        &QUERY_TIMEOUT_MS,
+        0,
+        i32::MAX,
         GucContext::Userset,
         GucFlags::default(),
     );
