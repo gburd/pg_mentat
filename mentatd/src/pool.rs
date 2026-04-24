@@ -1,4 +1,4 @@
-use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
+use deadpool_postgres::{Config as PoolConfig, Pool};
 use thiserror::Error;
 use tokio_postgres::NoTls;
 

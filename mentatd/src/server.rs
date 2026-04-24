@@ -57,6 +57,7 @@ impl From<ServerError> for Anomaly {
 #[derive(Clone)]
 pub struct AppState {
     pool: DbPool,
+    #[allow(dead_code)]
     config: Arc<Config>,
     query_cache: Arc<QueryCache>,
 }
@@ -342,6 +343,197 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             Ok(result)
         }
+
+        Operation::Pull { pattern, entity_id } => {
+            info!("Executing pull: pattern={}, entity_id={}", pattern, entity_id);
+
+            let client = state.pool.get().await?;
+
+            let row = client
+                .query_one("SELECT mentat_pull($1, $2)", &[&pattern, &entity_id])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = json_to_response_value(&result_json);
+
+            Ok(result)
+        }
+
+        Operation::Datoms { index, components } => {
+            info!("Executing datoms: index={:?}, components={:?}", index, components);
+
+            let client = state.pool.get().await?;
+
+            // Build SQL query based on index and components
+            let query = build_datoms_query(index, components.len());
+
+            let rows = match components.len() {
+                0 => client.query(&query, &[]).await?,
+                1 => {
+                    let p0: i64 = components[0].parse().unwrap_or(0);
+                    client.query(&query, &[&p0]).await?
+                }
+                2 => {
+                    let p0: i64 = components[0].parse().unwrap_or(0);
+                    let p1: i64 = components[1].parse().unwrap_or(0);
+                    client.query(&query, &[&p0, &p1]).await?
+                }
+                _ => {
+                    let p0: i64 = components[0].parse().unwrap_or(0);
+                    let p1: i64 = components[1].parse().unwrap_or(0);
+                    let p2: i64 = components[2].parse().unwrap_or(0);
+                    client.query(&query, &[&p0, &p1, &p2]).await?
+                }
+            };
+
+            let datoms: Vec<ResponseValue> = rows
+                .iter()
+                .map(|row| {
+                    let e: i64 = row.get(0);
+                    let a: i64 = row.get(1);
+                    let v_bytes: Vec<u8> = row.get(2);
+                    let v_type_tag: i16 = row.get(3);
+                    let tx: i64 = row.get(4);
+                    let added: bool = row.get(5);
+
+                    ResponseValue::Vector(vec![
+                        ResponseValue::Integer(e),
+                        ResponseValue::Integer(a),
+                        decode_datom_value(&v_bytes, v_type_tag),
+                        ResponseValue::Integer(tx),
+                        ResponseValue::Boolean(added),
+                    ])
+                })
+                .collect();
+
+            Ok(ResponseValue::Vector(datoms))
+        }
+
+        Operation::AsOf { query, args, t } => {
+            info!("Executing as-of query at t={}: {}", t, query);
+            metrics::QUERY_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            // Convert args to JSON array
+            let args_json = serde_json::to_value(&args)
+                .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
+
+            // Build query inputs with temporal parameter
+            let mut inputs = serde_json::Map::new();
+            inputs.insert("inputs".to_string(), args_json);
+            inputs.insert("asOf".to_string(), serde_json::Value::Number(t.into()));
+            let inputs_json = serde_json::Value::Object(inputs);
+
+            let row = client
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = parse_query_results(&result_json)?;
+
+            Ok(ResponseValue::Vector(result))
+        }
+
+        Operation::Since { query, args, t } => {
+            info!("Executing since query from t={}: {}", t, query);
+            metrics::QUERY_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            let args_json = serde_json::to_value(&args)
+                .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
+
+            let mut inputs = serde_json::Map::new();
+            inputs.insert("inputs".to_string(), args_json);
+            inputs.insert("since".to_string(), serde_json::Value::Number(t.into()));
+            let inputs_json = serde_json::Value::Object(inputs);
+
+            let row = client
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = parse_query_results(&result_json)?;
+
+            Ok(ResponseValue::Vector(result))
+        }
+
+        Operation::History { query, args } => {
+            info!("Executing history query: {}", query);
+            metrics::QUERY_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            let args_json = serde_json::to_value(&args)
+                .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
+
+            let mut inputs = serde_json::Map::new();
+            inputs.insert("inputs".to_string(), args_json);
+            inputs.insert("history".to_string(), serde_json::Value::Bool(true));
+            let inputs_json = serde_json::Value::Object(inputs);
+
+            let row = client
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = parse_query_results(&result_json)?;
+
+            Ok(ResponseValue::Vector(result))
+        }
+
+        Operation::TxRange { start, end } => {
+            info!("Executing tx-range: start={:?}, end={:?}", start, end);
+
+            let client = state.pool.get().await?;
+
+            #[allow(clippy::match_same_arms)]
+            let query = match (start, end) {
+                (Some(_), Some(_)) => {
+                    "SELECT tx, tx_instant FROM mentat.transactions WHERE tx BETWEEN $1 AND $2 ORDER BY tx"
+                }
+                (Some(_), _) => {
+                    "SELECT tx, tx_instant FROM mentat.transactions WHERE tx >= $1 ORDER BY tx"
+                }
+                (_, Some(_)) => {
+                    "SELECT tx, tx_instant FROM mentat.transactions WHERE tx <= $1 ORDER BY tx"
+                }
+                (_, _) => {
+                    "SELECT tx, tx_instant FROM mentat.transactions ORDER BY tx"
+                }
+            };
+
+            let rows = if let (Some(s), Some(e)) = (start, end) {
+                client.query(query, &[&s, &e]).await?
+            } else if let Some(s) = start {
+                client.query(query, &[&s]).await?
+            } else if let Some(e) = end {
+                client.query(query, &[&e]).await?
+            } else {
+                client.query(query, &[]).await?
+            };
+
+            let transactions: Vec<ResponseValue> = rows
+                .iter()
+                .map(|row| {
+                    let tx: i64 = row.get(0);
+                    let tx_instant: Option<String> = row.get(1);
+                    ResponseValue::Map(vec![
+                        (
+                            ResponseValue::Keyword("tx".to_string()),
+                            ResponseValue::Integer(tx),
+                        ),
+                        (
+                            ResponseValue::Keyword("tx-instant".to_string()),
+                            tx_instant.map_or(ResponseValue::Nil, |s| ResponseValue::String(s)),
+                        ),
+                    ])
+                })
+                .collect();
+
+            Ok(ResponseValue::Vector(transactions))
+        }
     }
 }
 
@@ -477,6 +669,152 @@ fn is_valid_db_name(name: &str) -> bool {
             .chars()
             .next()
             .map_or(false, |c| c.is_ascii_alphabetic())
+}
+
+/// Build a SQL query for datoms index access.
+///
+/// Returns query_string for the given index and number of components.
+fn build_datoms_query(
+    index: crate::protocol::DatomsIndex,
+    component_count: usize,
+) -> String {
+    use crate::protocol::DatomsIndex;
+
+    let base_query = "SELECT e, a, v, value_type_tag, tx, added FROM mentat.datoms";
+
+    let where_clause = match index {
+        DatomsIndex::EAVT => {
+            // EAVT: components are [e, a, v] in that order
+            match component_count {
+                0 => String::new(),
+                1 => " WHERE e = $1".to_string(),
+                2 => " WHERE e = $1 AND a = $2".to_string(),
+                _ => " WHERE e = $1 AND a = $2 AND v = $3".to_string(),
+            }
+        }
+        DatomsIndex::AEVT => {
+            // AEVT: components are [a, e, v]
+            match component_count {
+                0 => String::new(),
+                1 => " WHERE a = $1".to_string(),
+                2 => " WHERE a = $1 AND e = $2".to_string(),
+                _ => " WHERE a = $1 AND e = $2 AND v = $3".to_string(),
+            }
+        }
+        DatomsIndex::AVET => {
+            // AVET: components are [a, v, e]
+            match component_count {
+                0 => String::new(),
+                1 => " WHERE a = $1".to_string(),
+                2 => " WHERE a = $1 AND v = $2".to_string(),
+                _ => " WHERE a = $1 AND v = $2 AND e = $3".to_string(),
+            }
+        }
+        DatomsIndex::VAET => {
+            // VAET: components are [v, a, e]
+            match component_count {
+                0 => String::new(),
+                1 => " WHERE v = $1".to_string(),
+                2 => " WHERE v = $1 AND a = $2".to_string(),
+                _ => " WHERE v = $1 AND a = $2 AND e = $3".to_string(),
+            }
+        }
+    };
+
+    let order_clause = match index {
+        DatomsIndex::EAVT => " ORDER BY e, a, v, tx",
+        DatomsIndex::AEVT => " ORDER BY a, e, v, tx",
+        DatomsIndex::AVET => " ORDER BY a, v, e, tx",
+        DatomsIndex::VAET => " ORDER BY v, a, e, tx",
+    };
+
+    format!("{}{}{}", base_query, where_clause, order_clause)
+}
+
+/// Decode a datom value from bytes and type tag into a ResponseValue.
+fn decode_datom_value(v_bytes: &[u8], v_type_tag: i16) -> ResponseValue {
+    match v_type_tag {
+        0 => {
+            // REF
+            if v_bytes.len() == 8 {
+                let bytes: [u8; 8] = v_bytes.try_into().unwrap_or([0; 8]);
+                ResponseValue::Integer(i64::from_le_bytes(bytes))
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        1 => {
+            // BOOLEAN
+            if v_bytes.len() == 1 {
+                ResponseValue::Boolean(v_bytes[0] != 0)
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        2 => {
+            // LONG
+            if v_bytes.len() == 8 {
+                let bytes: [u8; 8] = v_bytes.try_into().unwrap_or([0; 8]);
+                ResponseValue::Integer(i64::from_le_bytes(bytes))
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        3 => {
+            // DOUBLE
+            if v_bytes.len() == 8 {
+                let bytes: [u8; 8] = v_bytes.try_into().unwrap_or([0; 8]);
+                let f = f64::from_le_bytes(bytes);
+                ResponseValue::String(f.to_string())
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        4 => {
+            // INSTANT
+            if v_bytes.len() == 8 {
+                let bytes: [u8; 8] = v_bytes.try_into().unwrap_or([0; 8]);
+                let micros = i64::from_le_bytes(bytes);
+                // Format as ISO-8601
+                let secs = micros / 1_000_000;
+                let nanos = ((micros % 1_000_000) * 1000) as u32;
+                if let Some(dt) = chrono::DateTime::from_timestamp(secs, nanos) {
+                    ResponseValue::String(dt.to_rfc3339())
+                } else {
+                    ResponseValue::Nil
+                }
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        7 => {
+            // STRING
+            String::from_utf8(v_bytes.to_vec())
+                .map(ResponseValue::String)
+                .unwrap_or(ResponseValue::Nil)
+        }
+        8 => {
+            // KEYWORD
+            String::from_utf8(v_bytes.to_vec())
+                .map(ResponseValue::Keyword)
+                .unwrap_or(ResponseValue::Nil)
+        }
+        10 => {
+            // UUID
+            if v_bytes.len() == 16 {
+                let uuid_bytes: [u8; 16] = v_bytes.try_into().unwrap_or([0; 16]);
+                let uuid = uuid::Uuid::from_bytes(uuid_bytes);
+                ResponseValue::String(uuid.to_string())
+            } else {
+                ResponseValue::Nil
+            }
+        }
+        11 => {
+            // BYTES
+            ResponseValue::String(format!("0x{}", hex::encode(v_bytes)))
+        }
+        _ => ResponseValue::Nil,
+    }
 }
 
 #[cfg(test)]

@@ -159,6 +159,58 @@ fn parse_operation(
             })
         }
 
+        "pull" => {
+            let args_map = extract_args_map(map)?;
+            let pattern = extract_value_as_string(&args_map, "pattern")?;
+            let entity_id = extract_required_int(&args_map, "entity-id")?;
+
+            Ok(Operation::Pull { pattern, entity_id })
+        }
+
+        "datoms" => {
+            let args_map = extract_args_map(map)?;
+            let index_str = extract_value_as_string(&args_map, "index")?;
+            let index = parse_datoms_index(&index_str)?;
+            let components = extract_optional_vector(&args_map, "components")
+                .unwrap_or_default();
+
+            Ok(Operation::Datoms { index, components })
+        }
+
+        "as-of" => {
+            let args_map = extract_args_map(map)?;
+            let query = extract_value_as_string(&args_map, "query")?;
+            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let t = extract_required_int(&args_map, "t")?;
+
+            Ok(Operation::AsOf { query, args, t })
+        }
+
+        "since" => {
+            let args_map = extract_args_map(map)?;
+            let query = extract_value_as_string(&args_map, "query")?;
+            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let t = extract_required_int(&args_map, "t")?;
+
+            Ok(Operation::Since { query, args, t })
+        }
+
+        "history" => {
+            let args_map = extract_args_map(map)?;
+            let query = extract_value_as_string(&args_map, "query")?;
+            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+
+            Ok(Operation::History { query, args })
+        }
+
+        "tx-range" => {
+            let args_map = extract_args_map(map)?;
+            let start = extract_optional_int(&args_map, "start");
+            let end = extract_optional_int(&args_map, "end");
+
+            Ok(Operation::TxRange { start, end })
+        }
+
         "health" => Ok(Operation::Health),
 
         _ => Err(ParseError::InvalidOperation(op_keyword.name().to_string())),
@@ -211,6 +263,59 @@ fn extract_optional_int(
         SpannedValue::Integer(i) => Some(*i),
         _ => None,
     })
+}
+
+fn extract_required_int(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Result<i64, ParseError> {
+    extract_optional_int(map, key)
+        .ok_or_else(|| ParseError::MissingField(key.to_string()))
+}
+
+fn extract_value_as_string(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Result<String, ParseError> {
+    let key_value = ValueAndSpan {
+        inner: SpannedValue::Keyword(Keyword::plain(key)),
+        span: edn::types::Span::new(0, 0),
+    };
+    match map.get(&key_value) {
+        Some(v) => Ok(format!("{:?}", v.inner)),
+        None => Err(ParseError::MissingField(key.to_string())),
+    }
+}
+
+fn extract_optional_vector(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Option<Vec<String>> {
+    let key_value = ValueAndSpan {
+        inner: SpannedValue::Keyword(Keyword::plain(key)),
+        span: edn::types::Span::new(0, 0),
+    };
+    map.get(&key_value).and_then(|v| match &v.inner {
+        SpannedValue::Vector(vec) => {
+            Some(vec.iter().map(|arg| format!("{:?}", arg.inner)).collect())
+        }
+        _ => None,
+    })
+}
+
+fn parse_datoms_index(s: &str) -> Result<super::DatomsIndex, ParseError> {
+    use super::DatomsIndex;
+    let s_clean = s.trim_matches(|c| c == ':' || c == '"');
+    match s_clean {
+        "eavt" | "EAVT" => Ok(DatomsIndex::EAVT),
+        "aevt" | "AEVT" => Ok(DatomsIndex::AEVT),
+        "avet" | "AVET" => Ok(DatomsIndex::AVET),
+        "vaet" | "VAET" => Ok(DatomsIndex::VAET),
+        _ => Err(ParseError::InvalidType(format!(
+            "Invalid datoms index: {}. Expected :eavt, :aevt, :avet, or :vaet",
+            s
+        ))),
+    }
 }
 
 #[cfg(test)]

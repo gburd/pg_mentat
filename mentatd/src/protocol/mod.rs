@@ -44,8 +44,50 @@ pub enum Operation {
         tx_data: String,
     },
 
+    // Pull API
+    Pull {
+        pattern: String,
+        entity_id: i64,
+    },
+
+    // Index access
+    Datoms {
+        index: DatomsIndex,
+        components: Vec<String>,
+    },
+
+    // Time-travel queries
+    AsOf {
+        query: String,
+        args: Vec<String>,
+        t: i64,
+    },
+    Since {
+        query: String,
+        args: Vec<String>,
+        t: i64,
+    },
+    History {
+        query: String,
+        args: Vec<String>,
+    },
+
+    // Transaction log
+    TxRange {
+        start: Option<i64>,
+        end: Option<i64>,
+    },
+
     // Health check
     Health,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DatomsIndex {
+    EAVT,
+    AEVT,
+    AVET,
+    VAET,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
