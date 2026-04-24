@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod config;
+pub mod db_cache;
 pub mod metrics;
 pub mod pool;
 pub mod protocol;
@@ -79,6 +80,18 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let state = AppState::new(pool, config.clone());
+
+    // Spawn background task to clean up expired db snapshots
+    let cleanup_state = state.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
+        loop {
+            interval.tick().await;
+            cleanup_state.db_cache().cleanup_expired();
+            tracing::debug!("Cleaned up expired db snapshots");
+        }
+    });
+
     let app = create_router(state);
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)

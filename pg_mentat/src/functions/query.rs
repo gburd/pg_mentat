@@ -2329,6 +2329,164 @@ fn build_rule_ctes(
     Ok((cte_sql, cte_info))
 }
 
+/// Build a SQL WHERE condition from a Datalog predicate in a rule body.
+fn build_predicate_clause_for_rule(
+    pred: &Predicate,
+    var_to_alias: &HashMap<String, (String, &'static str)>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let op = pred.operator.0.as_str();
+
+    let sql_op = match op {
+        "<" => "<",
+        ">" => ">",
+        "<=" => "<=",
+        ">=" => ">=",
+        "=" => "=",
+        "!=" => "!=",
+        _ => return Err(format!(
+            ":db.error/unsupported-predicate Unsupported predicate operator '{}' in rule. \
+             Supported operators: <, >, <=, >=, =, !=. \
+             Example: [(< ?age 30)]",
+            op
+        ).into()),
+    };
+
+    if pred.args.len() != 2 {
+        return Err(format!(
+            ":db.error/predicate-arity Predicate '{}' in rule requires exactly 2 arguments, got {}. \
+             Example: [({} ?var value)]",
+            op, pred.args.len(), op
+        ).into());
+    }
+
+    let left = pred_arg_to_sql_for_rule(&pred.args[0], var_to_alias)?;
+    let right = pred_arg_to_sql_for_rule(&pred.args[1], var_to_alias)?;
+
+    Ok(format!("({} {} {})", left, sql_op, right))
+}
+
+/// Resolve variable references in expressions for rule context.
+fn resolve_var_refs_for_rule(
+    expr: &str,
+    var_to_alias: &HashMap<String, (String, &'static str)>,
+) -> String {
+    let mut result = expr.to_string();
+
+    // Find all NUM_VAR_REF:?xxx and VAR_REF:?xxx occurrences and replace them
+    loop {
+        let num_pos = result.find("NUM_VAR_REF:");
+        let var_pos = result.find("VAR_REF:");
+
+        let (start, prefix_len, is_numeric) = match (num_pos, var_pos) {
+            (Some(n), Some(v)) => {
+                if n < v {
+                    (n, 12, true) // "NUM_VAR_REF:" is 12 chars
+                } else {
+                    (v, 8, false) // "VAR_REF:" is 8 chars
+                }
+            }
+            (Some(n), None) => (n, 12, true),
+            (None, Some(v)) => (v, 8, false),
+            (None, None) => break,
+        };
+
+        let rest = &result[start + prefix_len..];
+        // Variable names end at space, ), or end of string
+        let end = rest
+            .find(|c: char| {
+                c == ' ' || c == ')' || c == ',' || c == '+' || c == '-' || c == '*' || c == '/'
+            })
+            .unwrap_or(rest.len());
+
+        let var_name = rest[..end].to_string();
+
+        let replacement = if let Some((alias, col)) = var_to_alias.get(&var_name) {
+            if is_numeric {
+                // Numeric context
+                if *col == "v" {
+                    // For value columns, use numeric coalesce for arithmetic
+                    format!(
+                        "COALESCE({alias}.v_long::NUMERIC, {alias}.v_double::NUMERIC, {alias}.v_ref::NUMERIC, 0)"
+                    )
+                } else if *col == "computed" && alias.starts_with("rec_") {
+                    // Recursive variable - need to determine the right column
+                    // For now, assume col0
+                    format!("{alias}.col0::NUMERIC")
+                } else {
+                    format!("{alias}.{col}::NUMERIC")
+                }
+            } else {
+                // Text/regular context
+                if *col == "v" {
+                    build_value_decode_expr(alias)
+                } else if *col == "computed" && alias.starts_with("rec_") {
+                    format!("{alias}.col0")
+                } else {
+                    format!("{alias}.{col}")
+                }
+            }
+        } else {
+            // Variable not bound - keep as-is for now
+            format!("NULL")
+        };
+
+        let prefix = &result[..start];
+        let suffix = &result[start + prefix_len + end..];
+        result = format!("{}{}{}", prefix, replacement, suffix);
+    }
+
+    result
+}
+
+/// Convert a predicate argument to SQL expression in rule context.
+fn pred_arg_to_sql_for_rule(
+    arg: &FnArg,
+    var_to_alias: &HashMap<String, (String, &'static str)>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    match arg {
+        FnArg::Variable(v) => {
+            let var_name = format!("{}", v);
+            if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
+                if *col == "v" {
+                    // For value comparisons in rules, use COALESCE across typed columns
+                    Ok(format!(
+                        "COALESCE({alias}.v_ref::NUMERIC, \
+                         CASE WHEN {alias}.v_bool THEN 1 ELSE 0 END::NUMERIC, \
+                         {alias}.v_long::NUMERIC, \
+                         {alias}.v_double::NUMERIC, \
+                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC, \
+                         NULL)"
+                    ))
+                } else if *col == "computed" {
+                    // This is from a recursive rule invocation
+                    Ok(format!("{}.col0", alias))  // TODO: handle proper column mapping
+                } else {
+                    Ok(format!("{}.{}", alias, col))
+                }
+            } else {
+                Err(format!(
+                    ":db.error/unbound-var Unbound variable '{}' in rule predicate. \
+                     Every variable used in a predicate must first appear in a pattern in the rule body. \
+                     Add a pattern like [?e :some-attr {}] to bind it.",
+                    var_name, var_name
+                ).into())
+            }
+        }
+        FnArg::EntidOrInteger(i) => Ok(format!("{}", i)),
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("{}", f.into_inner())),
+        FnArg::Constant(NonIntegerConstant::Text(s)) => {
+            // SECURITY: Escape single quotes to prevent SQL injection
+            let escaped = s.as_ref().replace('\'', "''");
+            Ok(format!("'{}'", escaped))
+        }
+        FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
+            Ok(format!("{}", if *b { 1 } else { 0 }))
+        }
+        _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type in rule. \
+                  Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
+    }
+}
+
 /// Build SQL for a single rule clause body.
 ///
 /// Each clause has a head (defining result columns) and a body (patterns + optional
@@ -2511,11 +2669,30 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     }
                 }
             }
+            WhereClause::Pred(pred) => {
+                // Handle predicates in rule bodies
+                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias)?;
+                where_parts.push(pred_sql);
+            }
+            WhereClause::WhereFn(wf) => {
+                // Handle arithmetic function bindings in rule bodies
+                if let Some((result_var, computed_expr)) = build_where_fn_binding(wf)? {
+                    // Store the computed expression for later use in SELECT
+                    body_var_to_alias.insert(result_var, ("COMPUTED".to_string(), "expr"));
+                    // We'll handle this in the SELECT clause
+                } else {
+                    return Err(format!(
+                        ":db.error/unsupported-rule-fn Unsupported function '{}' in rule body. \
+                         Supported functions: *, +, -, /",
+                        wf.operator.0
+                    ).into());
+                }
+            }
             _ => {
                 return Err(
-                    ":db.error/unsupported-rule-body Only data patterns and recursive rule \
-                     invocations are supported in rule bodies. Predicates and function calls \
-                     inside rule definitions are not yet supported."
+                    ":db.error/unsupported-rule-body Only data patterns, predicates, arithmetic functions, \
+                     and recursive rule invocations are supported in rule bodies. \
+                     Other clause types are not yet supported."
                         .into(),
                 );
             }
@@ -2524,13 +2701,33 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
 
     // Build SELECT expressions: map head variables to body columns
     let mut select_parts = Vec::new();
+    let mut computed_expressions: HashMap<String, String> = HashMap::new();
+
+    // First pass: collect computed expressions from WhereFn clauses
+    for wc in &clause.body {
+        if let WhereClause::WhereFn(wf) = wc {
+            if let Some((result_var, computed_expr)) = build_where_fn_binding(wf)? {
+                // Resolve variable references in the computed expression
+                let resolved_expr = resolve_var_refs_for_rule(&computed_expr, &body_var_to_alias);
+                computed_expressions.insert(result_var, resolved_expr);
+            }
+        }
+    }
+
     for (i, arg) in clause.head.args.iter().enumerate() {
         if let FnArg::Variable(v) = arg {
             let var_name = format!("{}", v);
-            if let Some((alias, col)) = body_var_to_alias.get(var_name.as_str()) {
+
+            // Check if this is a computed expression first
+            if let Some(expr) = computed_expressions.get(&var_name) {
+                select_parts.push(format!("({})", expr));
+            } else if let Some((alias, col)) = body_var_to_alias.get(var_name.as_str()) {
                 if alias == &recursive_alias && *col == "computed" {
                     // Recursive variable mapped directly
                     select_parts.push(format!("{}.col{}::BIGINT", recursive_alias, i));
+                } else if alias == "COMPUTED" && *col == "expr" {
+                    // This shouldn't happen as we handle computed expressions above
+                    select_parts.push("NULL::BIGINT".to_string());
                 } else if *col == "v" {
                     // Value column: for ref-type, use v_ref directly
                     select_parts.push(format!("{alias}.v_ref"));
@@ -2572,4 +2769,50 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
     };
 
     Ok(sql)
+}
+
+// ============================================================================
+// Helper functions for OR-clause predicate support
+// ============================================================================
+
+/// Check if a pattern binds a specific variable.
+fn pattern_binds_var(pattern: &edn::query::Pattern, var_name: &str) -> bool {
+    use edn::query::{PatternNonValuePlace, PatternValuePlace};
+
+    // Check entity position
+    if let PatternNonValuePlace::Variable(v) = &pattern.entity {
+        if format!("{}", v) == var_name {
+            return true;
+        }
+    }
+
+    // Check attribute position
+    if let PatternNonValuePlace::Variable(v) = &pattern.attribute {
+        if format!("{}", v) == var_name {
+            return true;
+        }
+    }
+
+    // Check value position
+    if let PatternValuePlace::Variable(v) = &pattern.value {
+        if format!("{}", v) == var_name {
+            return true;
+        }
+    }
+
+    // Check tx position
+    if let PatternNonValuePlace::Variable(v) = &pattern.tx {
+        if format!("{}", v) == var_name {
+            return true;
+        }
+    }
+
+    // Check added position (if it exists)
+    if let PatternNonValuePlace::Variable(v) = &pattern.added {
+        if format!("{}", v) == var_name {
+            return true;
+        }
+    }
+
+    false
 }

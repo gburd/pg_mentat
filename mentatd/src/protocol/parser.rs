@@ -86,6 +86,8 @@ fn parse_operation(
             })
         }
 
+        "db-snapshot" => Ok(Operation::DbSnapshot),
+
         "q" => {
             let args_map = extract_args_map(map)?;
 
@@ -117,6 +119,7 @@ fn parse_operation(
             let timeout = extract_optional_int(&args_map, "timeout").map(|i| i as u64);
             let limit = extract_optional_int(&args_map, "limit").map(|i| i as usize);
             let offset = extract_optional_int(&args_map, "offset").map(|i| i as usize);
+            let db_id = extract_optional_string(&args_map, "db-id");
 
             Ok(Operation::Query {
                 query,
@@ -124,6 +127,7 @@ fn parse_operation(
                 timeout,
                 limit,
                 offset,
+                db_id,
             })
         }
 
@@ -407,6 +411,20 @@ fn extract_optional_vector(
         SpannedValue::Vector(vec) => {
             Some(vec.iter().map(|arg| format!("{:?}", arg.inner)).collect())
         }
+        _ => None,
+    })
+}
+
+fn extract_optional_string(
+    map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    key: &str,
+) -> Option<String> {
+    let key_value = ValueAndSpan {
+        inner: SpannedValue::Keyword(Keyword::plain(key)),
+        span: edn::types::Span::new(0, 0),
+    };
+    map.get(&key_value).and_then(|v| match &v.inner {
+        SpannedValue::Text(s) => Some(s.to_string()),
         _ => None,
     })
 }

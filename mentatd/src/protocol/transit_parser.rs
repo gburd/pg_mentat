@@ -555,6 +555,7 @@ fn parse_transit_operation(
             let timeout = get_optional_int(&args, "timeout").map(|i| i as u64);
             let limit = get_optional_int(&args, "limit").map(|i| i as usize);
             let offset = get_optional_int(&args, "offset").map(|i| i as usize);
+            let db_id = get_optional_string(&args, "db-id");
 
             Ok(Operation::Query {
                 query,
@@ -562,6 +563,7 @@ fn parse_transit_operation(
                 timeout,
                 limit,
                 offset,
+                db_id,
             })
         }
 
@@ -808,6 +810,18 @@ fn transit_value_to_edn_string(val: &TransitValue) -> String {
                 .collect();
             format!("{{{}}}", inner.join(" "))
         }
+    }
+}
+
+/// Get an optional string from a Transit map.
+fn get_optional_string(
+    entries: &[(TransitValue, TransitValue)],
+    key: &str,
+) -> Option<String> {
+    match map_get(entries, key) {
+        Some(TransitValue::String(s)) => Some(s.clone()),
+        Some(TransitValue::)) => Some(i().toString()),
+        _ => None,
     }
 }
 

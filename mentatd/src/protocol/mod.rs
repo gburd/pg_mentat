@@ -30,6 +30,9 @@ pub enum Operation {
         connection_id: Uuid,
     },
 
+    // Database snapshot for batch queries
+    DbSnapshot,
+
     // Query
     Query {
         query: String,
@@ -37,6 +40,7 @@ pub enum Operation {
         timeout: Option<u64>,
         limit: Option<usize>,
         offset: Option<usize>,
+        db_id: Option<String>,  // Optional db snapshot for batch queries
     },
 
     // Transaction
@@ -152,6 +156,7 @@ pub enum ResponseValue {
     List(Vec<ResponseValue>),
     Vector(Vec<ResponseValue>),
     Map(Vec<(ResponseValue, ResponseValue)>),
+    DbSnapshot { db_id: String, basis_t: i64 },
 }
 
 #[derive(Debug, Clone)]

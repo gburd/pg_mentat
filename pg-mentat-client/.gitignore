@@ -1,0 +1,45 @@
+# Leiningen
+/target
+/classes
+/checkouts
+pom.xml
+pom.xml.asc
+*.jar
+*.class
+/.lein-*
+/.nrepl-port
+.hgignore
+.hg/
+
+# Clojure
+*.class
+*.jar
+.cpcache/
+.nrepl-history
+.lein-repl-history
+.lein-failures
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+/test-output
+/test-reports
+
+# Build artifacts
+/lib
+/build
+
+# Logs
+*.log
+/logs
+
+# Environment
+.env
+.env.local

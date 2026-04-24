@@ -113,6 +113,10 @@ fn value_to_transit_json(value: &ResponseValue, output: &mut String) {
             }
             output.push(']');
         }
+        ResponseValue::DbSnapshot { db_id, basis_t } => {
+            // DbSnapshot as a tagged value: ["~#db", ["db_id", basis_t]]
+            write!(output, "[\"~#db\",[\"{}\",{}]]", db_id, basis_t).ok();
+        }
     }
 }
 
@@ -221,6 +225,14 @@ fn value_to_msgpack(value: &ResponseValue, buf: &mut Vec<u8>) {
                 value_to_msgpack(k, buf);
                 value_to_msgpack(v, buf);
             }
+        }
+        ResponseValue::DbSnapshot { db_id, basis_t } => {
+            // Encode as ["~#db", ["db_id", basis_t]]
+            msgpack_write_array_len(buf, 2);
+            msgpack_write_str(buf, "~#db");
+            msgpack_write_array_len(buf, 2);
+            msgpack_write_str(buf, db_id);
+            msgpack_write_i64(buf, *basis_t);
         }
     }
 }

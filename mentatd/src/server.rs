@@ -1,5 +1,6 @@
 use crate::cache::QueryCache;
 use crate::config::Config;
+use crate::db_cache::DbValueCache;
 use crate::metrics;
 use crate::pool::DbPool;
 use crate::protocol::{
@@ -61,6 +62,7 @@ pub struct AppState {
     #[allow(dead_code)]
     config: Arc<Config>,
     query_cache: Arc<QueryCache>,
+    db_cache: Arc<DbValueCache>,
 }
 
 impl AppState {
@@ -71,16 +73,24 @@ impl AppState {
             0
         };
         let cache_ttl = Duration::from_secs(config.cache.ttl_secs);
+        // Use a default of 1 hour TTL for db snapshots if not configured
+        let db_snapshot_ttl = Duration::from_secs(3600);
         Self {
             pool,
             config: Arc::new(config),
             query_cache: Arc::new(QueryCache::new(cache_capacity, cache_ttl)),
+            db_cache: Arc::new(DbValueCache::new(db_snapshot_ttl)),
         }
     }
 
     /// Returns a reference to the database connection pool.
     pub fn pool(&self) -> &DbPool {
         &self.pool
+    }
+
+    /// Returns a reference to the db value cache.
+    pub fn db_cache(&self) -> &DbValueCache {
+        &self.db_cache
     }
 }
 
@@ -387,17 +397,63 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             ),
         ]))),
 
-        Operation::Query { query, args, .. } => {
-            info!("Executing query: {} with args: {:?}", query, args);
+        Operation::DbSnapshot => {
+            info!("Creating database snapshot");
+
+            let client = state.pool.get().await?;
+
+            // Get current basis-t from PostgreSQL
+            let row = client
+                .query_one(
+                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+                    &[],
+                )
+                .await?;
+
+            let basis_t: i64 = row.get(0);
+
+            // Create snapshot in cache
+            let db_id = state.db_cache.create_snapshot(basis_t);
+
+            info!("Created db snapshot: db_id={}, basis_t={}", db_id, basis_t);
+
+            ("db_snapshot", Ok(ResponseValue::DbSnapshot { db_id, basis_t }))
+        }
+
+        Operation::Query { query, args, db_id, .. } => {
+            info!("Executing query: {} with args: {:?}, db_id: {:?}", query, args, db_id);
             metrics::QUERY_COUNT.inc();
             let query_start = Instant::now();
+
+            // If db_id is provided, get the cached basis-t
+            let basis_t = if let Some(ref id) = db_id {
+                match state.db_cache.get_basis_t(id) {
+                    Some(t) => {
+                        debug!("Using cached db snapshot: db_id={}, basis_t={}", id, t);
+                        Some(t)
+                    }
+                    None => {
+                        warn!("Invalid or expired db_id: {}", id);
+                        return Err(ServerError::Internal(format!("Invalid or expired db-id: {}", id)));
+                    }
+                }
+            } else {
+                None
+            };
 
             // Convert args to a stable JSON string for cache key
             let args_json_str = serde_json::to_string(&args)
                 .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
 
+            // Include basis_t in cache key if using a snapshot
+            let cache_key_suffix = if let Some(t) = basis_t {
+                format!("{}@{}", args_json_str, t)
+            } else {
+                args_json_str.clone()
+            };
+
             // Check cache first -- we cache the raw JSON from PostgreSQL
-            if let Some(cached_json) = state.query_cache.get(&query, &args_json_str) {
+            if let Some(cached_json) = state.query_cache.get(&query, &cache_key_suffix) {
                 debug!("Cache hit for query: {}", query);
                 metrics::CACHE_HITS.inc();
                 let elapsed = query_start.elapsed().as_secs_f64();
@@ -416,12 +472,23 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let client = state.pool.get().await?;
 
-            // Convert args Vec<String> to a JSON value for the JSONB parameter
+            // Build query inputs with optional basis-t for temporal filtering
             let args_json = serde_json::to_value(&args)
                 .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
 
+            let inputs_json = if let Some(t) = basis_t {
+                // Add basis-t for snapshot queries
+                let mut inputs = serde_json::Map::new();
+                inputs.insert("inputs".to_string(), args_json);
+                inputs.insert("asOf".to_string(), serde_json::Value::Number(t.into()));
+                serde_json::Value::Object(inputs)
+            } else {
+                // Regular query without snapshot
+                args_json
+            };
+
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &args_json])
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
                 .await?;
 
             let result_json: serde_json::Value = row.get(0);
@@ -431,7 +498,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let deps = extract_result_entities(&result_json);
             state
                 .query_cache
-                .insert_with_deps(&query, &args_json_str, json_str, deps);
+                .insert_with_deps(&query, &cache_key_suffix, json_str, deps);
 
             let result = parse_query_results(&result_json)?;
 

@@ -63,6 +63,9 @@ fn serialize_value(value: &ResponseValue, output: &mut String) {
             }
             output.push('}');
         }
+        ResponseValue::DbSnapshot { db_id, basis_t } => {
+            write!(output, "#datom/db [\"{}\" {}]", db_id, basis_t).ok();
+        }
     }
 }
 

@@ -200,6 +200,30 @@ cargo pgrx install --release --features pg16  # default
 cargo pgrx install --release --features pg17
 ```
 
+## Client Libraries
+
+### Clojure
+
+A Datomic-compatible Clojure client library is available in `pg-mentat-client/`. It provides idiomatic Clojure access to pg_mentat:
+
+```clojure
+(require '[pg-mentat.client :as mentat])
+
+(def conn (mentat/connect "http://localhost:8080"))
+(def db (mentat/db conn))
+
+;; Query
+(mentat/q '[:find ?e ?name :where [?e :person/name ?name]] db)
+
+;; Transact
+(mentat/transact conn [{:db/id "tempid1" :person/name "Charlie"}])
+
+;; Pull
+(mentat/pull db [:person/name :person/email] 10001)
+```
+
+See [pg-mentat-client/README.md](pg-mentat-client/README.md) for full documentation.
+
 ## Development
 
 ### Running tests
@@ -214,6 +238,7 @@ cargo pgrx test pg16
 ```
 pg_mentat/              PostgreSQL extension (pgrx)
 mentatd/                HTTP daemon (Axum)
+pg-mentat-client/       Clojure client library
 edn/                    EDN parser (rust-peg)
 core/ + core-traits/    Fundamental types (ValueType, TypedValue)
 db/ + db-traits/        Core storage logic
