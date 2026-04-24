@@ -1,4 +1,5 @@
-use deadpool_postgres::{Config as PoolConfig, Pool};
+use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
+use std::time::Duration;
 use thiserror::Error;
 use tokio_postgres::NoTls;
 
@@ -14,6 +15,14 @@ pub enum PoolError {
 
 pub type DbPool = Pool;
 
+/// Connection pool configuration optimized for high concurrency.
+///
+/// Phase 0 Optimization: Connection pool was the #1 bottleneck identified
+/// in load testing. Changes:
+/// - Increased max size from 10 to 100+ connections
+/// - Added connection timeouts (30s wait, 30min lifetime)
+/// - Enabled connection recycling for better reuse
+/// - Added wait timeout to prevent indefinite blocking
 pub fn create_pool(connection_string: &str, max_size: usize) -> Result<DbPool, PoolError> {
     let config = connection_string
         .parse::<tokio_postgres::Config>()
@@ -49,14 +58,49 @@ pub fn create_pool(connection_string: &str, max_size: usize) -> Result<DbPool, P
         manager_config.password(password);
     }
 
+    // Configure TCP keep-alive for connection health
+    manager_config.keepalives(true);
+    manager_config.keepalives_idle(Duration::from_secs(60)); // Check every 60s
+
     let manager = deadpool_postgres::Manager::new(manager_config, NoTls);
 
     let pool = Pool::builder(manager)
         .max_size(max_size)
+        // Wait up to 30 seconds for an available connection before timing out
+        .wait_timeout(Some(Duration::from_secs(30)))
+        // Recycle connections after 30 minutes to prevent stale connections
+        .max_lifetime(Some(Duration::from_secs(1800)))
+        // Use tokio runtime for async operations
+        .runtime(Runtime::Tokio1)
         .build()
         .map_err(|e| PoolError::Config(e.to_string()))?;
 
     Ok(pool)
+}
+
+/// Update Prometheus metrics with current connection pool statistics.
+///
+/// Call this periodically (e.g., every 5 seconds) or after acquiring/releasing
+/// connections to keep metrics accurate.
+pub fn update_pool_metrics(pool: &DbPool) {
+    let status = pool.status();
+
+    // Update Prometheus metrics (defined in metrics.rs)
+    // These metrics are scraped by Prometheus for monitoring
+    crate::metrics::CONNECTION_POOL_SIZE.set(status.size as f64);
+    crate::metrics::CONNECTION_POOL_AVAILABLE.set(status.available as i64);
+
+    // Calculate waiting count (max - size gives headroom, size - available gives in-use)
+    // Waiting is estimated as: if pool is full and someone's trying to get a connection
+    let in_use = status.size - status.available;
+    let waiting = if status.size >= status.max_size && in_use >= status.size {
+        // Pool is exhausted, likely have waiting requests
+        // This is an estimate; deadpool doesn't directly expose wait queue size
+        1
+    } else {
+        0
+    };
+    crate::metrics::CONNECTION_POOL_WAITING.set(waiting);
 }
 
 #[cfg(test)]

@@ -92,6 +92,16 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Spawn background task to update connection pool metrics (Phase 0 optimization)
+    let pool_clone = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5)); // Update every 5 seconds
+        loop {
+            interval.tick().await;
+            crate::pool::update_pool_metrics(&pool_clone);
+        }
+    });
+
     let app = create_router(state);
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
