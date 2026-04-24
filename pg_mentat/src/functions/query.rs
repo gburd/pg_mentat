@@ -1022,44 +1022,105 @@ fn build_sql_from_datalog(
         let mut union_parts = Vec::new();
 
         for or_clause in &or_join.clauses {
-            let arm_patterns: Vec<&edn::query::Pattern> = match or_clause {
-                OrWhereClause::Clause(WhereClause::Pattern(p)) => vec![p],
+            // Extract patterns, predicates, and where-functions from each OR branch
+            let mut arm_patterns: Vec<&edn::query::Pattern> = Vec::new();
+            let mut arm_predicates: Vec<&Predicate> = Vec::new();
+            let mut arm_where_fns: Vec<&WhereFn> = Vec::new();
+
+            match or_clause {
+                OrWhereClause::Clause(clause) => {
+                    match clause {
+                        WhereClause::Pattern(p) => arm_patterns.push(p),
+                        WhereClause::Pred(pred) => arm_predicates.push(pred),
+                        WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
+                        WhereClause::NotJoin(_) => return Err(
+                            ":db.error/unsupported-query NOT clauses inside OR branches are not yet supported."
+                                .into(),
+                        ),
+                        WhereClause::RuleExpr(_) => return Err(
+                            ":db.error/unsupported-query Rule invocations inside OR branches are not yet supported."
+                                .into(),
+                        ),
+                        _ => {} // Ignore type annotations
+                    }
+                }
                 OrWhereClause::And(clauses) => {
-                    let mut ps = Vec::new();
                     for c in clauses {
                         match c {
-                            WhereClause::Pattern(p) => ps.push(p),
-                            _ => return Err(
-                                ":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
-                                 are supported inside (or (and ...)). Predicates and function calls \
-                                 inside OR branches are not yet supported."
+                            WhereClause::Pattern(p) => arm_patterns.push(p),
+                            WhereClause::Pred(pred) => arm_predicates.push(pred),
+                            WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
+                            WhereClause::NotJoin(_) => return Err(
+                                ":db.error/unsupported-query NOT clauses inside (or (and ...)) are not yet supported."
                                     .into(),
                             ),
+                            WhereClause::RuleExpr(_) => return Err(
+                                ":db.error/unsupported-query Rule invocations inside (or (and ...)) are not yet supported."
+                                    .into(),
+                            ),
+                            _ => {} // Ignore type annotations
                         }
                     }
-                    ps
                 }
-                _ => return Err(
-                    ":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
-                     are supported inside (or ...). Predicates and function calls inside OR \
-                     branches are not yet supported.".into()),
             };
+
+            // Check groundedness: all variables in predicates must be bound by patterns
+            for pred in &arm_predicates {
+                for arg in &pred.args {
+                    if let FnArg::Variable(v) = arg {
+                        let var_name = format!("{}", v);
+                        // Check if this variable will be bound by patterns in this branch
+                        let bound_in_base = pattern_clauses.iter().any(|p| pattern_binds_var(p, &var_name));
+                        let bound_in_arm = arm_patterns.iter().any(|p| pattern_binds_var(p, &var_name));
+                        if !bound_in_base && !bound_in_arm {
+                            return Err(format!(
+                                ":db.error/unbound-var Variable '{}' used in predicate inside OR branch \
+                                 is not bound by any pattern. All variables in predicates must appear in \
+                                 a pattern first. Add a pattern like [?e :some-attr {}] to bind it.",
+                                var_name, var_name
+                            ).into());
+                        }
+                    }
+                }
+            }
 
             // Each arm gets the base patterns plus its own patterns.
             // This ensures variable bindings from the shared context
             // (e.g. [?p :person/name ?name]) are correctly included in
             // every branch, maintaining consistent bindings across the
             // UNION.
-            let mut combined: Vec<&edn::query::Pattern> = pattern_clauses.clone();
-            combined.extend(arm_patterns);
+            let mut combined_patterns: Vec<&edn::query::Pattern> = pattern_clauses.clone();
+            combined_patterns.extend(arm_patterns);
 
+            // Combine predicates from base query and this OR branch
+            let mut combined_predicates = predicates.clone();
+            combined_predicates.extend(arm_predicates);
+
+            // Process where-functions for this branch
+            let mut arm_fts_joins = fts_joins.clone();
+            let mut arm_extra_var_bindings = extra_var_bindings.clone();
             let mut arm_builder = SqlBuilder::new();
+
+            for (idx, wf) in arm_where_fns.iter().enumerate() {
+                if wf.operator.0.as_str() == "fulltext" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings)?;
+                    arm_fts_joins.push(fts_join);
+                } else {
+                    return Err(format!(
+                        ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
+                         Only fulltext and predicates are currently supported.",
+                        wf.operator.0.as_str()
+                    ).into());
+                }
+            }
+
             let (arm_sql, _arm_var_to_alias) = build_extended_pattern_query(
-                &combined,
+                &combined_patterns,
                 &not_joins,
-                &predicates,
-                &fts_joins,
-                &extra_var_bindings,
+                &combined_predicates,
+                &arm_fts_joins,
+                &arm_extra_var_bindings,
                 find_vars,
                 &parsed.find_spec,
                 &mut arm_builder,

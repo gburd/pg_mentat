@@ -820,7 +820,6 @@ fn get_optional_string(
 ) -> Option<String> {
     match map_get(entries, key) {
         Some(TransitValue::String(s)) => Some(s.clone()),
-        Some(TransitValue::)) => Some(i().toString()),
         _ => None,
     }
 }

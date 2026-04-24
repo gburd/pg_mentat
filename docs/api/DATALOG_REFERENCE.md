@@ -230,12 +230,14 @@ Get all datoms asserted/retracted in a transaction:
 
 ### Or Clauses
 
-Match any of several alternative patterns. All alternatives must bind the
-same set of variables.
+Match any of several alternative patterns, predicates, or combinations thereof.
+All alternatives must bind the same set of variables.
 
 ```edn
 (or <clause1> <clause2> ...)
 ```
+
+**Basic pattern matching:**
 
 ```edn
 [:find ?name
@@ -245,15 +247,42 @@ same set of variables.
      [?e :person/role :role/superadmin])]
 ```
 
+**Predicates in Or clauses:**
+
+You can use comparison predicates (`<`, `>`, `<=`, `>=`, `=`, `!=`) inside OR branches:
+
+```edn
+[:find ?e ?name ?age
+ :where
+ [?e :person/name ?name]
+ [?e :person/age ?age]
+ (or [(< ?age 20)]
+     [(> ?age 60)])]
+```
+
+**Mixing patterns and predicates:**
+
+```edn
+[:find ?e ?name
+ :where
+ (or [?e :person/name "Alice"]
+     (and [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(> ?age 30)]))]
+```
+
 **And within Or:**
 
-Combine multiple clauses in a single alternative:
+Combine multiple clauses (patterns and predicates) in a single alternative:
 
 ```edn
 (or (and [?e :person/role :role/admin]
-         [?e :person/active true])
+         [?e :person/active true]
+         [(> ?age 25)])
     [?e :person/role :role/superadmin])
 ```
+
+**Note:** All variables used in predicates within OR branches must be bound by patterns in the same branch or in the outer query context.
 
 ---
 
@@ -603,6 +632,11 @@ Rules are defined in the `:rules` clause:
 - The first element is the rule head: `(rule-name ?bound-vars ...)`.
 - Remaining elements are where clauses forming the rule body.
 - Multiple definitions of the same rule name create alternatives.
+- Rule bodies can contain:
+  - Data patterns: `[?e :attr ?v]`
+  - Predicates: `[(>= ?age 18)]`
+  - Arithmetic functions: `[(* ?price 0.9) ?discounted]`
+  - Recursive rule invocations: `(rule-name ?x ?y)`
 
 ### Recursive Rules
 
@@ -615,6 +649,34 @@ Rules can invoke themselves:
   [?from :link/to ?mid]
   (reachable ?mid ?to)]]
 ```
+
+### Rules with Predicates
+
+Rules can filter results using predicates:
+
+```edn
+[[(adult ?person)
+  [?person :person/age ?age]
+  [(>= ?age 18)]]
+
+ [(senior ?person)
+  [?person :person/age ?age]
+  [(>= ?age 65)]]]
+```
+
+### Rules with Arithmetic Functions
+
+Rules can compute derived values:
+
+```edn
+[[(discounted-price ?product ?final-price)
+  [?product :product/price ?original]
+  [(* ?original 0.9) ?final-price]]
+
+ [(total-with-tax ?subtotal ?total)
+  [(* ?subtotal 1.08) ?total]]]
+```
+</invoke>
 
 ---
 
