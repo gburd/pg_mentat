@@ -1,89 +1,34 @@
 # pg_mentat
 
-PostgreSQL extension that brings Mentat's Datalog capabilities and EDN data type
-to PostgreSQL.
+PostgreSQL extension providing a Datomic-compatible Datalog query engine with a native EDN data type.
 
 ## Overview
 
 `pg_mentat` is a PostgreSQL extension built with [pgrx](https://github.com/pgcentralfoundation/pgrx)
 that provides:
 
-- **EDN Custom Type** -- native PostgreSQL type for Extensible Data Notation (EDN)
-- **Datalog Queries** -- execute Datalog queries directly in PostgreSQL
-- **Temporal Database** -- time-travel queries with transaction history
-- **Storage Integration** -- native PostgreSQL storage for Mentat data
-
-## Current Status
-
-The extension code is feature-complete for Phase 1. All Rust source compiles
-successfully. Test execution is blocked on a build-environment dependency
-(libclang/LLVM for bindgen). See [WORKAROUNDS.md](WORKAROUNDS.md) and
-[TEST_EXECUTION_STATUS.md](TEST_EXECUTION_STATUS.md) for details.
-
-### What works
-
-- EDN type implementation with text I/O, validation, and CBOR binary path
-- Comparison operators (=, <>)
-- Collection accessors (get, nth, keys, values, count, contains)
-- Type predicates (is_nil, is_boolean, is_integer, etc.)
-- Schema initialization with EAVT datom storage and four covering indexes
-- Transaction processing (`mentat_transact`) with tempid resolution
-- Datalog query execution (`mentat_query`) with find specs, patterns, negation,
-  OR clauses, ordering, and limits
-- Entity retrieval (`mentat_entity`)
-- Schema introspection (`mentat_schema`)
-- Pull API stub (`mentat_pull`)
-- Full-text search via PostgreSQL tsvector/tsquery
-- Time-travel queries (as-of, since, history)
-- 38 pgrx tests migrated from SQLite and consolidated into `src/lib.rs`
-
-### What is blocked
-
-- `cargo pgrx test` requires libclang/LLVM for the bindgen step
-- See [WORKAROUNDS.md](WORKAROUNDS.md) for resolution steps
+- **Datalog Query Engine** -- execute Datalog queries with find specs, rules, aggregates, predicates, OR/NOT clauses, and full-text search
+- **Transaction Processing** -- assert and retract facts using EDN transaction format with tempid resolution, lookup refs, and upsert semantics
+- **Pull API** -- retrieve entity attributes with pattern matching, nested traversal, reverse lookups, limits, defaults, and recursion
+- **Temporal Database** -- time-travel queries with as-of, since, and full history modes
+- **Native EDN Type** -- first-class PostgreSQL type for Extensible Data Notation with collection access, type predicates, and equality operators
+- **SQL Integration** -- all operations exposed as SQL functions, composable with CTEs, window functions, JOINs, and any PostgreSQL feature
+- **EDN Helper Functions** -- batch operations, import/export, entity helpers
 
 ## Quick Start
 
 ### Prerequisites
 
 - PostgreSQL 13-18 (16 recommended)
-- Rust stable toolchain (via rustup)
-- LLVM/Clang development libraries (libclang)
+- Rust stable toolchain (1.88+)
+- LLVM/Clang development libraries
 - cargo-pgrx 0.17.x
 
-### Environment Setup
-
-```bash
-# 1. Set CARGO_HOME if using the project-local cargo cache
-export CARGO_HOME=/home/gburd/ws/pg_mentat/.cargo
-
-# 2. Ensure libclang is available
-#    Fedora:
-sudo dnf install clang-devel llvm-devel
-#    Debian/Ubuntu:
-sudo apt install libclang-dev llvm-dev
-
-# 3. Install pgrx CLI
-cargo install cargo-pgrx --version 0.17.0 --locked
-
-# 4. Initialize pgrx (downloads/compiles a test PostgreSQL instance)
-cargo pgrx init --pg16=$(which pg_config)
-# or let pgrx download its own:
-cargo pgrx init
-```
-
-### Build
+### Build and Install
 
 ```bash
 cd pg_mentat
-cargo pgrx package     # build the extension .so and SQL files
-cargo pgrx install     # install into the pgrx-managed PostgreSQL
-```
-
-### Run Tests
-
-```bash
-cargo pgrx test pg16
+cargo pgrx install --release
 ```
 
 ### Interactive Session
@@ -92,181 +37,190 @@ cargo pgrx test pg16
 cargo pgrx run pg16
 ```
 
-Then in the psql prompt:
-
 ```sql
 CREATE EXTENSION pg_mentat;
 
--- EDN type
-SELECT mentat.edn_out(mentat.edn_in('42'));
-SELECT mentat.edn_out(mentat.edn_in('{:name "Alice" :age 30}'));
+-- Define schema
+SELECT mentat_transact('[
+  {:db/ident :person/name
+   :db/valueType :db.type/string
+   :db/cardinality :db.cardinality/one}
+  {:db/ident :person/email
+   :db/valueType :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/unique :db.unique/identity}
+  {:db/ident :person/age
+   :db/valueType :db.type/long
+   :db/cardinality :db.cardinality/one}
+]');
 
--- Schema init
-SELECT mentat.initialize_schema();
-
--- Transact
-SELECT mentat.mentat_transact('[
-  [:db/add "p1" :person/name "Alice"]
-  [:db/add "p1" :person/age 30]
+-- Transact data
+SELECT mentat_transact('[
+  {:db/id "alice" :person/name "Alice" :person/email "alice@example.com" :person/age 30}
+  {:db/id "bob"   :person/name "Bob"   :person/email "bob@example.com"   :person/age 25}
 ]');
 
 -- Query
-SELECT mentat.mentat_query(
-  '[:find ?e ?ident :where [?e :db/ident ?ident]]',
-  '{}'::jsonb
-);
+SELECT mentat_query('
+  [:find ?name ?email
+   :where [?e :person/name ?name] [?e :person/email ?email]]
+', '{}');
+
+-- Pull
+SELECT mentat_pull('[*]', 10000);
+
+-- Entity
+SELECT mentat_entity(10000);
 ```
 
-## Features
+## SQL Function Reference
 
-### EDN Type
-
-The extension provides a custom `EdnValue` type supporting all EDN data types:
-
-- Primitives: `nil`, `boolean`, `integer`, `float`, `string`
-- Collections: `vector`, `list`, `set`, `map`
-- Special types: `keyword`, `symbol`, `uuid`, `instant`, `bytes`, `bigint`
-
-### EDN Functions
+### Core API
 
 | Function | Description |
-|---|---|
-| `edn_in(text)` | Parse EDN text to EdnValue |
-| `edn_out(EdnValue)` | Convert EdnValue to EDN text |
+|----------|-------------|
+| `mentat_transact(edn TEXT)` | Process EDN transactions (assert, retract, retractEntity) |
+| `mentat_query(query TEXT, inputs JSONB)` | Execute Datalog queries with temporal and pagination options |
+| `mentat_pull(pattern TEXT, entity_id BIGINT)` | Pull entity attributes by pattern |
+| `mentat_pull_many(pattern TEXT, entity_ids BIGINT[])` | Pull attributes for multiple entities |
+| `mentat_entity(entity_id BIGINT)` | Get all attributes of an entity as JSONB |
+| `mentat_schema()` | Return current schema as JSONB |
+| `mentat_explain(query TEXT, inputs JSONB)` | Show query execution plan and generated SQL |
+
+### EDN Helper Functions (mentat schema)
+
+| Function | Description |
+|----------|-------------|
+| `mentat.batch(edn TEXT)` | Execute multiple operations in a single batch |
+| `mentat.export_edn(entity_ids BIGINT[])` | Export entities to EDN format |
+| `mentat.import_edn(edn TEXT)` | Import entities from EDN format |
+| `mentat.query_export_edn(query TEXT, inputs JSONB)` | Query and export matching entities |
+| `mentat.export_all_edn()` | Export entire database to EDN |
+
+### Entity Helper Functions (mentat schema)
+
+| Function | Description |
+|----------|-------------|
+| `mentat.lookup_by_ident(attr TEXT, value TEXT)` | Look up entity by attribute value |
+| `mentat.entity_attrs(entity_id BIGINT)` | List attribute idents for an entity |
+| `mentat.attribute_values(attr TEXT)` | Get all values for an attribute |
+| `mentat.retract_entity(entity_id BIGINT)` | Retract all facts about an entity |
+
+### Operational Functions
+
+| Function | Description |
+|----------|-------------|
+| `mentat_query_stats()` | Query performance and database statistics |
+| `mentat_storage_stats()` | Table and index size information |
+| `mentat_slow_queries(threshold_ms)` | Find slow functions and heavy transactions |
+| `mentat_stmt_cache_stats()` | Prepared statement cache statistics |
+| `mentat_stmt_cache_clear()` | Clear prepared statement cache |
+
+### EDN Type Functions
+
+| Function | Description |
+|----------|-------------|
 | `edn_get(map, key)` | Get value from map by key |
-| `edn_nth(vector, index)` | Get element from vector by index |
-| `edn_count(collection)` | Get collection size |
-| `edn_contains(collection, element)` | Check if element exists |
-| `edn_keys(map)` | Extract map keys as vector |
-| `edn_values(map)` | Extract map values as vector |
+| `edn_nth(vector, index)` | Get element by 0-based index |
+| `edn_count(collection)` | Collection size |
+| `edn_contains(collection, element)` | Membership test |
+| `edn_keys(map)` | Extract map keys |
+| `edn_values(map)` | Extract map values |
+| `edn_is_nil`, `edn_is_boolean`, `edn_is_integer`, `edn_is_float`, `edn_is_text`, `edn_is_keyword`, `edn_is_vector`, `edn_is_list`, `edn_is_set`, `edn_is_map` | Type predicates |
 
-### Type Predicates
+## SQL Integration
 
-`edn_is_nil`, `edn_is_boolean`, `edn_is_integer`, `edn_is_float`,
-`edn_is_text`, `edn_is_keyword`, `edn_is_vector`, `edn_is_list`,
-`edn_is_set`, `edn_is_map`
+pg_mentat functions return standard PostgreSQL types (JSONB, TEXT, BIGINT), making them composable with all PostgreSQL features:
 
-### SQL API Functions
+```sql
+-- CTEs with Datalog
+WITH engineers AS (
+  SELECT elem->>0 AS eid, elem->>1 AS name
+  FROM mentat_query('[:find ?e ?name :where
+    [?e :person/department ?d] [?d :dept/name "Engineering"]
+    [?e :person/name ?name]]', '{}') AS q,
+  jsonb_array_elements(q->'results') AS elem
+)
+SELECT * FROM engineers;
 
-| Function | Description |
-|---|---|
-| `mentat_transact(edn)` | Process EDN transactions, persist datoms |
-| `mentat_query(query, inputs)` | Execute Datalog queries, return JSON |
-| `mentat_entity(entity_id)` | Fetch all datoms for an entity |
-| `mentat_schema()` | Return schema as JSON |
-| `mentat_pull(pattern, entity_id)` | Pull entity data (stub) |
-| `initialize_schema()` | Create the mentat datom tables and indexes |
+-- Window functions
+WITH salaries AS (
+  SELECT (elem->>1)::text AS name, (elem->>2)::int AS salary
+  FROM mentat_query('[:find ?e ?name ?salary :where
+    [?e :person/name ?name] [?e :person/salary ?salary]]', '{}') AS q,
+  jsonb_array_elements(q->'results') AS elem
+)
+SELECT name, salary, RANK() OVER (ORDER BY salary DESC) FROM salaries;
+
+-- Join with relational tables
+WITH people AS (
+  SELECT elem->>0 AS name, elem->>1 AS email
+  FROM mentat_query('[:find ?name ?email :where
+    [?e :person/name ?name] [?e :person/email ?email]]', '{}') AS q,
+  jsonb_array_elements(q->'results') AS elem
+)
+SELECT p.name, t.project_name, SUM(t.hours)
+FROM people p JOIN time_entries t ON t.person_email = p.email
+GROUP BY p.name, t.project_name;
+```
+
+See [docs/SQL_INTEGRATION.md](docs/SQL_INTEGRATION.md) for the complete SQL integration guide and [docs/EDN_TYPE.md](docs/EDN_TYPE.md) for the EDN type reference.
 
 ## Architecture
 
 ```
-pg_mentat/
-  Cargo.toml
-  pg_mentat.control
-  sql/
-    01_types.sql          -- custom enum types
-    02_tables.sql         -- datoms, schema, idents, partitions, transactions
-    03_indexes.sql        -- EAVT, AEVT, AVET, VAET covering indexes
-    04_constraints.sql    -- check constraints
-    05_functions.sql      -- allocate_entid, resolve_ident, current_tx
-    06_bootstrap_data.sql -- core schema attributes
-    bootstrap.sql         -- combined initialization
-  src/
-    lib.rs                -- extension entry, schema init, 38 inline tests
-    types/
-      mod.rs
-      edn.rs              -- EdnValue PostgreSQL type (text I/O, validation)
-    operators.rs           -- EDN comparison, accessors, predicates
-    storage.rs             -- SPI wrappers for entity allocation and queries
-    functions/
-      mod.rs
-      transact.rs          -- mentat_transact()
-      query.rs             -- mentat_query()
-      entity.rs            -- mentat_entity()
-      schema.rs            -- mentat_schema()
-      pull.rs              -- mentat_pull() (stub)
-    planner/               -- query planner hooks (planned)
-  tests/
-    test_common.rs         -- shared test helpers (reference copy)
-    test_query.rs          -- core query tests (reference copy)
-    test_fulltext.rs       -- FTS tests (reference copy)
-    test_rules.rs          -- rules tests (reference copy)
-    test_timetravel.rs     -- temporal tests (reference copy)
-  docs/
-    API_FUNCTIONS.md       -- detailed API reference
-    schema-design.md       -- PostgreSQL schema design
-    typedvalue-mapping.md  -- EDN to PostgreSQL type mapping
+src/
+  lib.rs                -- Extension entry point, Edn type definition, schema bootstrap SQL
+  types/
+    edn.rs              -- Edn impl, edn_in/edn_out/edn_send/edn_recv
+  operators.rs          -- EDN operators and accessor functions
+  functions/
+    transact.rs         -- mentat_transact() - EDN transaction processing
+    query.rs            -- mentat_query(), mentat_explain() - Datalog to SQL compilation
+    pull.rs             -- mentat_pull(), mentat_pull_many() - Pull API
+    entity.rs           -- mentat_entity() - Entity retrieval
+    schema.rs           -- mentat_schema() - Schema introspection
+    stats.rs            -- mentat_query_stats(), mentat_storage_stats(), mentat_slow_queries()
+    helpers.rs          -- lookup_by_ident, entity_attrs, attribute_values, retract_entity
+    edn_helpers.rs      -- batch, export_edn, import_edn, query_export_edn, export_all_edn
+    bootstrap.rs        -- bootstrap_schema() - Core schema initialization
+  storage.rs            -- SPI wrappers for entity allocation and lookups
+  cache.rs              -- Schema cache (attribute ident resolution)
+  error.rs              -- Error types with contextual messages
+  planner/
+    hooks.rs            -- GUC parameters, optimizer hints, index suggestions
+    mod.rs              -- Planner module
 ```
 
-### Storage Format
+### Storage Model
 
-EdnValue currently uses EDN text for storage. The `ciborium` dependency is
-included for a future migration to CBOR (Compact Binary Object Representation)
-for more efficient binary storage.
+All data is stored in the `mentat` schema as EAVT datoms in a partitioned table:
 
-### Datom Table
+- **mentat.datoms** -- partitioned by `value_type_tag` (LIST partitioning) with type-specific value columns (`v_ref`, `v_long`, `v_text`, `v_bool`, `v_double`, `v_instant`, `v_keyword`, `v_uuid`, `v_bytes`)
+- **mentat.schema** -- attribute definitions
+- **mentat.idents** -- keyword to entity ID mappings
+- **mentat.transactions** -- transaction metadata
+- **mentat.fulltext** -- full-text search with tsvector/GIN
 
-```sql
-CREATE TABLE mentat.datoms (
-    e     BIGINT  NOT NULL,  -- entity ID
-    a     BIGINT  NOT NULL,  -- attribute ID
-    v     BYTEA   NOT NULL,  -- value (type-tagged)
-    tx    BIGINT  NOT NULL,  -- transaction ID
-    added BOOLEAN NOT NULL   -- true=assert, false=retract
-);
-```
-
-Four covering indexes (EAVT, AEVT, AVET, VAET) support the standard Datomic
-access patterns.
-
-## Development Roadmap
-
-**Phase 1: Foundation (current)**
-- [x] EDN type with text I/O
-- [x] Basic type predicates and collection accessors
-- [x] Schema initialization
-- [x] Transaction processing
-- [x] Datalog query execution (basic patterns)
-- [x] Entity retrieval and schema introspection
-- [x] 38 pgrx tests migrated from SQLite
-- [ ] CBOR serialization (dependency added, not yet wired)
-
-**Phase 2: Optimization**
-- [ ] CBOR binary storage for EdnValue
-- [ ] Containment operators (@>, <@, ?, ?|, ?&)
-- [ ] Performance benchmarks
-
-**Phase 3: Advanced Features**
-- [ ] Query planner hooks
-- [ ] B-tree and GIN index support
-- [ ] Full pull-pattern support
-- [ ] Aggregate functions (count, sum, min, max, avg)
-
-**Phase 4: Production Readiness**
-- [ ] Full query engine integration (algebrizer, projector)
-- [ ] WASM function support
-- [ ] CI/CD pipeline with automated tests
-- [ ] Remaining ~150 tests ported
+Eight indexes cover the four Datomic access patterns (EAVT, AEVT, AVET, VAET) with type-specific partial indexes for correct native comparisons.
 
 ## Testing
 
-38 tests are defined inline in `src/lib.rs`. They cover:
-
-- EDN roundtrip (5 tests)
-- Core Datalog queries (11 tests)
-- Time-travel / temporal queries (7 tests)
-- Rules and recursive queries (8 tests)
-- Full-text search (7 tests)
-
-Run with:
-
 ```bash
-export CARGO_HOME=/home/gburd/ws/pg_mentat/.cargo
 cargo pgrx test pg16
 ```
 
-See [TEST_EXECUTION_STATUS.md](TEST_EXECUTION_STATUS.md) for execution history
-and [WORKAROUNDS.md](WORKAROUNDS.md) for environment issues.
+The test suite includes 1,900+ tests covering transactions, queries, pulls, temporal operations, rules, aggregates, predicates, upserts, retractions, concurrency, and edge cases.
+
+## Configuration
+
+GUC parameters for tuning:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `mentat.enable_optimizer_hints` | `true` | Enable SET LOCAL optimizer hints |
+| `mentat.default_work_mem` | `64MB` | work_mem for complex queries |
+| `mentat.max_result_rows` | `0` | Maximum result rows (0 = unlimited) |
 
 ## Contributing
 
@@ -274,7 +228,7 @@ and [WORKAROUNDS.md](WORKAROUNDS.md) for environment issues.
 2. Make changes in `pg_mentat/src/`.
 3. Run `cargo clippy` -- the project enforces strict lints (no unwrap, no panic,
    no todo, no dbg, pedantic warnings).
-4. Add or update tests in the `mod tests` block in `src/lib.rs`.
+4. Add or update tests.
 5. Run `cargo pgrx test pg16` to validate.
 6. Submit a PR against the `claude` branch.
 
@@ -294,4 +248,4 @@ Apache-2.0
 - [pgrx Documentation](https://github.com/pgcentralfoundation/pgrx)
 - [EDN Format Specification](https://github.com/edn-format/edn)
 - [Mentat Project](https://github.com/mozilla/mentat)
-- [PostgreSQL Full-Text Search](https://www.postgresql.org/docs/current/textsearch.html)
+- [Datomic Documentation](https://docs.datomic.com/)

@@ -2,10 +2,10 @@
 -- This file orchestrates the complete schema initialization
 
 -- EDN Type is automatically created by pgrx with the following functions:
--- - mentat.edn_in(text) -> EdnValue
--- - mentat.edn_out(EdnValue) -> text
--- - mentat.edn_send(EdnValue) -> bytea
--- - mentat.edn_recv(bytea) -> EdnValue
+-- - mentat.edn_in(text) -> Edn
+-- - mentat.edn_out(Edn) -> text
+-- - mentat.edn_send(Edn) -> bytea
+-- - mentat.edn_recv(bytea) -> Edn
 
 -- Load schema components in order
 \i 01_types.sql

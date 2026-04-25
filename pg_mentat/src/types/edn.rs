@@ -1,8 +1,8 @@
 use pgrx::prelude::*;
 
-// EdnValue is now defined in the mentat schema module in lib.rs
+// Edn is now defined in the mentat schema module in lib.rs
 // Import it here for use in impl blocks and functions
-pub use crate::mentat::EdnValue;
+pub use crate::mentat::Edn;
 
 /// Maximum nesting depth for EDN structures to prevent stack overflow
 const MAX_EDN_NESTING: usize = 100;
@@ -13,10 +13,10 @@ const MAX_COLLECTION_SIZE: usize = 1_000_000;
 /// Maximum input size (10MB)
 const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
 
-impl EdnValue {
-    /// Create a new EdnValue from an EDN Value
+impl Edn {
+    /// Create a new Edn from an EDN Value
     pub fn new(value: edn::Value) -> Self {
-        EdnValue { inner: value }
+        Edn { inner: value }
     }
 
     /// Get a reference to the inner EDN Value
@@ -47,23 +47,23 @@ impl EdnValue {
         match &self.inner {
             edn::Value::Vector(v) => {
                 for item in v {
-                    EdnValue::new(item.clone()).validate_depth(depth + 1)?;
+                    Edn::new(item.clone()).validate_depth(depth + 1)?;
                 }
             }
             edn::Value::List(l) => {
                 for item in l {
-                    EdnValue::new(item.clone()).validate_depth(depth + 1)?;
+                    Edn::new(item.clone()).validate_depth(depth + 1)?;
                 }
             }
             edn::Value::Set(s) => {
                 for item in s {
-                    EdnValue::new(item.clone()).validate_depth(depth + 1)?;
+                    Edn::new(item.clone()).validate_depth(depth + 1)?;
                 }
             }
             edn::Value::Map(m) => {
                 for (k, v) in m {
-                    EdnValue::new(k.clone()).validate_depth(depth + 1)?;
-                    EdnValue::new(v.clone()).validate_depth(depth + 1)?;
+                    Edn::new(k.clone()).validate_depth(depth + 1)?;
+                    Edn::new(v.clone()).validate_depth(depth + 1)?;
                 }
             }
             _ => {}
@@ -89,7 +89,7 @@ impl EdnValue {
                     ));
                 }
                 for item in v {
-                    EdnValue::new(item.clone()).validate_size(new_count)?;
+                    Edn::new(item.clone()).validate_size(new_count)?;
                 }
             }
             edn::Value::List(l) => {
@@ -100,7 +100,7 @@ impl EdnValue {
                     ));
                 }
                 for item in l {
-                    EdnValue::new(item.clone()).validate_size(new_count)?;
+                    Edn::new(item.clone()).validate_size(new_count)?;
                 }
             }
             edn::Value::Set(s) => {
@@ -111,7 +111,7 @@ impl EdnValue {
                     ));
                 }
                 for item in s {
-                    EdnValue::new(item.clone()).validate_size(new_count)?;
+                    Edn::new(item.clone()).validate_size(new_count)?;
                 }
             }
             edn::Value::Map(m) => {
@@ -122,8 +122,8 @@ impl EdnValue {
                     ));
                 }
                 for (k, v) in m {
-                    EdnValue::new(k.clone()).validate_size(new_count)?;
-                    EdnValue::new(v.clone()).validate_size(new_count)?;
+                    Edn::new(k.clone()).validate_size(new_count)?;
+                    Edn::new(v.clone()).validate_size(new_count)?;
                 }
             }
             _ => {}
@@ -133,9 +133,9 @@ impl EdnValue {
     }
 }
 
-/// Input function: Parse EDN text into EdnValue
+/// Input function: Parse EDN text into Edn
 #[pg_extern(immutable, parallel_safe)]
-fn edn_in(input: &str) -> Result<EdnValue, Box<dyn std::error::Error>> {
+fn edn_in(input: &str) -> Result<Edn, Box<dyn std::error::Error>> {
     // Validate input size
     if input.len() > MAX_INPUT_SIZE {
         return Err("EDN input too large (max 10MB)".into());
@@ -147,8 +147,8 @@ fn edn_in(input: &str) -> Result<EdnValue, Box<dyn std::error::Error>> {
     // Extract the value (discard span information)
     let value = value_and_span.without_spans();
 
-    // Create EdnValue and validate
-    let edn_value = EdnValue::new(value);
+    // Create Edn and validate
+    let edn_value = Edn::new(value);
     edn_value
         .validate()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -156,24 +156,24 @@ fn edn_in(input: &str) -> Result<EdnValue, Box<dyn std::error::Error>> {
     Ok(edn_value)
 }
 
-/// Output function: Convert EdnValue to EDN text
+/// Output function: Convert Edn to EDN text
 #[pg_extern(immutable, parallel_safe)]
-fn edn_out(value: EdnValue) -> String {
+fn edn_out(value: Edn) -> String {
     format!("{}", value.inner)
 }
 
-/// Binary send function: Serialize EdnValue for binary transmission
+/// Binary send function: Serialize Edn for binary transmission
 /// Currently uses EDN text format. TODO: Implement CBOR serialization
 #[pg_extern(immutable, parallel_safe)]
-fn edn_send(value: EdnValue) -> Vec<u8> {
+fn edn_send(value: Edn) -> Vec<u8> {
     let text = format!("{}", value.inner);
     text.into_bytes()
 }
 
-/// Binary receive function: Deserialize EdnValue from binary transmission
+/// Binary receive function: Deserialize Edn from binary transmission
 /// Currently uses EDN text format. TODO: Implement CBOR deserialization
 #[pg_extern(immutable, parallel_safe)]
-fn edn_recv(data: Vec<u8>) -> Result<EdnValue, Box<dyn std::error::Error>> {
+fn edn_recv(data: Vec<u8>) -> Result<Edn, Box<dyn std::error::Error>> {
     let text = String::from_utf8(data)?;
     edn_in(&text)
 }

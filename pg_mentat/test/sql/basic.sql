@@ -47,7 +47,7 @@ SELECT mentat.edn_out(mentat.edn_in('#inst "2025-03-05T12:00:00Z"'));
 -- Test table creation with EDN column
 CREATE TABLE edn_test (
     id SERIAL PRIMARY KEY,
-    data mentat.EdnValue
+    data mentat.Edn
 );
 
 -- Test insertion

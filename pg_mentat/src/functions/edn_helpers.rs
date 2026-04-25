@@ -529,6 +529,67 @@ fn edn_to_json(
     }
 }
 
+/// Pretty-print an EDN string with proper indentation
+///
+/// Parses the input EDN and formats it with smart line-breaking:
+/// compact for simple values, expanded for complex/nested structures.
+///
+/// The optional `width` parameter controls the target line width (default: 80).
+/// Shorter widths produce more vertical output; longer widths keep more on one line.
+///
+/// Example:
+/// ```sql
+/// SELECT mentat.edn_pretty('{:person/name "Alice" :person/age 30}');
+/// -- Returns:
+/// -- {:person/age 30
+/// --  :person/name "Alice"}
+///
+/// SELECT mentat.edn_pretty('[:find ?e :where [?e :person/name]]', 40);
+/// -- Returns:
+/// -- [:find
+/// --  ?e
+/// --  :where
+/// --  [?e :person/name]]
+/// ```
+#[pg_extern(schema = "mentat")]
+fn edn_pretty(
+    edn_input: &str,
+    width: default!(Option<i32>, "NULL"),
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    use edn::parse;
+
+    let width = match width {
+        Some(w) if w > 0 => w as usize,
+        Some(_) => {
+            return Err(MentatError::InvalidQuery {
+                message: "width must be a positive integer".to_string(),
+                suggestion: Some("Use a positive integer like 40, 80, or 120".to_string()),
+            }
+            .into());
+        }
+        None => 80,
+    };
+
+    let value = parse::value(edn_input)
+        .map_err(|e| MentatError::InvalidQuery {
+            message: format!("Failed to parse EDN: {}", e),
+            suggestion: Some(
+                "Ensure the input is valid EDN. Example: {:key \"value\"}".to_string(),
+            ),
+        })?
+        .without_spans();
+
+    value
+        .to_pretty(width)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            MentatError::InvalidQuery {
+                message: format!("Failed to format EDN: {}", e),
+                suggestion: None,
+            }
+            .into()
+        })
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
@@ -538,5 +599,69 @@ mod tests {
     fn test_edn_helpers_compile() {
         // Compilation test
         assert!(true);
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_simple_map() {
+        let result = edn_pretty("{:a 1 :b 2}", None).unwrap();
+        assert_eq!(result, "{:a 1 :b 2}");
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_vector() {
+        let result = edn_pretty("[1 2 3 4 5]", None).unwrap();
+        assert_eq!(result, "[1 2 3 4 5]");
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_narrow_width() {
+        let result = edn_pretty("[1 2 3 4 5 6]", Some(10)).unwrap();
+        assert!(result.contains('\n'), "narrow width should produce multi-line output");
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_nested() {
+        let result = edn_pretty("{:a [1 2 3] :b {:c 4}}", None).unwrap();
+        // Should parse and format without error
+        assert!(result.contains(":a"));
+        assert!(result.contains(":b"));
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_invalid_input() {
+        let result = edn_pretty("{invalid", None);
+        assert!(result.is_err());
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_invalid_width() {
+        let result = edn_pretty("{:a 1}", Some(-1));
+        assert!(result.is_err());
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_nil() {
+        let result = edn_pretty("nil", None).unwrap();
+        assert_eq!(result, "nil");
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_set() {
+        let result = edn_pretty("#{1 2 3}", None).unwrap();
+        assert!(result.starts_with("#{"));
+        assert!(result.ends_with('}'));
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_list() {
+        let result = edn_pretty("(1 2 3)", None).unwrap();
+        assert!(result.starts_with('('));
+        assert!(result.ends_with(')'));
+    }
+
+    #[pg_test]
+    fn test_edn_pretty_keyword() {
+        let result = edn_pretty(":person/name", None).unwrap();
+        assert_eq!(result, ":person/name");
     }
 }

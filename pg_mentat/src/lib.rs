@@ -184,6 +184,439 @@ extension_sql!(
     name = "bootstrap_schema",
 );
 
+// Datom helper functions: convenience PL/pgSQL wrappers for common query patterns
+extension_sql!(
+    r#"
+    -- datom_text_like: Find entities whose text attribute matches a LIKE pattern.
+    CREATE OR REPLACE FUNCTION mentat.datom_text_like(
+        attr_ident TEXT,
+        pattern TEXT
+    )
+    RETURNS TABLE(entity_id BIGINT, value TEXT, tx BIGINT)
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.e, d.v_text, d.tx
+        FROM mentat.datoms d
+        WHERE d.a = attr_entid
+          AND d.value_type_tag = 7
+          AND d.v_text LIKE pattern
+          AND d.added = TRUE;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+
+    -- datom_long_between: Find entities whose long attribute falls within a range.
+    CREATE OR REPLACE FUNCTION mentat.datom_long_between(
+        attr_ident TEXT,
+        low_val BIGINT,
+        high_val BIGINT
+    )
+    RETURNS TABLE(entity_id BIGINT, value BIGINT, tx BIGINT)
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.e, d.v_long, d.tx
+        FROM mentat.datoms d
+        WHERE d.a = attr_entid
+          AND d.value_type_tag = 2
+          AND d.v_long BETWEEN low_val AND high_val
+          AND d.added = TRUE;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+
+    -- datom_ref_in: Find entities whose ref attribute points to one of a set of targets.
+    CREATE OR REPLACE FUNCTION mentat.datom_ref_in(
+        attr_ident TEXT,
+        ref_ids BIGINT[]
+    )
+    RETURNS TABLE(entity_id BIGINT, ref_value BIGINT, tx BIGINT)
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.e, d.v_ref, d.tx
+        FROM mentat.datoms d
+        WHERE d.a = attr_entid
+          AND d.value_type_tag = 0
+          AND d.v_ref = ANY(ref_ids)
+          AND d.added = TRUE;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+
+    -- datom_text_values: Get all current text values for a cardinality-many attribute on an entity.
+    CREATE OR REPLACE FUNCTION mentat.datom_text_values(
+        eid BIGINT,
+        attr_ident TEXT
+    )
+    RETURNS TABLE(value TEXT, tx BIGINT)
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.v_text, d.tx
+        FROM mentat.datoms d
+        WHERE d.e = eid
+          AND d.a = attr_entid
+          AND d.value_type_tag = 7
+          AND d.added = TRUE
+        ORDER BY d.tx;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+
+    -- datom_ref_values: Get all current ref values for a cardinality-many attribute on an entity.
+    CREATE OR REPLACE FUNCTION mentat.datom_ref_values(
+        eid BIGINT,
+        attr_ident TEXT
+    )
+    RETURNS TABLE(ref_value BIGINT, tx BIGINT)
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.v_ref, d.tx
+        FROM mentat.datoms d
+        WHERE d.e = eid
+          AND d.a = attr_entid
+          AND d.value_type_tag = 0
+          AND d.added = TRUE
+        ORDER BY d.tx;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+
+    -- datom_value_at_tx: Get the value of an attribute for an entity as of a specific transaction.
+    CREATE OR REPLACE FUNCTION mentat.datom_value_at_tx(
+        eid BIGINT,
+        attr_ident TEXT,
+        as_of_tx BIGINT
+    )
+    RETURNS TABLE(
+        value_type_tag SMALLINT,
+        v_ref BIGINT,
+        v_bool BOOLEAN,
+        v_long BIGINT,
+        v_double DOUBLE PRECISION,
+        v_text TEXT,
+        v_keyword TEXT,
+        v_instant TIMESTAMPTZ,
+        v_uuid UUID,
+        v_bytes BYTEA,
+        tx BIGINT
+    )
+    AS $$
+    DECLARE
+        attr_entid BIGINT;
+    BEGIN
+        SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+        IF attr_entid IS NULL THEN
+            RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+        END IF;
+
+        RETURN QUERY
+        SELECT d.value_type_tag,
+               d.v_ref, d.v_bool, d.v_long, d.v_double,
+               d.v_text, d.v_keyword, d.v_instant, d.v_uuid, d.v_bytes,
+               d.tx
+        FROM mentat.datoms d
+        WHERE d.e = eid
+          AND d.a = attr_entid
+          AND d.tx <= as_of_tx
+          AND d.added = TRUE
+          AND NOT EXISTS (
+              SELECT 1
+              FROM mentat.datoms r
+              WHERE r.e = d.e
+                AND r.a = d.a
+                AND r.value_type_tag = d.value_type_tag
+                AND r.tx <= as_of_tx
+                AND r.tx > d.tx
+                AND r.added = FALSE
+                AND r.v_ref IS NOT DISTINCT FROM d.v_ref
+                AND r.v_bool IS NOT DISTINCT FROM d.v_bool
+                AND r.v_long IS NOT DISTINCT FROM d.v_long
+                AND r.v_double IS NOT DISTINCT FROM d.v_double
+                AND r.v_text IS NOT DISTINCT FROM d.v_text
+                AND r.v_keyword IS NOT DISTINCT FROM d.v_keyword
+                AND r.v_instant IS NOT DISTINCT FROM d.v_instant
+                AND r.v_uuid IS NOT DISTINCT FROM d.v_uuid
+                AND r.v_bytes IS NOT DISTINCT FROM d.v_bytes
+          )
+        ORDER BY d.tx DESC
+        LIMIT 1;
+    END;
+    $$ LANGUAGE plpgsql STABLE;
+"#,
+    name = "datom_helpers",
+    requires = ["bootstrap_schema"],
+);
+
+// VIEW helper functions: create SQL VIEWs backed by Datalog queries
+extension_sql!(
+    r#"
+    -- Create a SQL VIEW backed by a Datalog query.
+    --
+    -- The VIEW executes the Datalog query whenever it is queried via SQL,
+    -- making Datalog results appear as a standard SQL table.
+    --
+    -- Parameters:
+    --   view_name  - Name for the VIEW (optionally schema-qualified, e.g. 'public.people')
+    --   datalog    - The Datalog query string
+    --   inputs     - JSONB inputs (temporal options, input bindings)
+    --
+    -- Example:
+    --   SELECT mentat.create_datalog_view(
+    --       'people',
+    --       '[:find ?e ?name :where [?e :person/name ?name]]',
+    --       '{}'::jsonb
+    --   );
+    --   -- Then: SELECT * FROM people;
+    --
+    CREATE OR REPLACE FUNCTION mentat.create_datalog_view(
+        view_name TEXT,
+        datalog TEXT,
+        inputs JSONB DEFAULT '{}'::jsonb
+    )
+    RETURNS TEXT AS $$
+    DECLARE
+        query_info JSONB;
+        columns JSONB;
+        col_count INTEGER;
+        col_defs TEXT;
+        view_sql TEXT;
+        safe_view_name TEXT;
+        i INTEGER;
+        col_name TEXT;
+    BEGIN
+        -- Validate the Datalog query by generating SQL (checks for parse errors)
+        query_info := mentat.mentat_query_sql(datalog, inputs);
+        columns := query_info->'columns';
+        col_count := jsonb_array_length(columns);
+
+        IF col_count = 0 THEN
+            RAISE EXCEPTION 'Datalog query has no :find columns';
+        END IF;
+
+        IF col_count > 8 THEN
+            RAISE EXCEPTION 'Datalog queries with more than 8 columns are not supported for VIEWs. This query has % columns.', col_count;
+        END IF;
+
+        -- Sanitize the view name: only allow valid SQL identifiers
+        IF view_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$' THEN
+            RAISE EXCEPTION 'Invalid view name: %. Use only alphanumeric characters and underscores.', view_name;
+        END IF;
+        safe_view_name := view_name;
+
+        -- Build column selections from mentat_query_view() output
+        col_defs := '';
+        FOR i IN 0..col_count - 1 LOOP
+            col_name := columns->>i;
+            IF i > 0 THEN
+                col_defs := col_defs || ', ';
+            END IF;
+            col_defs := col_defs || format('col%s AS %I', i + 1, col_name);
+        END LOOP;
+
+        view_sql := format(
+            'CREATE OR REPLACE VIEW %s AS SELECT %s FROM mentat.mentat_query_view(%L, %L::jsonb)',
+            safe_view_name,
+            col_defs,
+            datalog,
+            inputs::text
+        );
+
+        EXECUTE view_sql;
+
+        RETURN format('VIEW %s created with %s columns: %s',
+            safe_view_name,
+            col_count,
+            array_to_string(ARRAY(SELECT jsonb_array_elements_text(columns)), ', ')
+        );
+    END;
+    $$ LANGUAGE plpgsql;
+
+    -- Create a MATERIALIZED VIEW backed by a Datalog query.
+    --
+    -- Materialized views cache results for better performance on expensive queries.
+    -- Use REFRESH MATERIALIZED VIEW to update the cached data.
+    --
+    -- Example:
+    --   SELECT mentat.create_datalog_materialized_view(
+    --       'people_cache',
+    --       '[:find ?e ?name ?age :where [?e :person/name ?name] [?e :person/age ?age]]',
+    --       '{}'::jsonb
+    --   );
+    --   SELECT * FROM people_cache;
+    --   REFRESH MATERIALIZED VIEW people_cache;
+    --
+    CREATE OR REPLACE FUNCTION mentat.create_datalog_materialized_view(
+        view_name TEXT,
+        datalog TEXT,
+        inputs JSONB DEFAULT '{}'::jsonb
+    )
+    RETURNS TEXT AS $$
+    DECLARE
+        query_info JSONB;
+        columns JSONB;
+        col_count INTEGER;
+        col_defs TEXT;
+        view_sql TEXT;
+        safe_view_name TEXT;
+        i INTEGER;
+        col_name TEXT;
+    BEGIN
+        query_info := mentat.mentat_query_sql(datalog, inputs);
+        columns := query_info->'columns';
+        col_count := jsonb_array_length(columns);
+
+        IF col_count = 0 THEN
+            RAISE EXCEPTION 'Datalog query has no :find columns';
+        END IF;
+
+        IF col_count > 8 THEN
+            RAISE EXCEPTION 'Datalog queries with more than 8 columns are not supported for materialized VIEWs. This query has % columns.', col_count;
+        END IF;
+
+        IF view_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$' THEN
+            RAISE EXCEPTION 'Invalid view name: %. Use only alphanumeric characters and underscores.', view_name;
+        END IF;
+        safe_view_name := view_name;
+
+        col_defs := '';
+        FOR i IN 0..col_count - 1 LOOP
+            col_name := columns->>i;
+            IF i > 0 THEN
+                col_defs := col_defs || ', ';
+            END IF;
+            col_defs := col_defs || format('col%s AS %I', i + 1, col_name);
+        END LOOP;
+
+        view_sql := format(
+            'CREATE MATERIALIZED VIEW %s AS SELECT %s FROM mentat.mentat_query_view(%L, %L::jsonb)',
+            safe_view_name,
+            col_defs,
+            datalog,
+            inputs::text
+        );
+
+        EXECUTE view_sql;
+
+        RETURN format('MATERIALIZED VIEW %s created with %s columns: %s',
+            safe_view_name,
+            col_count,
+            array_to_string(ARRAY(SELECT jsonb_array_elements_text(columns)), ', ')
+        );
+    END;
+    $$ LANGUAGE plpgsql;
+
+    -- Drop a Datalog-backed VIEW or MATERIALIZED VIEW.
+    --
+    -- Parameters:
+    --   view_name    - Name of the view to drop
+    --   cascade      - Whether to cascade the drop (default: false)
+    --   materialized - Whether this is a materialized view (default: false)
+    --
+    CREATE OR REPLACE FUNCTION mentat.drop_datalog_view(
+        view_name TEXT,
+        cascade BOOLEAN DEFAULT FALSE,
+        materialized BOOLEAN DEFAULT FALSE
+    )
+    RETURNS TEXT AS $$
+    DECLARE
+        drop_sql TEXT;
+        safe_view_name TEXT;
+    BEGIN
+        IF view_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$' THEN
+            RAISE EXCEPTION 'Invalid view name: %. Use only alphanumeric characters and underscores.', view_name;
+        END IF;
+        safe_view_name := view_name;
+
+        IF materialized THEN
+            drop_sql := format('DROP MATERIALIZED VIEW IF EXISTS %s', safe_view_name);
+        ELSE
+            drop_sql := format('DROP VIEW IF EXISTS %s', safe_view_name);
+        END IF;
+
+        IF cascade THEN
+            drop_sql := drop_sql || ' CASCADE';
+        END IF;
+
+        EXECUTE drop_sql;
+
+        IF materialized THEN
+            RETURN format('MATERIALIZED VIEW %s dropped', safe_view_name);
+        ELSE
+            RETURN format('VIEW %s dropped', safe_view_name);
+        END IF;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    -- Refresh a Datalog-backed materialized VIEW.
+    --
+    -- Parameters:
+    --   view_name    - Name of the materialized view to refresh
+    --   concurrently - Refresh concurrently (requires unique index, default: false)
+    --
+    CREATE OR REPLACE FUNCTION mentat.refresh_datalog_view(
+        view_name TEXT,
+        concurrently BOOLEAN DEFAULT FALSE
+    )
+    RETURNS TEXT AS $$
+    DECLARE
+        refresh_sql TEXT;
+        safe_view_name TEXT;
+    BEGIN
+        IF view_name !~ '^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?$' THEN
+            RAISE EXCEPTION 'Invalid view name: %. Use only alphanumeric characters and underscores.', view_name;
+        END IF;
+        safe_view_name := view_name;
+
+        IF concurrently THEN
+            refresh_sql := format('REFRESH MATERIALIZED VIEW CONCURRENTLY %s', safe_view_name);
+        ELSE
+            refresh_sql := format('REFRESH MATERIALIZED VIEW %s', safe_view_name);
+        END IF;
+
+        EXECUTE refresh_sql;
+
+        RETURN format('MATERIALIZED VIEW %s refreshed', safe_view_name);
+    END;
+    $$ LANGUAGE plpgsql;
+"#,
+    name = "view_helpers",
+    requires = ["datom_helpers", mentat_query_sql, mentat_query_view],
+);
+
 mod cache;
 #[cfg(any(test, feature = "pg_test"))]
 mod cache_tests;
@@ -303,20 +736,21 @@ mod operators;
 mod planner;
 mod types;
 
-// Export EdnValue at root for internal use
-pub use types::edn::EdnValue;
+// Export Edn at root for internal use
+pub use types::edn::Edn;
 
 #[pg_schema]
 mod mentat {
     use pgrx::prelude::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    /// EdnValue is a PostgreSQL custom type that wraps Mentat's EDN Value.
+    /// Edn is a PostgreSQL custom type that wraps Mentat's EDN Value.
     /// Uses CBOR for binary storage and custom EDN text I/O functions.
+    /// Exposed to PostgreSQL as the "edn" type in the mentat schema.
     #[derive(
         Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PostgresType, PostgresEq,
     )]
-    pub struct EdnValue {
+    pub struct Edn {
         #[serde(serialize_with = "serialize_edn", deserialize_with = "deserialize_edn")]
         pub(crate) inner: edn::Value,
     }
@@ -346,7 +780,7 @@ mod mentat {
             CREATE TABLE IF NOT EXISTS mentat_datoms (
                 e BIGINT NOT NULL,
                 a BIGINT NOT NULL,
-                v mentat.EdnValue NOT NULL,
+                v mentat.Edn NOT NULL,
                 tx BIGINT NOT NULL,
                 added BOOLEAN NOT NULL DEFAULT TRUE
             );
@@ -378,6 +812,27 @@ mod mentat {
     #[allow(unused_imports)]
     pub use crate::functions::transact::*;
 }
+
+// Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)
+// Must run after all mentat_* functions are created by pgrx.
+extension_sql_file!(
+    "../sql/07_function_aliases.sql",
+    name = "function_aliases",
+    requires = [
+        mentat_query,
+        mentat_transact,
+        mentat_pull,
+        mentat_pull_many,
+        mentat_entity,
+        mentat_schema,
+        mentat_explain,
+        mentat_query_stats,
+        mentat_slow_queries,
+        mentat_storage_stats,
+        mentat_stmt_cache_stats,
+        mentat_stmt_cache_clear,
+    ],
+);
 
 #[cfg(test)]
 pub mod pg_test {
@@ -557,6 +1012,126 @@ mod tests {
             BEGIN
                 RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
             END; $$ LANGUAGE plpgsql;
+
+            -- Datom helper functions
+            CREATE OR REPLACE FUNCTION mentat.datom_text_like(
+                attr_ident TEXT, pattern TEXT
+            ) RETURNS TABLE(entity_id BIGINT, value TEXT, tx BIGINT) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.e, d.v_text, d.tx FROM mentat.datoms d
+                WHERE d.a = attr_entid AND d.value_type_tag = 7
+                  AND d.v_text LIKE pattern AND d.added = TRUE;
+            END; $$ LANGUAGE plpgsql STABLE;
+
+            CREATE OR REPLACE FUNCTION mentat.datom_long_between(
+                attr_ident TEXT, low_val BIGINT, high_val BIGINT
+            ) RETURNS TABLE(entity_id BIGINT, value BIGINT, tx BIGINT) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.e, d.v_long, d.tx FROM mentat.datoms d
+                WHERE d.a = attr_entid AND d.value_type_tag = 2
+                  AND d.v_long BETWEEN low_val AND high_val AND d.added = TRUE;
+            END; $$ LANGUAGE plpgsql STABLE;
+
+            CREATE OR REPLACE FUNCTION mentat.datom_ref_in(
+                attr_ident TEXT, ref_ids BIGINT[]
+            ) RETURNS TABLE(entity_id BIGINT, ref_value BIGINT, tx BIGINT) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.e, d.v_ref, d.tx FROM mentat.datoms d
+                WHERE d.a = attr_entid AND d.value_type_tag = 0
+                  AND d.v_ref = ANY(ref_ids) AND d.added = TRUE;
+            END; $$ LANGUAGE plpgsql STABLE;
+
+            CREATE OR REPLACE FUNCTION mentat.datom_text_values(
+                eid BIGINT, attr_ident TEXT
+            ) RETURNS TABLE(value TEXT, tx BIGINT) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.v_text, d.tx FROM mentat.datoms d
+                WHERE d.e = eid AND d.a = attr_entid
+                  AND d.value_type_tag = 7 AND d.added = TRUE
+                ORDER BY d.tx;
+            END; $$ LANGUAGE plpgsql STABLE;
+
+            CREATE OR REPLACE FUNCTION mentat.datom_ref_values(
+                eid BIGINT, attr_ident TEXT
+            ) RETURNS TABLE(ref_value BIGINT, tx BIGINT) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.v_ref, d.tx FROM mentat.datoms d
+                WHERE d.e = eid AND d.a = attr_entid
+                  AND d.value_type_tag = 0 AND d.added = TRUE
+                ORDER BY d.tx;
+            END; $$ LANGUAGE plpgsql STABLE;
+
+            CREATE OR REPLACE FUNCTION mentat.datom_value_at_tx(
+                eid BIGINT, attr_ident TEXT, as_of_tx BIGINT
+            ) RETURNS TABLE(
+                value_type_tag SMALLINT, v_ref BIGINT, v_bool BOOLEAN,
+                v_long BIGINT, v_double DOUBLE PRECISION, v_text TEXT,
+                v_keyword TEXT, v_instant TIMESTAMPTZ, v_uuid UUID,
+                v_bytes BYTEA, tx BIGINT
+            ) AS $$
+            DECLARE attr_entid BIGINT;
+            BEGIN
+                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
+                IF attr_entid IS NULL THEN
+                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
+                END IF;
+                RETURN QUERY
+                SELECT d.value_type_tag,
+                       d.v_ref, d.v_bool, d.v_long, d.v_double,
+                       d.v_text, d.v_keyword, d.v_instant, d.v_uuid, d.v_bytes,
+                       d.tx
+                FROM mentat.datoms d
+                WHERE d.e = eid AND d.a = attr_entid
+                  AND d.tx <= as_of_tx AND d.added = TRUE
+                  AND NOT EXISTS (
+                      SELECT 1 FROM mentat.datoms r
+                      WHERE r.e = d.e AND r.a = d.a
+                        AND r.value_type_tag = d.value_type_tag
+                        AND r.tx <= as_of_tx AND r.tx > d.tx
+                        AND r.added = FALSE
+                        AND r.v_ref IS NOT DISTINCT FROM d.v_ref
+                        AND r.v_bool IS NOT DISTINCT FROM d.v_bool
+                        AND r.v_long IS NOT DISTINCT FROM d.v_long
+                        AND r.v_double IS NOT DISTINCT FROM d.v_double
+                        AND r.v_text IS NOT DISTINCT FROM d.v_text
+                        AND r.v_keyword IS NOT DISTINCT FROM d.v_keyword
+                        AND r.v_instant IS NOT DISTINCT FROM d.v_instant
+                        AND r.v_uuid IS NOT DISTINCT FROM d.v_uuid
+                        AND r.v_bytes IS NOT DISTINCT FROM d.v_bytes
+                  )
+                ORDER BY d.tx DESC
+                LIMIT 1;
+            END; $$ LANGUAGE plpgsql STABLE;
             "#,
         )?;
         Ok(())

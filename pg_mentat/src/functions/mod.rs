@@ -1,4 +1,5 @@
 pub mod bootstrap;
+pub mod edn_functions;
 pub mod edn_helpers;
 pub mod entity;
 pub mod helpers;
