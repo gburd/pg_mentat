@@ -6,6 +6,56 @@ use pgrx::JsonB;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
+// ---------------------------------------------------------------------------
+// Schema cache — loaded once per pull call to eliminate repeated SPI lookups
+// ---------------------------------------------------------------------------
+
+/// Cached schema information for an attribute, loaded in bulk.
+#[derive(Debug, Clone)]
+struct SchemaAttrInfo {
+    entid: i64,
+    ident: String,
+    cardinality: String,
+    is_component: bool,
+}
+
+/// A cache of all schema attributes, keyed by ident.
+/// Loaded with a single SPI query at the start of a pull call.
+struct SchemaCache {
+    by_ident: HashMap<String, SchemaAttrInfo>,
+}
+
+impl SchemaCache {
+    /// Load all schema attributes in one query.
+    fn load(client: &SpiClient<'_>) -> Result<Self, PullError> {
+        let query = "SELECT entid, ident, cardinality::TEXT, component \
+                     FROM mentat.schema";
+        let mut by_ident = HashMap::new();
+        for row in client.select(query, None, &[])? {
+            let entid: i64 = row.get(1)?.ok_or("Missing entid in schema")?;
+            let ident: String = row.get(2)?.ok_or("Missing ident in schema")?;
+            let cardinality: String = row.get(3)?.ok_or("Missing cardinality in schema")?;
+            let is_component: bool = row.get(4)?.unwrap_or(false);
+            by_ident.insert(
+                ident.clone(),
+                SchemaAttrInfo { entid, ident, cardinality, is_component },
+            );
+        }
+        Ok(SchemaCache { by_ident })
+    }
+
+    fn get(&self, ident: &str) -> Option<&SchemaAttrInfo> {
+        self.by_ident.get(ident)
+    }
+
+    fn cardinality(&self, ident: &str) -> String {
+        self.by_ident
+            .get(ident)
+            .map(|a| a.cardinality.clone())
+            .unwrap_or_else(|| "one".to_string())
+    }
+}
+
 /// Type tags matching encode_value in transact.rs.
 mod type_tag {
     pub const REF: i16 = 0;
@@ -125,7 +175,8 @@ pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     visited.insert(entity_id);
 
     Spi::connect(|client| {
-        execute_pull(&client, entity_id, &specs, &mut result_map, &mut visited, 0)
+        let schema = SchemaCache::load(&client)?;
+        execute_pull(&client, &schema, entity_id, &specs, &mut result_map, &mut visited, 0)
     })?;
 
     Ok(JsonB(serde_json::Value::Object(result_map)))
@@ -177,12 +228,13 @@ pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, Pu
     let mut results = Vec::with_capacity(entity_ids.len());
 
     Spi::connect(|client| {
+        let schema = SchemaCache::load(&client)?;
         for &eid in &entity_ids {
             let mut result_map = serde_json::Map::new();
             result_map.insert(":db/id".to_string(), json!(eid));
             let mut visited = HashSet::new();
             visited.insert(eid);
-            execute_pull(&client, eid, &specs, &mut result_map, &mut visited, 0)?;
+            execute_pull(&client, &schema, eid, &specs, &mut result_map, &mut visited, 0)?;
             results.push(serde_json::Value::Object(result_map));
         }
         Ok::<(), PullError>(())
@@ -661,8 +713,32 @@ fn edn_to_json(val: &edn::Value) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 /// Execute a pull pattern against an entity.
+///
+/// Collected info for a forward attribute to be fetched in a batch.
+struct ForwardAttrSpec<'a> {
+    forward_ident: &'a str,
+    rename: Option<&'a str>,
+    default: Option<&'a serde_json::Value>,
+    limit: Option<&'a LimitSpec>,
+}
+
+/// Collected info for a reverse attribute to be fetched in a batch.
+struct ReverseAttrSpec<'a> {
+    display_ident: &'a str,
+    forward_ident: &'a str,
+    rename: Option<&'a str>,
+    default: Option<&'a serde_json::Value>,
+    limit: Option<&'a LimitSpec>,
+}
+
+/// **Batched approach**: Instead of issuing one SPI query per attribute (N+1),
+/// this function collects all simple forward attributes, fetches them in a
+/// single query, and then handles complex specs (wildcard, map, recursive,
+/// reverse) individually. This reduces the common case of pulling 50 simple
+/// attributes from ~50 SPI calls down to 1.
 fn execute_pull(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     specs: &[PullAttrSpec],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -691,18 +767,15 @@ fn execute_pull(
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Phase 1: Collect all simple forward (non-reverse) attributes and fetch
+    //          them in ONE batched query.
+    // -----------------------------------------------------------------------
+    let mut forward_attrs: Vec<ForwardAttrSpec<'_>> = Vec::new();
+    let mut reverse_attrs: Vec<ReverseAttrSpec<'_>> = Vec::new();
+
     for spec in specs {
         match spec {
-            PullAttrSpec::Wildcard => {
-                pull_wildcard(
-                    client,
-                    entity_id,
-                    result_map,
-                    &override_idents,
-                    visited,
-                    depth,
-                )?;
-            }
             PullAttrSpec::Attribute {
                 ident,
                 reverse,
@@ -712,29 +785,67 @@ fn execute_pull(
                 limit,
             } => {
                 if *reverse {
-                    pull_reverse_attribute(
-                        client,
-                        entity_id,
-                        ident,
+                    reverse_attrs.push(ReverseAttrSpec {
+                        display_ident: ident,
                         forward_ident,
-                        rename.as_deref(),
-                        default.as_ref(),
-                        limit.as_ref(),
-                        result_map,
-                    )?;
+                        rename: rename.as_deref(),
+                        default: default.as_ref(),
+                        limit: limit.as_ref(),
+                    });
                 } else {
-                    pull_forward_attribute(
-                        client,
-                        entity_id,
+                    forward_attrs.push(ForwardAttrSpec {
                         forward_ident,
-                        rename.as_deref(),
-                        default.as_ref(),
-                        limit.as_ref(),
-                        result_map,
-                        visited,
-                        depth,
-                    )?;
+                        rename: rename.as_deref(),
+                        default: default.as_ref(),
+                        limit: limit.as_ref(),
+                    });
                 }
+            }
+            _ => {} // Handled below
+        }
+    }
+
+    // Batch-fetch all forward attributes in a single query.
+    if !forward_attrs.is_empty() {
+        pull_forward_attributes_batched(
+            client,
+            schema,
+            entity_id,
+            &forward_attrs,
+            result_map,
+            visited,
+            depth,
+        )?;
+    }
+
+    // Batch-fetch all reverse attributes in a single query.
+    if !reverse_attrs.is_empty() {
+        pull_reverse_attributes_batched(
+            client,
+            schema,
+            entity_id,
+            &reverse_attrs,
+            result_map,
+        )?;
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2: Handle wildcard, map specs, and recursive specs individually.
+    //          These are less common and inherently complex; they still benefit
+    //          from the schema cache eliminating per-lookup queries.
+    // -----------------------------------------------------------------------
+    for spec in specs {
+        match spec {
+            PullAttrSpec::Wildcard => {
+                pull_wildcard(
+                    client,
+                    schema,
+                    entity_id,
+                    result_map,
+                    &override_idents,
+                    visited,
+                    depth,
+                )?;
             }
             PullAttrSpec::MapSpec {
                 ident,
@@ -747,6 +858,7 @@ fn execute_pull(
                 if *reverse {
                     pull_reverse_map_spec(
                         client,
+                        schema,
                         entity_id,
                         ident,
                         forward_ident,
@@ -760,6 +872,7 @@ fn execute_pull(
                 } else {
                     pull_forward_map_spec(
                         client,
+                        schema,
                         entity_id,
                         forward_ident,
                         sub_pattern,
@@ -780,6 +893,7 @@ fn execute_pull(
             } => {
                 pull_recursive(
                     client,
+                    schema,
                     entity_id,
                     ident,
                     forward_ident,
@@ -791,6 +905,210 @@ fn execute_pull(
                     depth,
                 )?;
             }
+            // Attributes already handled in Phase 1.
+            PullAttrSpec::Attribute { .. } => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Fetch ALL forward attributes for a single entity in ONE query.
+///
+/// This is the core N+1 fix: instead of issuing one SPI call per attribute,
+/// we build a single `WHERE e = $1 AND s.ident IN (...)` query that returns
+/// all requested attribute values at once. The results are then distributed
+/// to the appropriate output keys.
+fn pull_forward_attributes_batched(
+    client: &SpiClient<'_>,
+    schema: &SchemaCache,
+    entity_id: i64,
+    attrs: &[ForwardAttrSpec<'_>],
+    result_map: &mut serde_json::Map<String, serde_json::Value>,
+    visited: &mut HashSet<i64>,
+    depth: usize,
+) -> Result<(), PullError> {
+    if attrs.is_empty() {
+        return Ok(());
+    }
+
+    // Build the IN clause for idents (escape single quotes for safety).
+    let ident_csv: String = attrs
+        .iter()
+        .map(|a| format!("'{}'", a.forward_ident.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let query = format!(
+        "SELECT s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
+                d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                d.v_text, d.v_keyword, \
+                EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                d.v_uuid::TEXT, d.v_bytes \
+         FROM mentat.datoms d \
+         JOIN mentat.schema s ON d.a = s.entid \
+         WHERE d.e = $1 AND s.ident IN ({ident_csv}) AND d.added = true \
+         ORDER BY s.ident"
+    );
+
+    // Build a lookup from forward_ident -> spec for output key resolution and limits.
+    let mut spec_by_ident: HashMap<&str, &ForwardAttrSpec<'_>> = HashMap::new();
+    for attr in attrs {
+        spec_by_ident.insert(attr.forward_ident, attr);
+    }
+
+    // Track which idents we found, and per-ident row counts for limit enforcement.
+    let mut found_idents: HashSet<String> = HashSet::new();
+    let mut ident_counts: HashMap<String, usize> = HashMap::new();
+
+    // Collect rows that need component expansion (deferred to avoid nested SPI issues).
+    struct PendingComponentRef {
+        output_key: String,
+        cardinality: String,
+        ref_id: i64,
+    }
+    let mut pending_components: Vec<PendingComponentRef> = Vec::new();
+
+    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+        let ident: String = row.get(1)?.ok_or("Missing ident")?;
+        let cardinality: String = row.get(2)?.ok_or("Missing cardinality")?;
+        let is_component: bool = row.get(3)?.unwrap_or(false);
+        let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
+
+        // Enforce per-attribute limit.
+        let spec = spec_by_ident.get(ident.as_str());
+        let max_rows = spec.map(|s| resolve_limit(s.limit)).unwrap_or(DEFAULT_MANY_LIMIT);
+        let count = ident_counts.entry(ident.clone()).or_insert(0);
+        if *count >= max_rows {
+            continue;
+        }
+        *count += 1;
+
+        found_idents.insert(ident.clone());
+
+        let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
+
+        // Determine the output key (handle :as renames).
+        let output_key = spec
+            .and_then(|s| s.rename)
+            .unwrap_or(&ident)
+            .to_string();
+
+        if v_type_tag == type_tag::REF {
+            let rid = ref_id.ok_or("Missing ref ID")?;
+            if is_component && depth < MAX_RECURSION_DEPTH && !visited.contains(&rid) {
+                // Defer component expansion.
+                pending_components.push(PendingComponentRef {
+                    output_key,
+                    cardinality,
+                    ref_id: rid,
+                });
+            } else {
+                let ref_obj = json!({":db/id": rid});
+                insert_value(result_map, &output_key, ref_obj, &cardinality);
+            }
+        } else {
+            insert_value(result_map, &output_key, decoded_val, &cardinality);
+        }
+    }
+
+    // Expand component refs (recursive wildcard pull).
+    for pc in pending_components {
+        let mut sub_map = serde_json::Map::new();
+        sub_map.insert(":db/id".to_string(), json!(pc.ref_id));
+        visited.insert(pc.ref_id);
+        pull_wildcard(
+            client,
+            schema,
+            pc.ref_id,
+            &mut sub_map,
+            &HashSet::new(),
+            visited,
+            depth + 1,
+        )?;
+        let value = serde_json::Value::Object(sub_map);
+        insert_value(result_map, &pc.output_key, value, &pc.cardinality);
+    }
+
+    // Apply defaults for missing attributes.
+    for attr in attrs {
+        if !found_idents.contains(attr.forward_ident) {
+            if let Some(def) = attr.default {
+                let output_key = attr.rename.unwrap_or(attr.forward_ident);
+                result_map.insert(output_key.to_string(), def.clone());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Fetch ALL reverse attributes for a single entity in ONE query.
+///
+/// Instead of issuing one SPI call per reverse attribute, this collects all
+/// forward idents for reverse lookups and issues a single query.
+fn pull_reverse_attributes_batched(
+    client: &SpiClient<'_>,
+    _schema: &SchemaCache,
+    entity_id: i64,
+    attrs: &[ReverseAttrSpec<'_>],
+    result_map: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), PullError> {
+    if attrs.is_empty() {
+        return Ok(());
+    }
+
+    // Build the IN clause for forward idents.
+    let ident_csv: String = attrs
+        .iter()
+        .map(|a| format!("'{}'", a.forward_ident.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    let query = format!(
+        "SELECT s.ident, d.e \
+         FROM mentat.datoms d \
+         JOIN mentat.schema s ON d.a = s.entid \
+         WHERE s.ident IN ({ident_csv}) AND d.v_ref = $1 \
+               AND d.value_type_tag = {ref_tag} AND d.added = true \
+         ORDER BY s.ident, d.e",
+        ref_tag = type_tag::REF,
+    );
+
+    // Build lookup for limit/rename per forward_ident.
+    let mut spec_by_ident: HashMap<&str, &ReverseAttrSpec<'_>> = HashMap::new();
+    for attr in attrs {
+        spec_by_ident.insert(attr.forward_ident, attr);
+    }
+
+    // Collect results grouped by ident.
+    let mut refs_by_ident: HashMap<String, Vec<i64>> = HashMap::new();
+    let mut ident_counts: HashMap<String, usize> = HashMap::new();
+
+    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+        let ident: String = row.get(1)?.ok_or("Missing ident")?;
+        let e: i64 = row.get(2)?.ok_or("Missing entity")?;
+
+        let spec = spec_by_ident.get(ident.as_str());
+        let max_rows = spec.map(|s| resolve_limit(s.limit)).unwrap_or(DEFAULT_MANY_LIMIT);
+        let count = ident_counts.entry(ident.clone()).or_insert(0);
+        if *count >= max_rows {
+            continue;
+        }
+        *count += 1;
+        refs_by_ident.entry(ident).or_default().push(e);
+    }
+
+    // Insert results into the output map.
+    for attr in attrs {
+        let output_key = attr.rename.unwrap_or(attr.display_ident);
+        if let Some(ref_ids) = refs_by_ident.get(attr.forward_ident) {
+            let arr: Vec<serde_json::Value> =
+                ref_ids.iter().map(|id| json!({":db/id": *id})).collect();
+            result_map.insert(output_key.to_string(), json!(arr));
+        } else if let Some(def) = attr.default {
+            result_map.insert(output_key.to_string(), def.clone());
         }
     }
 
@@ -802,6 +1120,7 @@ fn execute_pull(
 /// component refs recursively pull all nested attributes.
 fn pull_wildcard(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
     override_idents: &HashSet<String>,
@@ -860,6 +1179,7 @@ fn pull_wildcard(
                     visited.insert(ref_id);
                     pull_wildcard(
                         client,
+                        schema,
                         ref_id,
                         &mut sub_map,
                         &HashSet::new(),
@@ -881,130 +1201,10 @@ fn pull_wildcard(
     Ok(())
 }
 
-/// Pull a single forward attribute.
-///
-/// When the attribute is a ref type and marked as `:db/isComponent` in the schema,
-/// the referenced entity is recursively pulled with all its attributes (Datomic
-/// component semantics) rather than returning just `{:db/id N}`.
-fn pull_forward_attribute(
-    client: &SpiClient<'_>,
-    entity_id: i64,
-    ident: &str,
-    rename: Option<&str>,
-    default: Option<&serde_json::Value>,
-    limit: Option<&LimitSpec>,
-    result_map: &mut serde_json::Map<String, serde_json::Value>,
-    visited: &mut HashSet<i64>,
-    depth: usize,
-) -> Result<(), PullError> {
-    let query = "SELECT s.cardinality::TEXT, s.component, d.value_type_tag, \
-                        d.v_ref, d.v_bool, d.v_long, d.v_double, \
-                        d.v_text, d.v_keyword, \
-                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                        d.v_uuid::TEXT, d.v_bytes \
-                 FROM mentat.datoms d \
-                 JOIN mentat.schema s ON d.a = s.entid \
-                 WHERE d.e = $1 AND s.ident = $2 AND d.added = true";
-
-    let output_key = rename.unwrap_or(ident);
-    let mut found = false;
-
-    let max_rows = resolve_limit(limit);
-
-    // Collect rows first so we can process component refs outside the cursor.
-    struct FwdAttrRow {
-        cardinality: String,
-        is_component: bool,
-        v_type_tag: i16,
-        decoded_val: serde_json::Value,
-        ref_id: Option<i64>,
-    }
-
-    let mut rows = Vec::new();
-    for row in client.select(
-        query,
-        None,
-        &[DatumWithOid::from(entity_id), DatumWithOid::from(ident)],
-    )? {
-        if rows.len() >= max_rows {
-            break;
-        }
-        found = true;
-        let cardinality: String = row.get(1)?.ok_or("Missing cardinality")?;
-        let is_component: bool = row.get(2)?.unwrap_or(false);
-        let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
-        let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 4)?;
-        rows.push(FwdAttrRow { cardinality, is_component, v_type_tag, decoded_val, ref_id });
-    }
-
-    for fwd_row in &rows {
-        let decoded = if fwd_row.v_type_tag == type_tag::REF {
-            let rid = fwd_row.ref_id.ok_or("Missing ref ID")?;
-            if fwd_row.is_component && depth < MAX_RECURSION_DEPTH && !visited.contains(&rid) {
-                // Component refs are recursively pulled with all attributes.
-                let mut sub_map = serde_json::Map::new();
-                sub_map.insert(":db/id".to_string(), json!(rid));
-                visited.insert(rid);
-                pull_wildcard(
-                    client,
-                    rid,
-                    &mut sub_map,
-                    &HashSet::new(),
-                    visited,
-                    depth + 1,
-                )?;
-                serde_json::Value::Object(sub_map)
-            } else {
-                json!({":db/id": rid})
-            }
-        } else {
-            fwd_row.decoded_val.clone()
-        };
-        insert_value(result_map, output_key, decoded, &fwd_row.cardinality);
-    }
-
-    if !found {
-        if let Some(def) = default {
-            result_map.insert(output_key.to_string(), def.clone());
-        }
-        // Datomic omits missing attributes unless a default is specified.
-    }
-
-    Ok(())
-}
-
-/// Pull a reverse attribute: find all entities that reference `entity_id` via `forward_ident`.
-fn pull_reverse_attribute(
-    client: &SpiClient<'_>,
-    entity_id: i64,
-    display_ident: &str,
-    forward_ident: &str,
-    rename: Option<&str>,
-    default: Option<&serde_json::Value>,
-    limit: Option<&LimitSpec>,
-    result_map: &mut serde_json::Map<String, serde_json::Value>,
-) -> Result<(), PullError> {
-    let ref_ids = query_reverse_refs(client, entity_id, forward_ident, limit)?;
-    let output_key = rename.unwrap_or(display_ident);
-
-    if ref_ids.is_empty() {
-        if let Some(def) = default {
-            result_map.insert(output_key.to_string(), def.clone());
-        }
-        return Ok(());
-    }
-
-    // Reverse lookups always return an array of {:db/id N} maps.
-    let arr: Vec<serde_json::Value> = ref_ids.iter().map(|id| json!({":db/id": *id})).collect();
-    result_map.insert(output_key.to_string(), json!(arr));
-
-    Ok(())
-}
-
 /// Pull a forward map spec: follow ref values and recursively pull sub-pattern.
 fn pull_forward_map_spec(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     ident: &str,
     sub_pattern: &[PullAttrSpec],
@@ -1021,7 +1221,7 @@ fn pull_forward_map_spec(
         return Ok(());
     }
 
-    let cardinality = lookup_cardinality(client, ident)?;
+    let cardinality = schema.cardinality(ident);
 
     if cardinality == "one" {
         // Cardinality one: return a single map.
@@ -1032,6 +1232,7 @@ fn pull_forward_map_spec(
         if depth < MAX_RECURSION_DEPTH {
             execute_pull(
                 client,
+                schema,
                 ref_id,
                 sub_pattern,
                 &mut sub_map,
@@ -1053,6 +1254,7 @@ fn pull_forward_map_spec(
             if depth < MAX_RECURSION_DEPTH {
                 execute_pull(
                     client,
+                    schema,
                     *ref_id,
                     sub_pattern,
                     &mut sub_map,
@@ -1074,6 +1276,7 @@ fn pull_forward_map_spec(
 /// Pull a reverse map spec: find entities referencing this one, then sub-pull.
 fn pull_reverse_map_spec(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1100,6 +1303,7 @@ fn pull_reverse_map_spec(
         if depth < MAX_RECURSION_DEPTH {
             execute_pull(
                 client,
+                schema,
                 *ref_id,
                 sub_pattern,
                 &mut sub_map,
@@ -1124,6 +1328,7 @@ fn pull_reverse_map_spec(
 /// seen entities.
 fn pull_recursive(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1159,7 +1364,7 @@ fn pull_recursive(
         // Reverse lookups are always multi-valued.
         "many".to_string()
     } else {
-        lookup_cardinality(client, forward_ident)?
+        schema.cardinality(forward_ident)
     };
 
     // Build a self-referencing recursive spec for sub-pulls.
@@ -1185,10 +1390,11 @@ fn pull_recursive(
             sub_map.insert(":db/id".to_string(), json!(ref_id));
             // Pull all attributes of the target (excluding the recursive one), plus recurse.
             pull_all_attributes_for_recursive(
-                client, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                client, schema, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
             )?;
             execute_pull(
                 client,
+                schema,
                 ref_id,
                 &[self_spec],
                 &mut sub_map,
@@ -1211,10 +1417,11 @@ fn pull_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(*ref_id));
                 pull_all_attributes_for_recursive(
-                    client, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                    client, schema, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
                 )?;
                 execute_pull(
                     client,
+                    schema,
                     *ref_id,
                     &[self_spec.clone()],
                     &mut sub_map,
@@ -1349,20 +1556,6 @@ fn query_forward_refs_batched(
     Ok(result)
 }
 
-/// Look up the cardinality of an attribute.
-fn lookup_cardinality(client: &SpiClient<'_>, ident: &str) -> Result<String, PullError> {
-    let query = "SELECT cardinality::TEXT FROM mentat.schema WHERE ident = $1";
-    let result = client.select(query, None, &[DatumWithOid::from(ident)])?;
-
-    for row in result {
-        let cardinality: String = row.get(1)?.ok_or("Missing cardinality")?;
-        return Ok(cardinality);
-    }
-
-    // Default to "one" if attribute not found in schema.
-    Ok("one".to_string())
-}
-
 /// Pull all attributes for an entity during recursive pulls.
 ///
 /// Non-ref attributes are included directly. Ref attributes that are NOT the
@@ -1372,6 +1565,7 @@ fn lookup_cardinality(client: &SpiClient<'_>, ident: &str) -> Result<String, Pul
 /// `RecursiveSpec`.
 fn pull_all_attributes_for_recursive(
     client: &SpiClient<'_>,
+    schema: &SchemaCache,
     entity_id: i64,
     recursive_forward_ident: &str,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -1422,7 +1616,7 @@ fn pull_all_attributes_for_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(rid));
                 visited.insert(rid);
-                pull_wildcard(client, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
+                pull_wildcard(client, schema, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
                 let value = serde_json::Value::Object(sub_map);
                 insert_value(result_map, &attr_row.ident, value, &attr_row.cardinality);
             } else {

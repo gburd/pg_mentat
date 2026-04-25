@@ -859,12 +859,12 @@ mod typed_value_tests {
     // Type-specific Index Usage Tests
     // ========================================================================
 
-    /// Verify that type-specific indexes exist and are used
+    /// Verify that type-specific AVET indexes exist for high-frequency types
     #[pg_test]
     fn test_type_specific_indexes_exist() {
         setup();
 
-        // Check that the AVET partial indexes exist
+        // Check that the AVET partial indexes exist (reduced set: ref, long, text, keyword)
         let idx_count = Spi::get_one::<i64>(
             "SELECT COUNT(*) FROM pg_indexes
              WHERE schemaname = 'mentat'
@@ -875,29 +875,29 @@ mod typed_value_tests {
         .expect("NULL count");
 
         assert!(
-            idx_count >= 7,
-            "Should have at least 7 AVET type-specific indexes, got {}",
+            idx_count >= 4,
+            "Should have at least 4 AVET type-specific indexes (ref, long, text, keyword), got {}",
             idx_count
         );
     }
 
-    /// Verify EAVT covering indexes exist
+    /// Verify core datom indexes exist (EAVT, AEVT, TX, VAET)
     #[pg_test]
-    fn test_eavt_covering_indexes_exist() {
+    fn test_core_datom_indexes_exist() {
         setup();
 
         let idx_count = Spi::get_one::<i64>(
             "SELECT COUNT(*) FROM pg_indexes
              WHERE schemaname = 'mentat'
              AND tablename = 'datoms'
-             AND indexname LIKE 'idx_datoms_eavt_%'",
+             AND indexname IN ('idx_datoms_eavt', 'idx_datoms_aevt', 'idx_datoms_tx', 'idx_datoms_vaet')",
         )
         .expect("query failed")
         .expect("NULL count");
 
         assert!(
             idx_count >= 4,
-            "Should have at least 4 EAVT covering indexes, got {}",
+            "Should have 4 core indexes (EAVT, AEVT, TX, VAET), got {}",
             idx_count
         );
     }
@@ -1419,5 +1419,542 @@ mod typed_value_tests {
             "Should find at least 20 bootstrap entities, got {}",
             results.len()
         );
+    }
+
+    // ========================================================================
+    // Cardinality-Many Retraction Tests
+    //
+    // These tests verify the fix for the critical data loss bug where
+    // retracting a single value from a cardinality-many attribute would
+    // retract ALL values instead of just the specified one.
+    // ========================================================================
+
+    /// Core regression test: retract one value from a multi-valued attribute,
+    /// verify only that specific value is removed and others remain.
+    #[pg_test]
+    fn test_cardinality_many_retract_single_value() {
+        setup();
+
+        // Define a cardinality-many keyword attribute
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :person/tags
+                 :db/valueType :db.type/keyword
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        // Add three keyword values
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"alice\" :person/tags :rust]
+                [:db/add \"alice\" :person/tags :clojure]
+                [:db/add \"alice\" :person/tags :postgres]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        // Get alice's entity ID
+        let alice_eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL entity");
+
+        // Verify 3 tags exist
+        let count_before = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(count_before, 3, "Should have 3 tags before retraction");
+
+        // Retract only :clojure
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/tags :clojure]]'::TEXT)",
+            alice_eid
+        ))
+        .expect("retract txn failed");
+
+        // Verify only 2 tags remain
+        let count_after = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(
+            count_after, 2,
+            "Should have 2 tags after retracting one (got {})",
+            count_after
+        );
+
+        // Verify :clojure is gone
+        let clojure_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND v_keyword = 'clojure' AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(clojure_count, 0, ":clojure should be retracted");
+
+        // Verify :rust is still present
+        let rust_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND v_keyword = 'rust' AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(rust_count, 1, ":rust should still be present");
+
+        // Verify :postgres is still present
+        let pg_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
+             AND v_keyword = 'postgres' AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(pg_count, 1, ":postgres should still be present");
+    }
+
+    /// Test retraction with string-typed cardinality-many attribute.
+    #[pg_test]
+    fn test_cardinality_many_retract_string_value() {
+        setup();
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :person/hobbies
+                 :db/valueType :db.type/string
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"bob\" :person/hobbies \"chess\"]
+                [:db/add \"bob\" :person/hobbies \"reading\"]
+                [:db/add \"bob\" :person/hobbies \"hiking\"]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        let bob_eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')
+             AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL entity");
+
+        // Retract the middle value
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/hobbies \"reading\"]]'::TEXT)",
+            bob_eid
+        ))
+        .expect("retract txn failed");
+
+        // Verify 2 hobbies remain
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')
+             AND added = true",
+            bob_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(count, 2, "Should have 2 hobbies after retracting one");
+
+        // Verify 'reading' is gone
+        let reading = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')
+             AND v_text = 'reading' AND added = true",
+            bob_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(reading, 0, "'reading' should be retracted");
+    }
+
+    /// Test retraction with long-typed cardinality-many attribute.
+    #[pg_test]
+    fn test_cardinality_many_retract_long_value() {
+        setup();
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :item/scores
+                 :db/valueType :db.type/long
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"e1\" :item/scores 10]
+                [:db/add \"e1\" :item/scores 20]
+                [:db/add \"e1\" :item/scores 30]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        let eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
+             AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL entity");
+
+        // Retract value 20
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :item/scores 20]]'::TEXT)",
+            eid
+        ))
+        .expect("retract txn failed");
+
+        // Verify 2 scores remain
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
+             AND added = true",
+            eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(count, 2, "Should have 2 scores after retracting one");
+
+        // Verify 10 and 30 remain
+        let has_10 = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
+             AND v_long = 10 AND added = true)",
+            eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(has_10, "Score 10 should still be present");
+
+        let has_30 = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
+             AND v_long = 30 AND added = true)",
+            eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(has_30, "Score 30 should still be present");
+    }
+
+    /// Test retraction with ref-typed cardinality-many attribute.
+    #[pg_test]
+    fn test_cardinality_many_retract_ref_value() {
+        setup();
+
+        // Define a name attribute (cardinality one) and friends attribute (cardinality many, ref)
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"nattr\" :db/ident :person/pname
+                 :db/valueType :db.type/string
+                 :db/cardinality :db.cardinality/one}
+                {:db/id \"fattr\" :db/ident :person/friends
+                 :db/valueType :db.type/ref
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        // Create entities
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"alice\" :person/pname \"Alice\"]
+                [:db/add \"bob\" :person/pname \"Bob\"]
+                [:db/add \"carol\" :person/pname \"Carol\"]
+            ]'::TEXT)",
+        )
+        .expect("people txn failed");
+
+        // Get entity IDs
+        let alice_eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':person/pname')
+             AND v_text = 'Alice' AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        let bob_eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':person/pname')
+             AND v_text = 'Bob' AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        let carol_eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':person/pname')
+             AND v_text = 'Carol' AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        // Alice befriends Bob and Carol
+        Spi::run(&format!(
+            "SELECT mentat_transact('[
+                [:db/add {} :person/friends {}]
+                [:db/add {} :person/friends {}]
+            ]'::TEXT)",
+            alice_eid, bob_eid, alice_eid, carol_eid
+        ))
+        .expect("friends txn failed");
+
+        // Retract Bob as friend
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :person/friends {}]]'::TEXT)",
+            alice_eid, bob_eid
+        ))
+        .expect("retract txn failed");
+
+        // Alice should have 1 friend remaining (Carol)
+        let friend_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/friends')
+             AND added = true",
+            alice_eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(friend_count, 1, "Alice should have 1 friend remaining");
+
+        // Verify Carol is still a friend
+        let has_carol = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/friends')
+             AND v_ref = {} AND added = true)",
+            alice_eid, carol_eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(has_carol, "Carol should still be Alice's friend");
+    }
+
+    /// Test that retraction does not affect other entities with the same attribute.
+    #[pg_test]
+    fn test_retract_does_not_affect_other_entities() {
+        setup();
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :item/labels
+                 :db/valueType :db.type/keyword
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        // Two entities with overlapping labels
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"e1\" :item/labels :important]
+                [:db/add \"e1\" :item/labels :urgent]
+                [:db/add \"e2\" :item/labels :important]
+                [:db/add \"e2\" :item/labels :low]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        let attr_entid = Spi::get_one::<i64>(
+            "SELECT entid FROM mentat.idents WHERE ident = ':item/labels'",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        // Get entity IDs (e1 is the first one with :important, could be any order,
+        // but we know e1 also has :urgent)
+        let e1_eid = Spi::get_one::<i64>(&format!(
+            "SELECT e FROM mentat.datoms
+             WHERE a = {} AND v_keyword = 'urgent' AND added = true LIMIT 1",
+            attr_entid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+
+        let e2_eid = Spi::get_one::<i64>(&format!(
+            "SELECT e FROM mentat.datoms
+             WHERE a = {} AND v_keyword = 'low' AND added = true LIMIT 1",
+            attr_entid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+
+        // Retract :important from e1 only
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :item/labels :important]]'::TEXT)",
+            e1_eid
+        ))
+        .expect("retract txn failed");
+
+        // e1 should have 1 label (:urgent)
+        let e1_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = {} AND added = true",
+            e1_eid, attr_entid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(e1_count, 1, "e1 should have 1 label after retraction");
+
+        // e2 should still have both labels
+        let e2_count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = {} AND added = true",
+            e2_eid, attr_entid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(e2_count, 2, "e2 should still have 2 labels (unaffected)");
+
+        // e2 :important should still exist
+        let e2_important = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = {} AND v_keyword = 'important' AND added = true)",
+            e2_eid, attr_entid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(e2_important, "e2's :important label should be unaffected");
+    }
+
+    /// Test that a retraction row (added=false) is inserted for history purposes.
+    #[pg_test]
+    fn test_retract_creates_history_row() {
+        setup();
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :item/colors
+                 :db/valueType :db.type/keyword
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"e1\" :item/colors :red]
+                [:db/add \"e1\" :item/colors :blue]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        let eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':item/colors')
+             AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        // Retract :red
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :item/colors :red]]'::TEXT)",
+            eid
+        ))
+        .expect("retract txn failed");
+
+        // There should be a retraction row (added=false) for :red
+        let retraction_exists = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/colors')
+             AND v_keyword = 'red' AND added = false)",
+            eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(
+            retraction_exists,
+            "A retraction row (added=false) should exist for history"
+        );
+
+        // The original assertion row should now be marked as retracted (added=false)
+        let assertion_still_active = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/colors')
+             AND v_keyword = 'red' AND added = true)",
+            eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(
+            !assertion_still_active,
+            "Original assertion should no longer be active (added=true)"
+        );
+    }
+
+    /// Test retracting a value that does not exist is a no-op (no error).
+    #[pg_test]
+    fn test_retract_nonexistent_value_is_noop() {
+        setup();
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/id \"attr\" :db/ident :item/sizes
+                 :db/valueType :db.type/long
+                 :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
+        )
+        .expect("schema txn failed");
+
+        Spi::run(
+            "SELECT mentat_transact('[
+                [:db/add \"e1\" :item/sizes 10]
+                [:db/add \"e1\" :item/sizes 20]
+            ]'::TEXT)",
+        )
+        .expect("add txn failed");
+
+        let eid = Spi::get_one::<i64>(
+            "SELECT e FROM mentat.datoms
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':item/sizes')
+             AND added = true LIMIT 1",
+        )
+        .expect("query failed")
+        .expect("NULL");
+
+        // Retract a value that was never asserted -- should not error
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :item/sizes 99]]'::TEXT)",
+            eid
+        ))
+        .expect("retract nonexistent should not fail");
+
+        // Both original values should still be present
+        let count = Spi::get_one::<i64>(&format!(
+            "SELECT COUNT(*) FROM mentat.datoms
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/sizes')
+             AND added = true",
+            eid
+        ))
+        .expect("count failed")
+        .expect("NULL count");
+        assert_eq!(count, 2, "Both values should remain when retracting nonexistent value");
     }
 }

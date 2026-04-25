@@ -1,37 +1,45 @@
 -- Constraints and triggers for pg_mentat
 -- Enforces uniqueness constraints and maintains referential integrity
 
+-- ==========================================================================
 -- Unique value constraint enforcement
--- For attributes with :db/unique :db.unique/value
+-- ==========================================================================
+-- For attributes with :db/unique :db.unique/value or :db.unique/identity
 -- Type-specific unique indexes enforce uniqueness per attribute.
 -- We need one per type because values live in different columns.
-CREATE UNIQUE INDEX idx_datoms_unique_ref ON mentat.datoms (a, v_ref)
-    WHERE added = TRUE AND value_type_tag = 0
+--
+-- With partitioned datoms table, unique indexes are created on the specific
+-- partition for each type (PostgreSQL requires unique indexes on partitions,
+-- not the parent table, unless they include the partition key).
+--
+-- NOTE: Uniqueness is also enforced in Rust (transact.rs validate_datom_constraints)
+-- using advisory locks. These indexes serve as a database-level safety net.
+-- Only the most common unique-value types are indexed; rare types (bool, double,
+-- uuid) rely on the Rust-level enforcement.
+
+-- Unique ref values (on ref partition)
+CREATE UNIQUE INDEX idx_datoms_unique_ref ON mentat.datoms_ref (a, v_ref)
+    WHERE added = TRUE
     AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
 
-CREATE UNIQUE INDEX idx_datoms_unique_bool ON mentat.datoms (a, v_bool)
-    WHERE added = TRUE AND value_type_tag = 1
+-- Unique long values (on long partition)
+CREATE UNIQUE INDEX idx_datoms_unique_long ON mentat.datoms_long (a, v_long)
+    WHERE added = TRUE
     AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
 
-CREATE UNIQUE INDEX idx_datoms_unique_long ON mentat.datoms (a, v_long)
-    WHERE added = TRUE AND value_type_tag = 2
+-- Unique text values (on text partition)
+CREATE UNIQUE INDEX idx_datoms_unique_text ON mentat.datoms_text (a, v_text)
+    WHERE added = TRUE
     AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
 
-CREATE UNIQUE INDEX idx_datoms_unique_double ON mentat.datoms (a, v_double)
-    WHERE added = TRUE AND value_type_tag = 3
+-- Unique keyword values (on keyword partition)
+CREATE UNIQUE INDEX idx_datoms_unique_keyword ON mentat.datoms_keyword (a, v_keyword)
+    WHERE added = TRUE
     AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
 
-CREATE UNIQUE INDEX idx_datoms_unique_text ON mentat.datoms (a, v_text)
-    WHERE added = TRUE AND value_type_tag = 7
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
-
-CREATE UNIQUE INDEX idx_datoms_unique_keyword ON mentat.datoms (a, v_keyword)
-    WHERE added = TRUE AND value_type_tag = 8
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
-
-CREATE UNIQUE INDEX idx_datoms_unique_uuid ON mentat.datoms (a, v_uuid)
-    WHERE added = TRUE AND value_type_tag = 10
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+-- ==========================================================================
+-- Validation Triggers
+-- ==========================================================================
 
 -- Function to validate value types match schema
 CREATE OR REPLACE FUNCTION mentat.validate_datom_value_type()
@@ -73,7 +81,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Trigger to validate value types on insert/update
+-- Trigger on the partitioned parent table (inherited by all partitions)
 CREATE TRIGGER validate_datom_value_type_trigger
     BEFORE INSERT OR UPDATE ON mentat.datoms
     FOR EACH ROW

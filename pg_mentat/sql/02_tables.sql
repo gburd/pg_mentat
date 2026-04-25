@@ -37,11 +37,21 @@ CREATE TABLE mentat.transactions (
     tx_instant TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Datoms: The core fact table
+-- Datoms: The core fact table (partitioned by value type)
 -- Stores all assertions and retractions
 -- Structure: [entity, attribute, value, transaction, added]
 -- Values are stored in type-specific columns for correct native comparisons.
 -- Exactly one v_* column must be NOT NULL per row (enforced by CHECK constraint).
+--
+-- PARTITIONING: LIST partition by value_type_tag enables:
+--   - Partition pruning: queries filtering on type skip irrelevant partitions
+--   - Smaller indexes per partition (each only indexes its type's rows)
+--   - Better compression (NULL columns are consistent within partitions)
+--   - Independent VACUUM per partition (faster maintenance)
+--
+-- NOTE: Foreign keys (tx -> transactions, a -> schema) are enforced at the
+-- application level (transact.rs) because PostgreSQL partitioned tables
+-- cannot reference non-partitioned tables via FK constraints.
 CREATE TABLE mentat.datoms (
     e BIGINT NOT NULL,
     a BIGINT NOT NULL,
@@ -69,16 +79,51 @@ CREATE TABLE mentat.datoms (
        + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
        + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
        + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
-    ),
+    )
+) PARTITION BY LIST (value_type_tag);
 
-    -- Reference to transactions table
-    CONSTRAINT fk_datoms_tx FOREIGN KEY (tx)
-        REFERENCES mentat.transactions(tx),
+-- Partition for ref values (value_type_tag = 0)
+-- Entity references, foreign key traversals
+CREATE TABLE mentat.datoms_ref PARTITION OF mentat.datoms
+    FOR VALUES IN (0);
 
-    -- Reference to schema table for attribute
-    CONSTRAINT fk_datoms_attr FOREIGN KEY (a)
-        REFERENCES mentat.schema(entid)
-);
+-- Partition for boolean values (value_type_tag = 1)
+CREATE TABLE mentat.datoms_bool PARTITION OF mentat.datoms
+    FOR VALUES IN (1);
+
+-- Partition for long/integer values (value_type_tag = 2)
+-- Most common numeric type
+CREATE TABLE mentat.datoms_long PARTITION OF mentat.datoms
+    FOR VALUES IN (2);
+
+-- Partition for double/float values (value_type_tag = 3)
+CREATE TABLE mentat.datoms_double PARTITION OF mentat.datoms
+    FOR VALUES IN (3);
+
+-- Partition for instant/timestamp values (value_type_tag = 4)
+CREATE TABLE mentat.datoms_instant PARTITION OF mentat.datoms
+    FOR VALUES IN (4);
+
+-- Partition for text/string values (value_type_tag = 7)
+CREATE TABLE mentat.datoms_text PARTITION OF mentat.datoms
+    FOR VALUES IN (7);
+
+-- Partition for keyword values (value_type_tag = 8)
+CREATE TABLE mentat.datoms_keyword PARTITION OF mentat.datoms
+    FOR VALUES IN (8);
+
+-- Partition for UUID values (value_type_tag = 10)
+CREATE TABLE mentat.datoms_uuid PARTITION OF mentat.datoms
+    FOR VALUES IN (10);
+
+-- Partition for bytes/blob values (value_type_tag = 11)
+CREATE TABLE mentat.datoms_bytes PARTITION OF mentat.datoms
+    FOR VALUES IN (11);
+
+-- Default partition for any future or unexpected type tags
+-- Prevents INSERT failures if a new type tag is added before partitions
+CREATE TABLE mentat.datoms_default PARTITION OF mentat.datoms
+    DEFAULT;
 
 -- Fulltext search support
 -- Stores text values and their search vectors for FTS

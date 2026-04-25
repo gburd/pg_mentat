@@ -20,9 +20,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -36,6 +38,12 @@ pub enum ServerError {
     Database(#[from] tokio_postgres::Error),
     #[error("Internal error: {0}")]
     Internal(String),
+    #[error("Transaction conflict: serialization failure after {attempts} attempts")]
+    Conflict { attempts: u32 },
+    #[error("Unique constraint violation: {0}")]
+    UniqueViolation(String),
+    #[error("Circuit breaker open: too many errors ({error_count} in the last {window_secs}s)")]
+    CircuitBreakerOpen { error_count: u64, window_secs: u64 },
 }
 
 impl From<ServerError> for Anomaly {
@@ -52,9 +60,156 @@ impl From<ServerError> for Anomaly {
                 message: msg,
                 db_error: Some("db.error/fault".to_string()),
             },
+            ServerError::Conflict { attempts } => Self {
+                category: AnomalyCategory::Unavailable,
+                message: format!(
+                    "Transaction serialization conflict after {} attempts. \
+                     Concurrent transactions modified the same data. Retry the transaction.",
+                    attempts
+                ),
+                db_error: Some("db.error/conflict".to_string()),
+            },
+            ServerError::UniqueViolation(msg) => Self {
+                category: AnomalyCategory::Incorrect,
+                message: msg,
+                db_error: Some("db.error/unique-conflict".to_string()),
+            },
+            ServerError::CircuitBreakerOpen {
+                error_count,
+                window_secs,
+            } => Self {
+                category: AnomalyCategory::Unavailable,
+                message: format!(
+                    "Service temporarily unavailable: {} errors in the last {}s. \
+                     The circuit breaker will reset automatically.",
+                    error_count, window_secs
+                ),
+                db_error: Some("db.error/circuit-breaker-open".to_string()),
+            },
         }
     }
 }
+
+/// Maximum number of retry attempts for serialization failures.
+const MAX_TRANSACT_RETRIES: u32 = 3;
+
+/// Base delay for exponential backoff on serialization failures (milliseconds).
+const BASE_RETRY_DELAY_MS: u64 = 10;
+
+/// Check if a `tokio_postgres::Error` is a serialization failure (SQLSTATE 40001).
+fn is_serialization_failure(err: &tokio_postgres::Error) -> bool {
+    if let Some(db_err) = err.as_db_error() {
+        *db_err.code() == tokio_postgres::error::SqlState::T_R_SERIALIZATION_FAILURE
+    } else {
+        false
+    }
+}
+
+/// Check if a `tokio_postgres::Error` is a unique constraint violation (SQLSTATE 23505).
+fn is_unique_violation(err: &tokio_postgres::Error) -> bool {
+    if let Some(db_err) = err.as_db_error() {
+        *db_err.code() == tokio_postgres::error::SqlState::UNIQUE_VIOLATION
+    } else {
+        false
+    }
+}
+
+/// Check if a `tokio_postgres::Error` is a deadlock (SQLSTATE 40P01).
+fn is_deadlock(err: &tokio_postgres::Error) -> bool {
+    if let Some(db_err) = err.as_db_error() {
+        *db_err.code() == tokio_postgres::error::SqlState::T_R_DEADLOCK_DETECTED
+    } else {
+        false
+    }
+}
+
+/// Compute retry delay with exponential backoff and jitter.
+///
+/// Delay = base_ms * 2^attempt * jitter, where jitter varies +/-25%.
+fn retry_delay(attempt: u32) -> Duration {
+    let base = BASE_RETRY_DELAY_MS * 2_u64.pow(attempt);
+    // Simple jitter: vary by +/- 25% using a deterministic-ish approach
+    // based on the attempt number (avoids pulling in rand for this).
+    let jitter_factor = match attempt % 4 {
+        0 => 0.80,
+        1 => 1.10,
+        2 => 0.90,
+        3 => 1.20,
+        _ => 1.0,
+    };
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let millis = (base as f64 * jitter_factor) as u64;
+    Duration::from_millis(millis)
+}
+
+// ============================================================================
+// Circuit Breaker
+// ============================================================================
+
+/// Circuit breaker that tracks database errors and rejects requests when
+/// the error rate is too high. Protects the database from cascading failures
+/// when it is overloaded or unresponsive.
+///
+/// State transitions:
+///   Closed (normal) -> Open (rejecting) when errors exceed threshold in window
+///   Open -> Closed when the window resets
+///
+/// Configurable via `[circuit_breaker]` section in config or env vars:
+///   MENTATD_CB_THRESHOLD (default 50), MENTATD_CB_WINDOW_SECS (default 60)
+pub struct CircuitBreaker {
+    error_count: AtomicU64,
+    last_reset: Mutex<Instant>,
+    /// Error threshold before the circuit breaker opens.
+    threshold: u64,
+    /// Time window for the error counter (seconds).
+    window_secs: u64,
+}
+
+impl CircuitBreaker {
+    pub fn new(threshold: u64, window_secs: u64) -> Self {
+        Self {
+            error_count: AtomicU64::new(0),
+            last_reset: Mutex::new(Instant::now()),
+            threshold,
+            window_secs,
+        }
+    }
+
+    /// Record an error. Returns the current error count.
+    pub async fn record_error(&self) -> u64 {
+        self.maybe_reset().await;
+        self.error_count.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    /// Check if the circuit breaker is open (rejecting requests).
+    pub async fn should_reject(&self) -> bool {
+        self.maybe_reset().await;
+        self.error_count.load(Ordering::Relaxed) > self.threshold
+    }
+
+    /// Return the current error count (for metrics/diagnostics).
+    pub fn error_count(&self) -> u64 {
+        self.error_count.load(Ordering::Relaxed)
+    }
+
+    /// Return the configured time window in seconds.
+    pub fn window_secs(&self) -> u64 {
+        self.window_secs
+    }
+
+    /// Reset the error counter if the time window has elapsed.
+    async fn maybe_reset(&self) {
+        let mut last = self.last_reset.lock().await;
+        if last.elapsed() > Duration::from_secs(self.window_secs) {
+            self.error_count.store(0, Ordering::Relaxed);
+            *last = Instant::now();
+        }
+    }
+}
+
+// ============================================================================
+// Application State
+// ============================================================================
 
 #[derive(Clone)]
 pub struct AppState {
@@ -63,6 +218,7 @@ pub struct AppState {
     config: Arc<Config>,
     query_cache: Arc<QueryCache>,
     db_cache: Arc<DbValueCache>,
+    circuit_breaker: Arc<CircuitBreaker>,
 }
 
 impl AppState {
@@ -73,13 +229,19 @@ impl AppState {
             0
         };
         let cache_ttl = Duration::from_secs(config.cache.ttl_secs);
-        // Use a default of 1 hour TTL for db snapshots if not configured
-        let db_snapshot_ttl = Duration::from_secs(3600);
+        // TTL for database value snapshots: 5 minutes.
+        // This matches Datomic's expectation that database values are short-lived
+        // immutable references used within a request or batch of queries.
+        let db_snapshot_ttl = Duration::from_secs(300);
         Self {
             pool,
             config: Arc::new(config),
             query_cache: Arc::new(QueryCache::new(cache_capacity, cache_ttl)),
             db_cache: Arc::new(DbValueCache::new(db_snapshot_ttl)),
+            circuit_breaker: Arc::new(CircuitBreaker::new(
+                config.circuit_breaker.error_threshold,
+                config.circuit_breaker.window_secs,
+            )),
         }
     }
 
@@ -249,6 +411,11 @@ async fn handle_request(
             Err(e) => {
                 error!("Operation failed: {}", e);
                 metrics::ERROR_COUNT.inc();
+                // Record error in circuit breaker (database/pool errors indicate
+                // systemic issues; parse errors and conflicts are client-side).
+                if matches!(e, ServerError::Pool(_) | ServerError::Database(_) | ServerError::Internal(_)) {
+                    state.circuit_breaker.record_error().await;
+                }
                 Response::Error { anomaly: e.into() }
             }
         },
@@ -328,6 +495,21 @@ async fn handle_request(
 }
 
 async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseValue, ServerError> {
+    // Circuit breaker: reject requests when error rate is too high.
+    // Health checks bypass the circuit breaker so monitoring can still probe.
+    if !matches!(op, Operation::Health) && state.circuit_breaker.should_reject().await {
+        let count = state.circuit_breaker.error_count();
+        warn!(
+            error_count = count,
+            window_secs = CIRCUIT_BREAKER_WINDOW_SECS,
+            "Circuit breaker open: rejecting request"
+        );
+        return Err(ServerError::CircuitBreakerOpen {
+            error_count: count,
+            window_secs: CIRCUIT_BREAKER_WINDOW_SECS,
+        });
+    }
+
     let op_start = Instant::now();
 
     let (op_name, result) = match op {
@@ -420,16 +602,55 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             ])))
         }
 
-        Operation::Db { connection_id } => ("db", Ok(ResponseValue::Map(vec![
-            (
-                ResponseValue::Keyword("connection-id".to_string()),
-                ResponseValue::String(connection_id.to_string()),
-            ),
-            (
-                ResponseValue::Keyword("status".to_string()),
-                ResponseValue::String("active".to_string()),
-            ),
-        ]))),
+        Operation::Db { connection_id } => {
+            info!("Creating database value for connection: {}", connection_id);
+
+            let client = state.pool.get().await?;
+
+            // Get current basis-t from PostgreSQL (the latest transaction id)
+            let row = client
+                .query_one(
+                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+                    &[],
+                )
+                .await?;
+
+            let basis_t: i64 = row.get(0);
+
+            // Create an immutable snapshot in the cache, keyed by a unique db_id.
+            // This snapshot captures the point-in-time basis-t so that subsequent
+            // queries using this db value see a consistent view, even if new
+            // transactions are committed in the meantime.
+            let db_id = state.db_cache.create_snapshot(basis_t);
+
+            info!(
+                "Created db value: db_id={}, basis_t={}, connection_id={}",
+                db_id, basis_t, connection_id
+            );
+
+            ("db", Ok(ResponseValue::Map(vec![
+                (
+                    ResponseValue::Keyword("db-id".to_string()),
+                    ResponseValue::String(db_id),
+                ),
+                (
+                    ResponseValue::Keyword("basis-t".to_string()),
+                    ResponseValue::Integer(basis_t),
+                ),
+                (
+                    ResponseValue::Keyword("db-name".to_string()),
+                    ResponseValue::String("mentat".to_string()),
+                ),
+                (
+                    ResponseValue::Keyword("t".to_string()),
+                    ResponseValue::Integer(basis_t),
+                ),
+                (
+                    ResponseValue::Keyword("next-t".to_string()),
+                    ResponseValue::Integer(basis_t + 1),
+                ),
+            ])))
+        }
 
         Operation::DbSnapshot => {
             info!("Creating database snapshot");
@@ -594,21 +815,94 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             metrics::TRANSACTION_COUNT.inc();
             let tx_start = Instant::now();
 
-            // Timing: Get connection from pool
-            let pool_start = Instant::now();
-            let client = state.pool.get().await?;
-            let pool_time = pool_start.elapsed();
+            // Retry loop: handle serialization failures (SQLSTATE 40001) and
+            // deadlocks (SQLSTATE 40P01) with exponential backoff. The
+            // mentat_transact() PG function uses SERIALIZABLE isolation, which
+            // may raise 40001 when concurrent transactions conflict.
+            let mut attempt: u32 = 0;
+            let (report_str, total_pool_time, total_db_time) = loop {
+                // Timing: Get connection from pool
+                let pool_start = Instant::now();
+                let client = state.pool.get().await?;
+                let pool_time = pool_start.elapsed();
 
-            // Timing: Execute PostgreSQL function
-            let db_start = Instant::now();
-            let row = client
-                .query_one("SELECT mentat_transact($1)", &[&tx_data])
-                .await?;
-            let db_time = db_start.elapsed();
+                // Timing: Execute PostgreSQL function
+                let db_start = Instant::now();
+                let query_result = client
+                    .query_one("SELECT mentat_transact($1)", &[&tx_data])
+                    .await;
+                let db_time = db_start.elapsed();
+
+                match query_result {
+                    Ok(row) => {
+                        let report: String = row.get(0);
+                        if attempt > 0 {
+                            info!(
+                                "Transaction succeeded after {} retries (total attempts: {})",
+                                attempt,
+                                attempt + 1
+                            );
+                        }
+                        break (report, pool_time, db_time);
+                    }
+                    Err(ref e) if is_serialization_failure(e) || is_deadlock(e) => {
+                        metrics::TRANSACTION_CONFLICTS.inc();
+
+                        if attempt >= MAX_TRANSACT_RETRIES {
+                            metrics::TRANSACTION_RETRY_EXHAUSTED.inc();
+                            let kind = if is_serialization_failure(e) {
+                                "serialization_failure"
+                            } else {
+                                "deadlock"
+                            };
+                            error!(
+                                "Transaction {} failed after {} attempts ({}: {})",
+                                connection_id,
+                                attempt + 1,
+                                kind,
+                                e
+                            );
+                            return Err(ServerError::Conflict {
+                                attempts: attempt + 1,
+                            });
+                        }
+
+                        let delay = retry_delay(attempt);
+                        metrics::TRANSACTION_RETRIES.inc();
+                        warn!(
+                            "Transaction {} got serialization conflict (attempt {}/{}), retrying in {:?}",
+                            connection_id,
+                            attempt + 1,
+                            MAX_TRANSACT_RETRIES + 1,
+                            delay
+                        );
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                    }
+                    Err(ref e) if is_unique_violation(e) => {
+                        metrics::TRANSACTION_UNIQUE_VIOLATIONS.inc();
+                        let detail = e
+                            .as_db_error()
+                            .map(|db| {
+                                format!(
+                                    "{} (detail: {})",
+                                    db.message(),
+                                    db.detail().unwrap_or("none")
+                                )
+                            })
+                            .unwrap_or_else(|| e.to_string());
+                        error!("Transaction unique constraint violation: {}", detail);
+                        return Err(ServerError::UniqueViolation(detail));
+                    }
+                    Err(e) => {
+                        // Non-retryable error -- propagate immediately
+                        return Err(ServerError::Database(e));
+                    }
+                }
+            };
 
             // Timing: Parse report
             let parse_report_start = Instant::now();
-            let report_str: String = row.get(0);
             let result = parse_tx_report(&report_str)?;
             let parse_report_time = parse_report_start.elapsed();
 
@@ -639,8 +933,8 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let cache_time = cache_start.elapsed();
 
             tracing::debug!(
-                "Transact timing - total: {:?}, pool: {:?}, db: {:?}, parse_report: {:?}, cache: {:?}",
-                tx_start.elapsed(), pool_time, db_time, parse_report_time, cache_time
+                "Transact timing - total: {:?}, pool: {:?}, db: {:?}, parse_report: {:?}, cache: {:?}, retries: {}",
+                tx_start.elapsed(), total_pool_time, total_db_time, parse_report_time, cache_time, attempt
             );
 
             ("transact", Ok(result))

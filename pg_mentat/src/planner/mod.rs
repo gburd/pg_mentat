@@ -17,4 +17,7 @@ pub mod hooks;
 
 #[allow(unused_imports)]
 pub use hooks::init_planner_hooks;
-pub use hooks::{default_work_mem, optimizer_hints_enabled, query_timeout_ms};
+pub use hooks::{
+    default_work_mem, max_recursion_depth, max_result_rows, optimizer_hints_enabled,
+    query_timeout_ms, temp_file_limit,
+};

@@ -17,6 +17,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreakerConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +62,33 @@ pub struct CacheConfig {
     pub capacity: usize,
     #[serde(default = "default_cache_ttl_secs")]
     pub ttl_secs: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CircuitBreakerConfig {
+    /// Error threshold before the circuit breaker opens. Default 50.
+    #[serde(default = "default_cb_threshold")]
+    pub error_threshold: u64,
+    /// Time window in seconds for the error counter. Default 60.
+    #[serde(default = "default_cb_window_secs")]
+    pub window_secs: u64,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            error_threshold: default_cb_threshold(),
+            window_secs: default_cb_window_secs(),
+        }
+    }
+}
+
+fn default_cb_threshold() -> u64 {
+    50
+}
+
+fn default_cb_window_secs() -> u64 {
+    60
 }
 
 impl Default for CacheConfig {
@@ -162,6 +191,16 @@ impl Config {
                     .ok()
                     .and_then(|s| s.parse().ok())
                     .unwrap_or_else(default_cache_ttl_secs),
+            },
+            circuit_breaker: CircuitBreakerConfig {
+                error_threshold: std::env::var("MENTATD_CB_THRESHOLD")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(default_cb_threshold),
+                window_secs: std::env::var("MENTATD_CB_WINDOW_SECS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or_else(default_cb_window_secs),
             },
         }
     }

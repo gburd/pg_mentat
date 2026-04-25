@@ -94,6 +94,32 @@ lazy_static! {
     )
     .expect("metric can be created");
 
+    // -- Conflict / retry metrics -----------------------------------------------
+    pub static ref TRANSACTION_CONFLICTS: IntCounter =
+        IntCounter::new(
+            "mentatd_transaction_conflicts_total",
+            "Total serialization conflicts (SQLSTATE 40001) encountered"
+        )
+        .expect("metric can be created");
+    pub static ref TRANSACTION_RETRIES: IntCounter =
+        IntCounter::new(
+            "mentatd_transaction_retries_total",
+            "Total transaction retry attempts after serialization conflicts"
+        )
+        .expect("metric can be created");
+    pub static ref TRANSACTION_RETRY_EXHAUSTED: IntCounter =
+        IntCounter::new(
+            "mentatd_transaction_retry_exhausted_total",
+            "Transactions that failed after exhausting all retry attempts"
+        )
+        .expect("metric can be created");
+    pub static ref TRANSACTION_UNIQUE_VIOLATIONS: IntCounter =
+        IntCounter::new(
+            "mentatd_transaction_unique_violations_total",
+            "Total unique constraint violations (SQLSTATE 23505) encountered"
+        )
+        .expect("metric can be created");
+
     // -- Connection pool metrics ------------------------------------------------
     pub static ref CONNECTION_POOL_SIZE: Gauge = Gauge::new(
         "mentatd_connection_pool_size",
@@ -144,6 +170,10 @@ pub fn register_metrics() {
         Box::new(CACHE_AVG_DEPS.clone()),
         Box::new(TRANSACTION_COUNT.clone()),
         Box::new(TRANSACTION_DURATION.clone()),
+        Box::new(TRANSACTION_CONFLICTS.clone()),
+        Box::new(TRANSACTION_RETRIES.clone()),
+        Box::new(TRANSACTION_RETRY_EXHAUSTED.clone()),
+        Box::new(TRANSACTION_UNIQUE_VIOLATIONS.clone()),
         Box::new(CONNECTION_POOL_SIZE.clone()),
         Box::new(CONNECTION_POOL_AVAILABLE.clone()),
         Box::new(CONNECTION_POOL_WAITING.clone()),

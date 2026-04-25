@@ -150,6 +150,17 @@ pub enum MentatError {
         message: String,
     },
 
+    /// Query exceeded the maximum allowed result row count.
+    ResultLimitExceeded {
+        limit: i32,
+        message: String,
+    },
+
+    /// Query exceeded the statement timeout.
+    QueryTimeout {
+        timeout_ms: i32,
+    },
+
     /// Wraps an upstream error (SPI, EDN parse, etc.) with context.
     Internal {
         message: String,
@@ -411,6 +422,24 @@ impl fmt::Display for MentatError {
                 write!(f, ":db.error/data-integrity {}", message)
             }
 
+            Self::ResultLimitExceeded { limit, message } => {
+                write!(
+                    f,
+                    ":db.error/result-limit-exceeded Query result exceeded the maximum of {} rows. \
+                     {}. Adjust mentat.max_result_rows or add :limit to your query.",
+                    limit, message
+                )
+            }
+
+            Self::QueryTimeout { timeout_ms } => {
+                write!(
+                    f,
+                    ":db.error/query-timeout Query exceeded the timeout of {}ms. \
+                     Adjust mentat.query_timeout_ms or optimize the query.",
+                    timeout_ms
+                )
+            }
+
             Self::Internal { message, .. } => {
                 write!(f, ":db.error/internal {}", message)
             }
@@ -486,6 +515,8 @@ impl MentatError {
             Self::UnknownBatchOp { .. } => ":db.error/unknown-batch-op",
             Self::BatchMissingArg { .. } => ":db.error/batch-missing-arg",
             Self::DataIntegrity { .. } => ":db.error/data-integrity",
+            Self::ResultLimitExceeded { .. } => ":db.error/result-limit-exceeded",
+            Self::QueryTimeout { .. } => ":db.error/query-timeout",
             Self::Internal { .. } => ":db.error/internal",
         }
     }

@@ -42,11 +42,11 @@ use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 #[pg_extern]
 fn suggest_index(access_pattern: &str) -> Result<String, Box<dyn std::error::Error>> {
     let index = match access_pattern {
-        "e" | "ea" | "eav" | "eavt" => "idx_mentat_eavt",
-        "a" | "ae" | "aev" | "aevt" => "idx_mentat_aevt",
-        "av" | "ave" | "avet" => "idx_mentat_avet",
-        "v" | "va" | "vae" | "vaet" => "idx_mentat_vaet",
-        _ => "idx_mentat_aevt", // Default to attribute-first
+        "e" | "ea" | "eav" | "eavt" => "idx_datoms_eavt",
+        "a" | "ae" | "aev" | "aevt" => "idx_datoms_aevt",
+        "av" | "ave" | "avet" => "idx_datoms_avet_*",
+        "v" | "va" | "vae" | "vaet" => "idx_datoms_vaet",
+        _ => "idx_datoms_aevt", // Default to attribute-first
     };
 
     Ok(index.to_string())
@@ -145,24 +145,24 @@ fn get_index_info() -> Result<
 > {
     let indexes = vec![
         (
-            "idx_mentat_eavt".to_string(),
+            "idx_datoms_eavt".to_string(),
             "Entity-first".to_string(),
             "Lookups by entity ID (e.g., get all attributes of an entity)".to_string(),
         ),
         (
-            "idx_mentat_aevt".to_string(),
+            "idx_datoms_aevt".to_string(),
             "Attribute-first".to_string(),
             "Lookups by attribute (e.g., find all entities with :user/name)".to_string(),
         ),
         (
-            "idx_mentat_avet".to_string(),
+            "idx_datoms_avet_*".to_string(),
             "Attribute-Value".to_string(),
-            "Lookups by attribute and value (e.g., find entity where :user/email = 'alice@example.com')".to_string(),
+            "Type-specific AVET indexes for value lookups (ref, long, text, keyword)".to_string(),
         ),
         (
-            "idx_mentat_vaet".to_string(),
+            "idx_datoms_vaet".to_string(),
             "Value-first".to_string(),
-            "Reverse lookups (e.g., find all entities referring to a specific entity)".to_string(),
+            "Reverse ref lookups (e.g., find all entities referring to a specific entity)".to_string(),
         ),
     ];
 
@@ -184,9 +184,24 @@ pub static DEFAULT_WORK_MEM: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(Some(c"64MB"));
 
 /// Query timeout in milliseconds. Prevents runaway queries from blocking backends.
-/// 0 means no timeout (default). Set to positive value (e.g., 30000 for 30 seconds)
-/// to enforce per-query timeout via statement_timeout.
-pub static QUERY_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(0);
+/// Default 30000 (30 seconds). Set to 0 to disable timeout (not recommended in production).
+pub static QUERY_TIMEOUT_MS: GucSetting<i32> = GucSetting::<i32>::new(30_000);
+
+/// Maximum number of result rows returned by a single query.
+/// Default 100000. Set to 0 for unlimited (not recommended in production).
+/// Prevents cartesian explosion from consuming all memory.
+pub static MAX_RESULT_ROWS: GucSetting<i32> = GucSetting::<i32>::new(100_000);
+
+/// Maximum recursion depth for recursive rule evaluation (WITH RECURSIVE).
+/// Limits CTE depth to prevent infinite loops from self-referential rules.
+/// Default 100. Applied via SET LOCAL max_recursive_iterations.
+pub static MAX_RECURSION_DEPTH: GucSetting<i32> = GucSetting::<i32>::new(100);
+
+/// Temp file limit for intermediate results during query execution.
+/// Applied via SET LOCAL temp_file_limit. Default "1GB".
+/// Prevents disk exhaustion from large sorts or hash joins.
+pub static TEMP_FILE_LIMIT: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(Some(c"1GB"));
 
 /// Read the current value of `mentat.enable_optimizer_hints`.
 pub fn optimizer_hints_enabled() -> bool {
@@ -204,6 +219,24 @@ pub fn default_work_mem() -> String {
 /// Read the current value of `mentat.query_timeout_ms`.
 pub fn query_timeout_ms() -> i32 {
     QUERY_TIMEOUT_MS.get()
+}
+
+/// Read the current value of `mentat.max_result_rows`.
+pub fn max_result_rows() -> i32 {
+    MAX_RESULT_ROWS.get()
+}
+
+/// Read the current value of `mentat.max_recursion_depth`.
+pub fn max_recursion_depth() -> i32 {
+    MAX_RECURSION_DEPTH.get()
+}
+
+/// Read the current value of `mentat.temp_file_limit`.
+pub fn temp_file_limit() -> String {
+    TEMP_FILE_LIMIT
+        .get()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "1GB".to_string())
 }
 
 /// Initialize planner hooks and register GUC settings.
@@ -235,7 +268,7 @@ pub unsafe fn init_planner_hooks() {
     GucRegistry::define_int_guc(
         c"mentat.query_timeout_ms",
         c"Query timeout in milliseconds.",
-        c"Maximum execution time for Mentat queries. Set to 0 (default) for no timeout. Set to positive value (e.g., 30000 for 30 seconds) to prevent runaway queries. Enforced via statement_timeout.",
+        c"Maximum execution time for Mentat queries. Default 30000 (30s). Set to 0 to disable. Enforced via SET LOCAL statement_timeout.",
         &QUERY_TIMEOUT_MS,
         0,
         i32::MAX,
@@ -243,7 +276,38 @@ pub unsafe fn init_planner_hooks() {
         GucFlags::default(),
     );
 
-    tracing::info!("Mentat planner optimization hooks initialized with GUC parameters");
+    GucRegistry::define_int_guc(
+        c"mentat.max_result_rows",
+        c"Maximum result rows per query.",
+        c"Limits the number of rows a single Mentat query can return. Default 100000. Set to 0 for unlimited. Prevents cartesian explosions from consuming all memory.",
+        &MAX_RESULT_ROWS,
+        0,
+        i32::MAX,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        c"mentat.max_recursion_depth",
+        c"Maximum recursion depth for rules.",
+        c"Limits WITH RECURSIVE CTE depth to prevent infinite loops from self-referential rules. Default 100.",
+        &MAX_RECURSION_DEPTH,
+        1,
+        10_000,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"mentat.temp_file_limit",
+        c"Temp file limit for query execution.",
+        c"Maximum disk space for temporary files during query execution. Default '1GB'. Applied via SET LOCAL temp_file_limit. Prevents disk exhaustion from large sorts or hash joins.",
+        &TEMP_FILE_LIMIT,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    tracing::info!("Mentat planner hooks initialized with resource limit GUC parameters");
 }
 
 #[cfg(test)]
@@ -254,28 +318,28 @@ mod tests {
     fn test_suggest_index_entity() {
         let result = suggest_index("e");
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("eavt"));
+        assert_eq!(result.unwrap(), "idx_datoms_eavt");
     }
 
     #[test]
     fn test_suggest_index_attribute() {
         let result = suggest_index("a");
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("aevt"));
+        assert_eq!(result.unwrap(), "idx_datoms_aevt");
     }
 
     #[test]
     fn test_suggest_index_value() {
         let result = suggest_index("v");
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("vaet"));
+        assert_eq!(result.unwrap(), "idx_datoms_vaet");
     }
 
     #[test]
     fn test_suggest_index_attribute_value() {
         let result = suggest_index("av");
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("avet"));
+        assert_eq!(result.unwrap(), "idx_datoms_avet_*");
     }
 
     #[test]

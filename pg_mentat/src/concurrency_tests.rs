@@ -63,7 +63,18 @@ mod concurrency_tests {
                    + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
                    + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
                 )
-            );
+            ) PARTITION BY LIST (value_type_tag);
+
+            CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
 
             CREATE TABLE IF NOT EXISTS mentat.schema (
                 entid BIGINT PRIMARY KEY,
@@ -95,9 +106,9 @@ mod concurrency_tests {
                 tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
-            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
 
             CREATE TABLE IF NOT EXISTS mentat.fulltext (
                 text_value TEXT NOT NULL,

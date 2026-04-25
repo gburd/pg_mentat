@@ -25,6 +25,7 @@ extension_sql!(
     EXCEPTION WHEN duplicate_object THEN null;
     END $$;
 
+    -- Datoms table partitioned by value_type_tag for partition pruning
     CREATE TABLE IF NOT EXISTS mentat.datoms (
         e BIGINT NOT NULL,
         a BIGINT NOT NULL,
@@ -53,7 +54,19 @@ extension_sql!(
            + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
            + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
         )
-    );
+    ) PARTITION BY LIST (value_type_tag);
+
+    -- Create partitions for each value type
+    CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
+    CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
 
     CREATE TABLE IF NOT EXISTS mentat.schema (
         entid BIGINT PRIMARY KEY,
@@ -85,30 +98,21 @@ extension_sql!(
         tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    -- EAVT and AEVT covering indexes (type-agnostic)
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx);
-    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx);
-    CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+    -- Core datom indexes (reduced from 22 to 8 for write throughput)
+    -- EAVT: Entity-centric lookups (partial on added=TRUE)
+    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
+    -- AEVT: Attribute-centric scans (partial on added=TRUE)
+    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
+    -- TX: Transaction history lookups
+    CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
+    -- VAET: Reverse ref lookups (refs only)
+    CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE added = TRUE AND value_type_tag = 0;
 
-    -- VAET index for ref lookups (reverse traversals)
-    CREATE INDEX IF NOT EXISTS idx_datoms_vaet_ref ON mentat.datoms (v_ref, a, e, tx) WHERE value_type_tag = 0;
-
-    -- Type-specific AVET indexes for range queries and equality lookups
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE value_type_tag = 0;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE value_type_tag = 2;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_double ON mentat.datoms (a, v_double, e, tx) WHERE value_type_tag = 3;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE value_type_tag = 7;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE value_type_tag = 8;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_instant ON mentat.datoms (a, v_instant, e, tx) WHERE value_type_tag = 4;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_uuid ON mentat.datoms (a, v_uuid, e, tx) WHERE value_type_tag = 10;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_bool ON mentat.datoms (a, v_bool, e, tx) WHERE value_type_tag = 1;
-
-    -- Type-specific EAVT covering indexes (enable index-only scans, eliminate heap fetches)
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt_long ON mentat.datoms (e, a, v_long, tx) WHERE value_type_tag = 2;
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt_text ON mentat.datoms (e, a, v_text, tx) WHERE value_type_tag = 7;
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt_ref ON mentat.datoms (e, a, v_ref, tx) WHERE value_type_tag = 0;
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt_instant ON mentat.datoms (e, a, v_instant, tx) WHERE value_type_tag = 4;
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt_uuid ON mentat.datoms (e, a, v_uuid, tx) WHERE value_type_tag = 10;
+    -- Type-specific AVET indexes (only high-frequency types)
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE added = TRUE AND value_type_tag = 0;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE added = TRUE AND value_type_tag = 2;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE added = TRUE AND value_type_tag = 7;
+    CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE added = TRUE AND value_type_tag = 8;
 
     -- Configure autovacuum for high-churn temporal workloads
     -- Vacuum at 5% dead tuples (vs default 20%) to prevent index bloat from retractions
@@ -180,6 +184,22 @@ mod cache_tests;
 mod concurrency_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod typed_value_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transact_unit_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_edge_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod pull_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod temporal_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod security_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod error_regression_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_operation_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod entity_tests;
 pub mod error;
 mod functions;
 mod operators;
@@ -307,6 +327,7 @@ mod tests {
             EXCEPTION WHEN duplicate_object THEN null;
             END $$;
 
+            -- Datoms table partitioned by value_type_tag
             CREATE TABLE IF NOT EXISTS mentat.datoms (
                 e BIGINT NOT NULL,
                 a BIGINT NOT NULL,
@@ -333,7 +354,18 @@ mod tests {
                    + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
                    + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
                 )
-            );
+            ) PARTITION BY LIST (value_type_tag);
+
+            CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
+            CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
 
             CREATE TABLE IF NOT EXISTS mentat.schema (
                 entid BIGINT PRIMARY KEY,
@@ -365,22 +397,17 @@ mod tests {
                 tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
-            -- Core indexes
-            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx);
-            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx);
+            -- Core datom indexes (reduced from 22 to 8 for write throughput)
+            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
+            CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE added = TRUE AND value_type_tag = 0;
 
-            -- VAET index for reverse ref lookups
-            CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE value_type_tag = 0;
-
-            -- Type-specific AVET indexes for correct range queries
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE value_type_tag = 0;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE value_type_tag = 2;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_double ON mentat.datoms (a, v_double, e, tx) WHERE value_type_tag = 3;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE value_type_tag = 7;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE value_type_tag = 8;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_instant ON mentat.datoms (a, v_instant, e, tx) WHERE value_type_tag = 4;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_uuid ON mentat.datoms (a, v_uuid, e, tx) WHERE value_type_tag = 10;
+            -- Type-specific AVET indexes (only high-frequency types)
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE added = TRUE AND value_type_tag = 0;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE added = TRUE AND value_type_tag = 2;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE added = TRUE AND value_type_tag = 7;
+            CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE added = TRUE AND value_type_tag = 8;
 
             -- Full-text search support table
             CREATE TABLE IF NOT EXISTS mentat.fulltext (

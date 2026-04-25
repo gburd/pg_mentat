@@ -25,6 +25,7 @@ use std::ops::Sub;
 use std::rc::Rc;
 
 mod clauses;
+pub mod stratification;
 mod types;
 mod validate;
 
@@ -402,6 +403,8 @@ pub fn algebrize_with_inputs(
 
 pub use crate::clauses::ConjoiningClauses;
 
+pub use crate::stratification::{validate_stratification, validate_rules_stratification, Stratification};
+
 pub use crate::types::{
     Column, ColumnAlternation, ColumnConstraint, ColumnConstraintOrAlternation, ColumnIntersection,
     ColumnName, ComputedTable, DatomsColumn, DatomsTable, FulltextColumn, OrderBy, QualifiedAlias,
@@ -454,6 +457,14 @@ impl FindQuery {
             if !in_vars.contains(v) {
                 bail!(AlgebrizerError::UnknownLimitVar(v.name()));
             }
+        }
+
+        // Validate stratification: reject queries with recursion through negation.
+        if !parsed.rules.is_empty() {
+            crate::stratification::validate_stratification(
+                &parsed.where_clauses,
+                &parsed.rules,
+            )?;
         }
 
         Ok(FindQuery {

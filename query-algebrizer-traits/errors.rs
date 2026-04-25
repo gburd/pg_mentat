@@ -111,6 +111,9 @@ pub enum AlgebrizerError {
     #[error("not yet implemented: {0}")]
     NotYetImplemented(String),
 
+    #[error("unsafe query: recursion through negation is not stratifiable. {0}")]
+    RecursionThroughNegation(String),
+
     #[error(transparent)]
     EdnParseError(#[from] ParseError),
 }

@@ -179,9 +179,21 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 /// that schema installation and datom insertion are atomic: if Pass 2 (datom
 /// insertion) fails after schema was written in Pass 1, the savepoint rollback
 /// undoes the schema changes too.
+///
+/// Transaction isolation: Uses SERIALIZABLE isolation to prevent lost updates,
+/// non-repeatable reads, and phantom reads under concurrent writes. When two
+/// transactions conflict, PostgreSQL raises SQLSTATE 40001
+/// (serialization_failure). The mentatd server-side retry logic handles
+/// retrying these failures with exponential backoff.
 fn execute_transaction_body(
     edn_tx: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Set SERIALIZABLE isolation to prevent lost updates and ensure
+    // linearizable transaction ordering under concurrent writes.
+    // If a serialization conflict occurs, PostgreSQL raises error 40001
+    // which the caller (mentatd) retries with exponential backoff.
+    Spi::run("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")?;
+
     // Parse EDN transaction
     let value_and_span = parse::value(edn_tx)?;
     let value = value_and_span.without_spans();
@@ -674,6 +686,13 @@ fn insert_datoms(
                     }
                 }
             }
+        } else {
+            // For explicit retractions (added=false), mark the existing assertion
+            // row as retracted. This updates the specific (e, a, v) datom with
+            // added=true to added=false, so queries filtering by added=true will
+            // no longer see this value. Without this, the original added=true row
+            // would remain visible and the retraction would have no effect.
+            mark_existing_datom_retracted(datom.e, datom.a, &datom.v)?;
         }
 
         insert_typed_datom(datom.e, datom.a, &datom.v, tx_id, datom.added)?;
@@ -1187,10 +1206,145 @@ fn retract_existing_cardinality_one(
             return Ok(());
         }
 
-        // Insert a retraction datom for the old value
+        // Mark the existing assertion row as retracted so queries filtering
+        // by added=true will no longer return the old value.
+        mark_existing_datom_retracted(entity_id, attr_id, &old_v)?;
+
+        // Insert a retraction datom for the old value (for history/audit)
         insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false)?;
     }
 
+    Ok(())
+}
+
+/// Mark an existing assertion datom as retracted by updating its `added` column
+/// from `true` to `false`. This targets the specific (e, a, v) tuple so that
+/// only the exact value is retracted -- other values for the same (e, a) pair
+/// (as found with cardinality-many attributes) are left intact.
+///
+/// This is the core fix for the cardinality-many retraction bug: without this,
+/// inserting a retraction row (added=false) would have no effect because the
+/// original assertion row (added=true) would still be returned by queries.
+fn mark_existing_datom_retracted(
+    entity_id: i64,
+    attr_id: i64,
+    v: &TypedValue,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let v_col = typed_value_column(v);
+    let type_tag = v.type_tag();
+
+    // For most types, we can compare directly using the typed column.
+    // Special handling is needed for instant (TIMESTAMPTZ) and UUID types
+    // which require SQL casts.
+    match v {
+        TypedValue::Instant(micros) => {
+            let query = format!(
+                "UPDATE mentat.datoms SET added = false \
+                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
+                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true"
+            );
+            Spi::run_with_args(
+                &query,
+                &[
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*micros),
+                ],
+            )?;
+        }
+        TypedValue::Uuid(u) => {
+            let uuid_str = u.to_string();
+            let query = format!(
+                "UPDATE mentat.datoms SET added = false \
+                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
+                 AND v_uuid = $4::UUID AND added = true"
+            );
+            Spi::run_with_args(
+                &query,
+                &[
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(uuid_str.as_str()),
+                ],
+            )?;
+        }
+        _ => {
+            let query = format!(
+                "UPDATE mentat.datoms SET added = false \
+                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true",
+                v_col,
+            );
+            match v {
+                TypedValue::Ref(id) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(*id),
+                    ],
+                )?,
+                TypedValue::Boolean(b) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(*b),
+                    ],
+                )?,
+                TypedValue::Long(n) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(*n),
+                    ],
+                )?,
+                TypedValue::Double(f) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(*f),
+                    ],
+                )?,
+                TypedValue::Text(s) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(s.as_str()),
+                    ],
+                )?,
+                TypedValue::Keyword(s) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(s.as_str()),
+                    ],
+                )?,
+                TypedValue::Bytes(b) => Spi::run_with_args(
+                    &query,
+                    &[
+                        DatumWithOid::from(entity_id),
+                        DatumWithOid::from(attr_id),
+                        DatumWithOid::from(type_tag),
+                        DatumWithOid::from(b.clone()),
+                    ],
+                )?,
+                // Instant and Uuid handled above
+                _ => unreachable!(),
+            }
+        }
+    }
     Ok(())
 }
 

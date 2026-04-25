@@ -1,7 +1,7 @@
 # pg_mentat extension
-comment = 'Mentat Datalog database for PostgreSQL'
-default_version = '0.1.0'
+comment = 'Datomic-compatible Datalog query engine for PostgreSQL'
+default_version = '1.0.0'
 module_pathname = '$libdir/pg_mentat'
 relocatable = false
-requires = ''
+schema = mentat
 superuser = false

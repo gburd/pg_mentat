@@ -4,7 +4,7 @@ A Datomic-compatible Datalog query engine as a PostgreSQL extension.
 
 pg_mentat brings the power of [Datomic](https://docs.datomic.com/)'s immutable, time-aware, Datalog-based data model to PostgreSQL. Store data as Entity-Attribute-Value-Transaction (EAVT) tuples and query it with Datalog -- all through standard SQL function calls.
 
-Based on Mozilla's [Mentat](https://github.com/mozilla/mentat) project, pg_mentat reimplements the core as a [pgrx](https://github.com/pgcentralfoundation/pgrx) PostgreSQL extension with a companion HTTP daemon (`mentatd`) for remote access.
+Based on Mozilla's [Mentat](https://github.com/mozilla/mentat) project, pg_mentat reimplements the core as a [pgrx](https://github.com/pgcentralfoundation/pgrx) PostgreSQL extension. Use it directly from any PostgreSQL client -- no additional services required. An optional HTTP daemon (`mentatd`) is available for Datomic client protocol compatibility.
 
 ## Features
 
@@ -159,15 +159,29 @@ See [EXAMPLES.md](EXAMPLES.md) for comprehensive usage examples including e-comm
 
 ## Architecture
 
-pg_mentat consists of two components:
+pg_mentat supports two access paths. Direct PostgreSQL access is the recommended default.
 
 ```
-Datomic Client --> mentatd (HTTP/EDN) --> PostgreSQL (pg_mentat extension) --> Datoms
+Recommended:   App (any language) --> PostgreSQL (pg_mentat extension) --> Datoms
+
+Optional:      Datomic Client --> mentatd (HTTP/EDN) --> PostgreSQL (pg_mentat extension) --> Datoms
 ```
 
-**pg_mentat** (PostgreSQL extension) -- Implements the core Datalog engine as SQL functions (`mentat_transact`, `mentat_query`, `mentat_pull`, `mentat_entity`, `mentat_schema`). Data is stored in PostgreSQL tables (`mentat.datoms`, `mentat.schema`, `mentat.transactions`) with four covering indexes (EAVT, AEVT, AVET, VAET), full-text search via tsvector/GIN, and serializable isolation for consistency. Built with [pgrx](https://github.com/pgcentralfoundation/pgrx).
+**pg_mentat** (PostgreSQL extension) -- The core component. Implements the Datalog engine as SQL functions (`mentat_transact`, `mentat_query`, `mentat_pull`, `mentat_entity`, `mentat_schema`). Data is stored in PostgreSQL tables (`mentat.datoms`, `mentat.schema`, `mentat.transactions`) with four covering indexes (EAVT, AEVT, AVET, VAET), full-text search via tsvector/GIN, and serializable isolation for consistency. Built with [pgrx](https://github.com/pgcentralfoundation/pgrx). All functionality is available through standard SQL function calls from any PostgreSQL client.
 
-**mentatd** (HTTP daemon) -- Provides a Datomic-compatible HTTP API for remote clients. Connects to PostgreSQL via `tokio-postgres`, supports EDN and Transit wire formats, connection pooling via `deadpool`, LRU query caching, and Prometheus metrics. Built with [Axum](https://github.com/tokio-rs/axum).
+**mentatd** (optional HTTP daemon) -- A Datomic-compatible HTTP gateway. Only needed if you have existing Datomic clients or require the Datomic wire protocol (EDN/Transit). Connects to PostgreSQL via `tokio-postgres`, supports EDN and Transit wire formats, connection pooling via `deadpool`, LRU query caching, and Prometheus metrics. Built with [Axum](https://github.com/tokio-rs/axum).
+
+### When to use each approach
+
+| | Direct PostgreSQL | Via mentatd |
+|---|---|---|
+| **Latency** | Lowest (no HTTP overhead) | +0.5-2ms per request |
+| **Dependencies** | PostgreSQL + pg_mentat extension | + mentatd daemon |
+| **Deployment** | Single service | Two services |
+| **Best for** | All new projects | Migrating from Datomic |
+| **Datomic compatibility** | No | Yes (EDN + Transit) |
+| **Connection pooling** | Driver-native (pgbouncer, etc.) | mentatd deadpool + driver |
+| **Caching** | PostgreSQL built-in | mentatd LRU + PostgreSQL |
 
 ### Data model
 
@@ -183,13 +197,19 @@ Retractions never delete data -- they record that a fact is no longer current. T
 
 ## SQL Function Reference
 
+These functions are the primary API. Call them from any PostgreSQL client.
+
 | Function | Description |
 |----------|-------------|
 | `mentat_transact(edn TEXT)` | Process EDN transactions (assert, retract, retractEntity) |
 | `mentat_query(query TEXT, inputs JSONB)` | Execute Datalog queries |
 | `mentat_pull(pattern TEXT, entity_id BIGINT)` | Pull entity attributes by pattern |
+| `mentat_pull_many(pattern TEXT, entity_ids BIGINT[])` | Pull attributes for multiple entities |
 | `mentat_entity(entity_id BIGINT)` | Get all attributes of an entity as JSON |
 | `mentat_schema()` | Return current schema as JSON |
+| `mentat_explain(query TEXT, inputs JSONB)` | Show query execution plan |
+| `mentat_query_stats()` | Query performance statistics |
+| `mentat_storage_stats()` | Storage usage statistics |
 
 ## PostgreSQL Compatibility
 
@@ -202,9 +222,48 @@ cargo pgrx install --release --features pg17
 
 ## Client Libraries
 
-### Clojure
+pg_mentat works with any PostgreSQL client in any language. The `clients/` directory contains thin wrapper examples for common languages. See [clients/README.md](clients/README.md) for details.
 
-A Datomic-compatible Clojure client library is available in `pg-mentat-client/`. It provides idiomatic Clojure access to pg_mentat:
+### Python (direct PostgreSQL)
+
+```python
+from pg_mentat_client import MentatClient
+
+with MentatClient("dbname=postgres") as m:
+    m.transact('[{:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]')
+    m.transact('[{:person/name "Alice"}]')
+    results = m.query('[:find ?name :where [?e :person/name ?name]]')
+```
+
+### Node.js (direct PostgreSQL)
+
+```javascript
+const { MentatClient } = require('./pg_mentat_client');
+
+const client = new MentatClient({ connectionString: 'postgresql://localhost/postgres' });
+await client.transact('[{:person/name "Alice"}]');
+const results = await client.query('[:find ?name :where [?e :person/name ?name]]');
+await client.close();
+```
+
+### Go (direct PostgreSQL)
+
+```go
+client, _ := pgmentat.New(ctx, "postgresql://localhost/postgres")
+defer client.Close()
+results, _ := client.Query(ctx, `[:find ?name :where [?e :person/name ?name]]`, nil)
+```
+
+### Rust (direct PostgreSQL)
+
+```rust
+let client = MentatClient::connect("host=localhost dbname=postgres").await?;
+let results = client.query("[:find ?name :where [?e :person/name ?name]]", None).await?;
+```
+
+### Clojure (via mentatd -- Datomic compatibility)
+
+For existing Datomic clients, a Datomic-compatible Clojure client library is available in `pg-mentat-client/`. This requires the mentatd daemon.
 
 ```clojure
 (require '[pg-mentat.client :as mentat])
@@ -224,6 +283,19 @@ A Datomic-compatible Clojure client library is available in `pg-mentat-client/`.
 
 See [pg-mentat-client/README.md](pg-mentat-client/README.md) for full documentation.
 
+### Raw SQL (no client library needed)
+
+You do not need any client library. Any PostgreSQL connection works:
+
+```sql
+-- psql, pgAdmin, DBeaver, or any PostgreSQL client
+SELECT mentat_transact('[{:person/name "Alice"}]');
+SELECT mentat_query('[:find ?name :where [?e :person/name ?name]]', '{}');
+SELECT mentat_pull('[*]', 10001);
+SELECT mentat_entity(10001);
+SELECT mentat_schema();
+```
+
 ## Development
 
 ### Running tests
@@ -236,9 +308,10 @@ cargo pgrx test pg16
 ### Project structure
 
 ```
-pg_mentat/              PostgreSQL extension (pgrx)
-mentatd/                HTTP daemon (Axum)
-pg-mentat-client/       Clojure client library
+pg_mentat/              PostgreSQL extension (pgrx) -- the core component
+clients/                Direct PostgreSQL client examples (Python, Node.js, Go, Rust)
+mentatd/                HTTP daemon (Axum) -- optional, for Datomic compatibility
+pg-mentat-client/       Clojure client library (uses mentatd)
 edn/                    EDN parser (rust-peg)
 core/ + core-traits/    Fundamental types (ValueType, TypedValue)
 db/ + db-traits/        Core storage logic
@@ -248,6 +321,7 @@ query-pull/             Pull API implementation
 query-sql/              SQL generation
 sql/ + sql-traits/      SQL text generation and abstraction
 transaction/            Transaction processing
+benchmarks/             Performance benchmarks (including direct vs mentatd)
 tools/cli/              Command-line interface
 tools/pg_mentat_cli/    PostgreSQL-specific CLI
 ```

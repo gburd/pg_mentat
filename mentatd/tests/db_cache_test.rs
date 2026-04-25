@@ -96,3 +96,108 @@ async fn test_snapshot_isolation() {
     assert_eq!(cache.get_basis_t(&db_snapshot_t1), Some(1000));
     assert_eq!(cache.get_basis_t(&db_snapshot_t2), Some(2000));
 }
+
+// ---- Database value / Datomic d/db compatibility tests ----
+
+#[tokio::test]
+async fn test_datomic_db_pattern_immutable_snapshot() {
+    // Simulate the Datomic pattern:
+    //   (let [db (d/db conn)]    ;; snapshot with basis-t
+    //     (d/q query db)         ;; query against that snapshot
+    //     ;; even if new transactions happen, db still returns old data
+    //     (d/q query db))        ;; same result
+    let cache = DbValueCache::new(Duration::from_secs(300));
+
+    // Step 1: Client calls d/db -> server creates snapshot at current basis-t
+    let basis_t_at_snapshot = 1000;
+    let db_id = cache.create_snapshot(basis_t_at_snapshot);
+
+    // Step 2: Query uses db_id to get basis-t for as-of filtering
+    assert_eq!(cache.get_basis_t(&db_id), Some(1000));
+
+    // Step 3: New transaction happens (basis-t advances to 1001)
+    // This creates a NEW snapshot, but doesn't affect the old one
+    let _new_db_id = cache.create_snapshot(1001);
+
+    // Step 4: Original db_id still returns original basis-t
+    assert_eq!(cache.get_basis_t(&db_id), Some(1000));
+}
+
+#[tokio::test]
+async fn test_datomic_db_value_ttl_5_minutes() {
+    // Verify that with a 5-minute TTL, snapshots expire correctly
+    let cache = DbValueCache::new(Duration::from_millis(100)); // 100ms as proxy for 5min
+
+    let db_id = cache.create_snapshot(500);
+    assert_eq!(cache.get_basis_t(&db_id), Some(500));
+
+    // Wait for expiry
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Expired snapshot should return None (not an error)
+    assert_eq!(cache.get_basis_t(&db_id), None);
+}
+
+#[tokio::test]
+async fn test_get_snapshot_full_details() {
+    let cache = DbValueCache::new(Duration::from_secs(300));
+
+    let db_id = cache.create_snapshot(42);
+    let snapshot = cache.get_snapshot(&db_id);
+    assert!(snapshot.is_some());
+
+    let snapshot = snapshot.unwrap();
+    assert_eq!(snapshot.db_id, db_id);
+    assert_eq!(snapshot.basis_t, 42);
+    // created_at should be very recent
+    assert!(snapshot.created_at.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test]
+async fn test_concurrent_db_snapshot_creation() {
+    use std::sync::Arc;
+
+    let cache = Arc::new(DbValueCache::new(Duration::from_secs(300)));
+    let mut handles = Vec::new();
+
+    // Simulate multiple clients calling d/db concurrently
+    for i in 0..20 {
+        let c = Arc::clone(&cache);
+        handles.push(tokio::spawn(async move {
+            let db_id = c.create_snapshot(i * 100);
+            assert_eq!(c.get_basis_t(&db_id), Some(i * 100));
+            db_id
+        }));
+    }
+
+    let mut db_ids = Vec::new();
+    for h in handles {
+        db_ids.push(h.await.unwrap());
+    }
+
+    // All snapshots should be unique
+    let unique: std::collections::HashSet<_> = db_ids.iter().collect();
+    assert_eq!(unique.len(), 20);
+
+    // All should still be accessible
+    assert_eq!(cache.len(), 20);
+}
+
+#[tokio::test]
+async fn test_snapshot_cleanup_preserves_active() {
+    let cache = DbValueCache::new(Duration::from_millis(100));
+
+    // Create an old snapshot
+    let old_id = cache.create_snapshot(100);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Create a fresh snapshot
+    let fresh_id = cache.create_snapshot(200);
+
+    // Cleanup should remove old but keep fresh
+    cache.cleanup_expired();
+
+    assert_eq!(cache.get_basis_t(&old_id), None);
+    assert_eq!(cache.get_basis_t(&fresh_id), Some(200));
+    assert_eq!(cache.len(), 1);
+}

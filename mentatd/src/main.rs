@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     // Spawn background task to clean up expired db snapshots
     let cleanup_state = state.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60)); // every 60s
         loop {
             interval.tick().await;
             cleanup_state.db_cache().cleanup_expired();

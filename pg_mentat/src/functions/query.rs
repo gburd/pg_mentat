@@ -187,20 +187,49 @@ impl QueryComplexity {
     }
 }
 
-/// Apply SET LOCAL optimizer hints before executing a Mentat query.
+/// Apply SET LOCAL optimizer hints and resource limits before executing a Mentat query.
 ///
 /// Uses `Spi::run` to issue SET LOCAL statements in the current
 /// transaction.  These settings revert automatically at transaction end.
+///
+/// Resource limits applied:
+/// - `statement_timeout`: prevents runaway queries (mentat.query_timeout_ms)
+/// - `temp_file_limit`: prevents disk exhaustion (mentat.temp_file_limit)
+/// - `max_recursive_iterations`: prevents infinite recursion (mentat.max_recursion_depth)
+/// - `enable_seqscan = off`: encourage index usage on datoms table
+/// - `work_mem`: increased for complex queries (mentat.default_work_mem)
 fn apply_optimizer_hints(
     client: &mut pgrx::spi::SpiClient<'_>,
     complexity: &QueryComplexity,
 ) {
-    // Set query timeout first (applies even if optimizer hints are disabled)
+    // --- Resource limits (always applied, regardless of optimizer hints setting) ---
+
+    // Statement timeout: prevents runaway queries
     let timeout_ms = crate::planner::query_timeout_ms();
     if timeout_ms > 0 {
         let timeout_sql = format!("SET LOCAL statement_timeout = '{}'", timeout_ms);
         let _ = client.update(&timeout_sql, None, &[]);
     }
+
+    // Temp file limit: prevents disk exhaustion from large sorts/hash joins
+    let temp_limit = crate::planner::temp_file_limit();
+    if temp_limit.chars().all(|c| c.is_ascii_alphanumeric()) {
+        let temp_sql = format!("SET LOCAL temp_file_limit = '{}'", temp_limit);
+        let _ = client.update(&temp_sql, None, &[]);
+    }
+
+    // Recursion depth limit: prevents infinite loops in recursive rules.
+    // PostgreSQL 14+ supports max_recursive_iterations; older versions
+    // ignore unknown GUCs set via SET LOCAL (no error, just a warning).
+    if complexity.has_cte {
+        let max_depth = crate::planner::max_recursion_depth();
+        if max_depth > 0 {
+            let depth_sql = format!("SET LOCAL max_recursive_iterations = {}", max_depth);
+            let _ = client.update(&depth_sql, None, &[]);
+        }
+    }
+
+    // --- Optimizer hints (only when enabled) ---
 
     if !crate::planner::optimizer_hints_enabled() {
         return;
@@ -504,6 +533,8 @@ pub fn mentat_query(
 
     // Apply pagination from inputs JSON. This appends LIMIT/OFFSET to the
     // generated SQL, overriding any Datalog :limit if both are present.
+    let has_explicit_limit = pagination.limit.is_some()
+        || sql_query.contains(" LIMIT ");
     if let Some(limit) = pagination.limit {
         // Remove any existing LIMIT clause (from Datalog :limit) to avoid
         // a SQL syntax error from duplicate LIMIT. The generated SQL always
@@ -517,15 +548,42 @@ pub fn mentat_query(
         sql_query.push_str(&format!(" OFFSET {}", offset));
     }
 
+    // Enforce max result rows as a safety net. If no explicit LIMIT is set
+    // and the GUC mentat.max_result_rows is positive, append a LIMIT clause
+    // to prevent cartesian explosions from returning unbounded results.
+    let max_rows = crate::planner::max_result_rows();
+    if !has_explicit_limit && max_rows > 0 {
+        // Request one extra row to detect truncation
+        sql_query.push_str(&format!(" LIMIT {}", i64::from(max_rows) + 1));
+    }
+
     let params = builder.params;
     let results = Spi::connect_mut(|client| {
-        // Apply optimizer hints (SET LOCAL) before executing the query.
-        // These are transaction-local and revert automatically.
+        // Apply optimizer hints and resource limits (SET LOCAL) before
+        // executing the query. These are transaction-local and revert
+        // automatically.
         apply_optimizer_hints(client, &complexity);
 
         let mut rows_json = Vec::new();
+        let row_limit = if !has_explicit_limit && max_rows > 0 {
+            max_rows as usize
+        } else {
+            usize::MAX
+        };
 
         for row in execute_cached_query(client, &sql_query, &params)? {
+            if rows_json.len() >= row_limit {
+                return Err(Box::new(crate::error::MentatError::ResultLimitExceeded {
+                    limit: max_rows,
+                    message: format!(
+                        "Query returned more than {} rows. \
+                         Use :limit in your query, add more specific :where clauses, \
+                         or increase mentat.max_result_rows",
+                        max_rows
+                    ),
+                }));
+            }
+
             let mut row_values = Vec::new();
 
             for (idx, _var) in find_vars.iter().enumerate() {
