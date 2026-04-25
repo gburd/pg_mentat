@@ -200,6 +200,38 @@ mod error_regression_tests;
 mod schema_operation_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod entity_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod batch_operation_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod property_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod value_type_exhaustive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod cardinality_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod upsert_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod retraction_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod tempid_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod lookup_ref_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod predicate_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod aggregate_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod find_spec_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod input_parameter_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod history_tests;
 pub mod error;
 mod functions;
 mod operators;

@@ -229,6 +229,8 @@ impl AppState {
             0
         };
         let cache_ttl = Duration::from_secs(config.cache.ttl_secs);
+        let cb_threshold = config.circuit_breaker.error_threshold;
+        let cb_window = config.circuit_breaker.window_secs;
         // TTL for database value snapshots: 5 minutes.
         // This matches Datomic's expectation that database values are short-lived
         // immutable references used within a request or batch of queries.
@@ -238,10 +240,7 @@ impl AppState {
             config: Arc::new(config),
             query_cache: Arc::new(QueryCache::new(cache_capacity, cache_ttl)),
             db_cache: Arc::new(DbValueCache::new(db_snapshot_ttl)),
-            circuit_breaker: Arc::new(CircuitBreaker::new(
-                config.circuit_breaker.error_threshold,
-                config.circuit_breaker.window_secs,
-            )),
+            circuit_breaker: Arc::new(CircuitBreaker::new(cb_threshold, cb_window)),
         }
     }
 
@@ -499,14 +498,15 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
     // Health checks bypass the circuit breaker so monitoring can still probe.
     if !matches!(op, Operation::Health) && state.circuit_breaker.should_reject().await {
         let count = state.circuit_breaker.error_count();
+        let window = state.circuit_breaker.window_secs();
         warn!(
             error_count = count,
-            window_secs = CIRCUIT_BREAKER_WINDOW_SECS,
+            window_secs = window,
             "Circuit breaker open: rejecting request"
         );
         return Err(ServerError::CircuitBreakerOpen {
             error_count: count,
-            window_secs: CIRCUIT_BREAKER_WINDOW_SECS,
+            window_secs: window,
         });
     }
 
