@@ -272,6 +272,24 @@ mod edge_case_query_tests;
 mod comprehensive_retract_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod comprehensive_upsert_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod generated_value_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_predicate_exhaustive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod ref_graph_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_lifecycle_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod find_spec_exhaustive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_attribute_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod entity_lifecycle_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_join_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod error_handling_tests;
 pub mod error;
 mod functions;
 mod operators;
