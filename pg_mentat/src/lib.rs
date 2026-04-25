@@ -116,10 +116,17 @@ extension_sql!(
 
     -- Configure autovacuum for high-churn temporal workloads
     -- Vacuum at 5% dead tuples (vs default 20%) to prevent index bloat from retractions
-    ALTER TABLE mentat.datoms SET (
-        autovacuum_vacuum_scale_factor = 0.05,
-        autovacuum_analyze_scale_factor = 0.02
-    );
+    -- Storage parameters must be set on leaf partitions, not parent partitioned table
+    ALTER TABLE mentat.datoms_ref SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_bool SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_long SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_double SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_instant SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_text SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_keyword SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_uuid SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_bytes SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    ALTER TABLE mentat.datoms_default SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
 
     -- Full-text search support table
     CREATE TABLE IF NOT EXISTS mentat.fulltext (
@@ -556,6 +563,7 @@ mod tests {
     }
 
     /// Bootstrap the core Mentat schema.
+    #[pg_extern]
     fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error>> {
         Spi::run(
             r#"

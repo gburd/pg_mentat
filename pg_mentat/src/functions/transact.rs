@@ -188,11 +188,12 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 fn execute_transaction_body(
     edn_tx: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Set SERIALIZABLE isolation to prevent lost updates and ensure
-    // linearizable transaction ordering under concurrent writes.
-    // If a serialization conflict occurs, PostgreSQL raises error 40001
-    // which the caller (mentatd) retries with exponential backoff.
-    Spi::run("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")?;
+    // NOTE: Transaction isolation level cannot be set here because SPI
+    // has already started a transaction. In production deployments, set
+    // default_transaction_isolation = 'serializable' in postgresql.conf
+    // or have the client (mentatd) wrap calls in explicit transactions.
+    // For now, rely on PostgreSQL's default READ COMMITTED isolation.
+    // Spi::run("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")?;
 
     // Parse EDN transaction
     let value_and_span = parse::value(edn_tx)?;
