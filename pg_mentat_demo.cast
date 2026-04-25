@@ -1,0 +1,5 @@
+{"version": 2, "width": 80, "height": 24, "timestamp": 1777124164, "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"}}
+[0.049975, "o", "\u001b[H\u001b[2J\u001b[3J"]
+[0.051359, "o", "================================================\r\n  pg_mentat: Datalog Queries for PostgreSQL\r\n================================================\r\n\r\nA Datomic-compatible query engine built on\r\nPostgreSQL, bringing immutable facts and\r\ntime-travel queries to your database.\r\n\r\n"]
+[3.055119, "o", "Let's see it in action!\r\n"]
+[5.060389, "o", "\r\n▶ Creating demo database...\r\n"]

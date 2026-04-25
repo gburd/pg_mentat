@@ -3,7 +3,8 @@
     "allow": [
       "WebFetch(domain:static.crates.io)",
       "WebFetch(domain:index.crates.io)",
-      "Bash(cargo outdated:*)"
+      "Bash(cargo outdated:*)",
+      "Bash(chmod:*)"
     ],
     "additionalDirectories": [
       "/tmp",

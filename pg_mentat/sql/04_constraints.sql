@@ -5,37 +5,17 @@
 -- Unique value constraint enforcement
 -- ==========================================================================
 -- For attributes with :db/unique :db.unique/value or :db.unique/identity
--- Type-specific unique indexes enforce uniqueness per attribute.
--- We need one per type because values live in different columns.
+-- Uniqueness is enforced in Rust code (transact.rs lines 1121-1164) using:
+--   1. In-transaction duplicate checking
+--   2. Advisory locks (pg_advisory_xact_lock) to prevent race conditions
+--   3. Database lookups for existing values
 --
--- With partitioned datoms table, unique indexes are created on the specific
--- partition for each type (PostgreSQL requires unique indexes on partitions,
--- not the parent table, unless they include the partition key).
+-- Database-level unique indexes cannot be used here because PostgreSQL does not
+-- support subqueries in index predicates (we would need to filter by attributes
+-- marked with :db/unique, which requires a subquery against mentat.schema).
 --
--- NOTE: Uniqueness is also enforced in Rust (transact.rs validate_datom_constraints)
--- using advisory locks. These indexes serve as a database-level safety net.
--- Only the most common unique-value types are indexed; rare types (bool, double,
--- uuid) rely on the Rust-level enforcement.
-
--- Unique ref values (on ref partition)
-CREATE UNIQUE INDEX idx_datoms_unique_ref ON mentat.datoms_ref (a, v_ref)
-    WHERE added = TRUE
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
-
--- Unique long values (on long partition)
-CREATE UNIQUE INDEX idx_datoms_unique_long ON mentat.datoms_long (a, v_long)
-    WHERE added = TRUE
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
-
--- Unique text values (on text partition)
-CREATE UNIQUE INDEX idx_datoms_unique_text ON mentat.datoms_text (a, v_text)
-    WHERE added = TRUE
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
-
--- Unique keyword values (on keyword partition)
-CREATE UNIQUE INDEX idx_datoms_unique_keyword ON mentat.datoms_keyword (a, v_keyword)
-    WHERE added = TRUE
-    AND a IN (SELECT entid FROM mentat.schema WHERE unique_constraint IS NOT NULL);
+-- The Rust implementation provides complete enforcement, so no database-level
+-- indexes are needed.
 
 -- ==========================================================================
 -- Validation Triggers
