@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> anyhow::Result<()> {
     let config = load_config()?;
 
@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         version.lines().next().unwrap_or("unknown")
     );
 
-    let state = AppState::new(pool, config.clone());
+    let state = AppState::new(pool.clone(), config.clone());
 
     // Spawn background task to clean up expired db snapshots
     let cleanup_state = state.clone();

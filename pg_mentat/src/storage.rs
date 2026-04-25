@@ -229,7 +229,7 @@ fn commit_transaction(tx_id: i64) -> Result<(), Box<dyn std::error::Error>> {
 
         // Record transaction
         client.update(
-            "INSERT INTO mentat.transactions (tx_id, instant) \
+            "INSERT INTO mentat.transactions (tx, tx_instant) \
              VALUES ($1, CURRENT_TIMESTAMP)",
             None,
             &[DatumWithOid::from(tx_id)],

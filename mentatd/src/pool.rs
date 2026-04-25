@@ -68,8 +68,6 @@ pub fn create_pool(connection_string: &str, max_size: usize) -> Result<DbPool, P
         .max_size(max_size)
         // Wait up to 30 seconds for an available connection before timing out
         .wait_timeout(Some(Duration::from_secs(30)))
-        // Recycle connections after 30 minutes to prevent stale connections
-        .max_lifetime(Some(Duration::from_secs(1800)))
         // Use tokio runtime for async operations
         .runtime(Runtime::Tokio1)
         .build()

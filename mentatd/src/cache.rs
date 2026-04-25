@@ -2,11 +2,16 @@ use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 /// Cache key: `(query_string, args_json)`.
 type CacheKey = (String, String);
+
+/// Sentinel entity ID used in `entity_to_keys` to collect untracked cache keys
+/// (those inserted without explicit dependencies).  These must be invalidated on
+/// every transaction.  Using `i64::MIN` avoids collision with real entity IDs.
+const UNTRACKED_SENTINEL: i64 = i64::MIN;
 
 /// A cached query result, storing the serialized EDN response and when it was cached.
 #[derive(Debug, Clone)]
@@ -43,13 +48,21 @@ pub struct CacheStats {
 /// invalidate the entry.  Entries inserted without dependencies are invalidated
 /// on every transaction (conservative fallback).
 ///
+/// A reverse index (`entity_to_keys`) maps each entity ID to the set of cache
+/// keys that depend on it, enabling O(1) lookup during invalidation instead of
+/// scanning all dependency entries.
+///
 /// Individual entries also expire after `ttl` has elapsed.
 pub struct QueryCache {
-    cache: Mutex<LruCache<CacheKey, CacheEntry>>,
+    cache: RwLock<LruCache<CacheKey, CacheEntry>>,
     /// Maps cache keys to the set of entity IDs the cached result depends on.
     /// An entry present here with an empty set means "depends on everything"
     /// (conservative / untracked).
-    dependencies: Mutex<HashMap<CacheKey, HashSet<i64>>>,
+    dependencies: RwLock<HashMap<CacheKey, HashSet<i64>>>,
+    /// Reverse index: entity ID -> set of cache keys that depend on that entity.
+    /// Keys with empty dependency sets (untracked) are stored under the
+    /// sentinel key `UNTRACKED_SENTINEL`.
+    entity_to_keys: RwLock<HashMap<i64, HashSet<CacheKey>>>,
     ttl: Duration,
     enabled: bool,
     // Counters for stats (atomic so we don't need the cache lock).
@@ -69,8 +82,9 @@ impl QueryCache {
         // LruCache requires NonZeroUsize; use 1 as minimum (but `enabled` guards all access)
         let cap = NonZeroUsize::new(capacity.max(1)).unwrap_or(NonZeroUsize::MIN);
         Self {
-            cache: Mutex::new(LruCache::new(cap)),
-            dependencies: Mutex::new(HashMap::new()),
+            cache: RwLock::new(LruCache::new(cap)),
+            dependencies: RwLock::new(HashMap::new()),
+            entity_to_keys: RwLock::new(HashMap::new()),
             ttl,
             enabled,
             hits: AtomicU64::new(0),
@@ -88,10 +102,15 @@ impl QueryCache {
             return None;
         }
         let key = (query.to_owned(), args_json.to_owned());
-        let mut cache = match self.cache.lock() {
+
+        // Since LruCache's get() method requires &mut self, we need to use write lock
+        // However, we'll minimize the critical section
+        let mut cache = match self.cache.write() {
             Ok(c) => c,
             Err(_) => return None,
         };
+
+        // Use get() which updates LRU ordering
         let entry = match cache.get(&key) {
             Some(e) => e,
             None => {
@@ -99,14 +118,13 @@ impl QueryCache {
                 return None;
             }
         };
+
         if entry.inserted_at.elapsed() > self.ttl {
             // Entry expired; remove it and its dependency tracking.
-            let key_clone = key;
-            cache.pop(&key_clone);
-            drop(cache);
-            if let Ok(mut deps) = self.dependencies.lock() {
-                deps.remove(&key_clone);
-            }
+            cache.pop(&key);
+            drop(cache); // Release cache lock before acquiring dependency lock
+
+            self.remove_deps_for_key(&key);
             self.misses.fetch_add(1, Ordering::Relaxed);
             None
         } else {
@@ -120,23 +138,7 @@ impl QueryCache {
     /// Entries inserted this way are conservatively invalidated on every
     /// transaction (same as the old behaviour).
     pub fn insert(&self, query: &str, args_json: &str, result: String) {
-        if !self.enabled {
-            return;
-        }
-        let key = (query.to_owned(), args_json.to_owned());
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.put(
-                key.clone(),
-                CacheEntry {
-                    result,
-                    inserted_at: Instant::now(),
-                },
-            );
-        }
-        // Mark as untracked (empty dep set = depends on everything).
-        if let Ok(mut deps) = self.dependencies.lock() {
-            deps.insert(key, HashSet::new());
-        }
+        self.insert_with_deps(query, args_json, result, HashSet::new());
     }
 
     /// Store a query result in the cache **with** entity dependency tracking.
@@ -155,7 +157,35 @@ impl QueryCache {
             return;
         }
         let key = (query.to_owned(), args_json.to_owned());
-        if let Ok(mut cache) = self.cache.lock() {
+
+        // Remove any previous reverse-index entries for this key before
+        // inserting new ones (handles overwrites with different deps).
+        self.remove_reverse_index_for_key(&key);
+
+        if let Ok(mut cache) = self.cache.write() {
+            // Check if LRU eviction will occur and clean up the evicted key.
+            if cache.len() == cache.cap().get() && cache.peek(&key).is_none() {
+                // The next `put` will evict the least-recently-used entry.
+                if let Some((evicted_key, _)) = cache.peek_lru() {
+                    let evicted_key = evicted_key.clone();
+                    // Clean up deps for the evicted entry (without cache lock).
+                    // We must do this *before* the put() call so we drop the
+                    // evicted key's dependency tracking.  However, we hold the
+                    // cache write lock here, so we defer cleanup below.
+                    // Instead, record the evicted key and clean up after put().
+                    cache.put(
+                        key.clone(),
+                        CacheEntry {
+                            result,
+                            inserted_at: Instant::now(),
+                        },
+                    );
+                    drop(cache);
+                    self.remove_deps_for_key(&evicted_key);
+                    self.add_deps_for_key(key, depends_on);
+                    return;
+                }
+            }
             cache.put(
                 key.clone(),
                 CacheEntry {
@@ -164,9 +194,7 @@ impl QueryCache {
                 },
             );
         }
-        if let Ok(mut deps) = self.dependencies.lock() {
-            deps.insert(key, depends_on);
-        }
+        self.add_deps_for_key(key, depends_on);
     }
 
     /// Invalidate cached queries that depend on the given entity IDs.
@@ -174,39 +202,65 @@ impl QueryCache {
     /// Entries that were inserted without dependency tracking (empty dep set)
     /// are also invalidated, since we cannot prove they are unaffected.
     ///
+    /// Uses the reverse index for O(1) lookup per entity instead of scanning
+    /// the entire dependency map.
+    ///
     /// Returns the number of cache entries that were removed.
     pub fn invalidate_entities(&self, entity_ids: &[i64]) -> usize {
         if !self.enabled || entity_ids.is_empty() {
             return 0;
         }
 
-        let changed: HashSet<i64> = entity_ids.iter().copied().collect();
-
-        let keys_to_remove: Vec<CacheKey> = {
-            let deps = match self.dependencies.lock() {
-                Ok(d) => d,
+        // Collect all keys to remove using the reverse index.
+        let mut keys_to_remove: HashSet<CacheKey> = HashSet::new();
+        {
+            let rev = match self.entity_to_keys.read() {
+                Ok(r) => r,
                 Err(_) => return 0,
             };
-            deps.iter()
-                .filter(|(_, dep_entities)| {
-                    // Empty dep set means untracked -- always invalidate.
-                    dep_entities.is_empty() || dep_entities.iter().any(|e| changed.contains(e))
-                })
-                .map(|(key, _)| key.clone())
-                .collect()
-        };
+
+            // Always include untracked entries (they depend on everything).
+            if let Some(untracked) = rev.get(&UNTRACKED_SENTINEL) {
+                keys_to_remove.extend(untracked.iter().cloned());
+            }
+
+            // Include entries that depend on any of the changed entities.
+            for eid in entity_ids {
+                if let Some(keys) = rev.get(eid) {
+                    keys_to_remove.extend(keys.iter().cloned());
+                }
+            }
+        }
 
         let removed = keys_to_remove.len();
 
         if removed > 0 {
-            if let Ok(mut cache) = self.cache.lock() {
+            // Remove from LRU cache.
+            if let Ok(mut cache) = self.cache.write() {
                 for key in &keys_to_remove {
                     cache.pop(key);
                 }
             }
-            if let Ok(mut deps) = self.dependencies.lock() {
-                for key in &keys_to_remove {
-                    deps.remove(key);
+            // Remove from dependency map and reverse index.
+            if let Ok(mut deps) = self.dependencies.write() {
+                if let Ok(mut rev) = self.entity_to_keys.write() {
+                    for key in &keys_to_remove {
+                        if let Some(dep_entities) = deps.remove(key) {
+                            if dep_entities.is_empty() {
+                                if let Some(set) = rev.get_mut(&UNTRACKED_SENTINEL) {
+                                    set.remove(key);
+                                }
+                            } else {
+                                for eid in &dep_entities {
+                                    if let Some(set) = rev.get_mut(eid) {
+                                        set.remove(key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Clean up empty reverse-index buckets.
+                    rev.retain(|_, v| !v.is_empty());
                 }
             }
         }
@@ -219,18 +273,89 @@ impl QueryCache {
     /// changed entities is known; this full-clear is a fallback for cases
     /// where entity-level tracking is not available.
     pub fn invalidate(&self) {
-        if let Ok(mut cache) = self.cache.lock() {
+        if let Ok(mut cache) = self.cache.write() {
             cache.clear();
         }
-        if let Ok(mut deps) = self.dependencies.lock() {
+        if let Ok(mut deps) = self.dependencies.write() {
             deps.clear();
+        }
+        if let Ok(mut rev) = self.entity_to_keys.write() {
+            rev.clear();
         }
         self.full_invalidations.fetch_add(1, Ordering::Relaxed);
     }
 
+    // -- private helpers for maintaining the reverse index --
+
+    /// Add dependency tracking and reverse-index entries for `key`.
+    fn add_deps_for_key(&self, key: CacheKey, depends_on: HashSet<i64>) {
+        let is_untracked = depends_on.is_empty();
+        if let Ok(mut deps) = self.dependencies.write() {
+            deps.insert(key.clone(), depends_on.clone());
+        }
+        if let Ok(mut rev) = self.entity_to_keys.write() {
+            if is_untracked {
+                rev.entry(UNTRACKED_SENTINEL)
+                    .or_default()
+                    .insert(key);
+            } else {
+                for eid in &depends_on {
+                    rev.entry(*eid).or_default().insert(key.clone());
+                }
+            }
+        }
+    }
+
+    /// Remove dependency map entry and all reverse-index entries for `key`.
+    fn remove_deps_for_key(&self, key: &CacheKey) {
+        let old_deps = if let Ok(mut deps) = self.dependencies.write() {
+            deps.remove(key)
+        } else {
+            None
+        };
+        if let Some(dep_set) = old_deps {
+            self.remove_key_from_reverse_index(key, &dep_set);
+        }
+    }
+
+    /// Remove only the reverse-index entries for `key` (used before overwrite).
+    fn remove_reverse_index_for_key(&self, key: &CacheKey) {
+        let old_deps = if let Ok(deps) = self.dependencies.read() {
+            deps.get(key).cloned()
+        } else {
+            None
+        };
+        if let Some(dep_set) = old_deps {
+            self.remove_key_from_reverse_index(key, &dep_set);
+        }
+    }
+
+    /// Remove `key` from the reverse index for each entity in `dep_set`.
+    fn remove_key_from_reverse_index(&self, key: &CacheKey, dep_set: &HashSet<i64>) {
+        if let Ok(mut rev) = self.entity_to_keys.write() {
+            if dep_set.is_empty() {
+                if let Some(set) = rev.get_mut(&UNTRACKED_SENTINEL) {
+                    set.remove(key);
+                    if set.is_empty() {
+                        rev.remove(&UNTRACKED_SENTINEL);
+                    }
+                }
+            } else {
+                for eid in dep_set {
+                    if let Some(set) = rev.get_mut(eid) {
+                        set.remove(key);
+                        if set.is_empty() {
+                            rev.remove(eid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Return the number of entries currently in the cache.
     pub fn len(&self) -> usize {
-        self.cache.lock().map_or(0, |c| c.len())
+        self.cache.read().map_or(0, |c| c.len())
     }
 
     /// Return a snapshot of cache statistics.
@@ -246,7 +371,7 @@ impl QueryCache {
         };
 
         let (tracked_entries, avg_dependency_count) =
-            if let Ok(deps) = self.dependencies.lock() {
+            if let Ok(deps) = self.dependencies.read() {
                 let tracked: Vec<&HashSet<i64>> =
                     deps.values().filter(|s| !s.is_empty()).collect();
                 let count = tracked.len();
@@ -770,5 +895,193 @@ mod tests {
         // Second invalidation should find nothing to remove
         let removed2 = cache.invalidate_entities(&[1]);
         assert_eq!(removed2, 0);
+    }
+
+    // ---- Reverse index correctness tests ----
+
+    #[test]
+    fn test_reverse_index_cleaned_on_lru_eviction() {
+        // Verify that when LRU evicts an entry, the reverse index is cleaned
+        // so that the evicted entry's entity no longer triggers invalidation.
+        let cache = QueryCache::new(2, Duration::from_secs(60));
+
+        let mut deps1 = HashSet::new();
+        deps1.insert(100);
+        cache.insert_with_deps("q1", "[]", "r1".to_string(), deps1);
+
+        let mut deps2 = HashSet::new();
+        deps2.insert(200);
+        cache.insert_with_deps("q2", "[]", "r2".to_string(), deps2);
+
+        // This evicts q1
+        let mut deps3 = HashSet::new();
+        deps3.insert(300);
+        cache.insert_with_deps("q3", "[]", "r3".to_string(), deps3);
+
+        // Invalidating entity 100 should not find stale references to q1
+        let removed = cache.invalidate_entities(&[100]);
+        assert_eq!(removed, 0);
+
+        // q2 and q3 should still be present
+        assert_eq!(cache.get("q2", "[]").as_deref(), Some("r2"));
+        assert_eq!(cache.get("q3", "[]").as_deref(), Some("r3"));
+    }
+
+    #[test]
+    fn test_reverse_index_updated_on_overwrite_with_different_deps() {
+        let cache = QueryCache::new(100, Duration::from_secs(60));
+
+        // Insert with deps on entity 1
+        let mut deps1 = HashSet::new();
+        deps1.insert(1);
+        cache.insert_with_deps("q", "[]", "v1".to_string(), deps1);
+
+        // Overwrite same key with deps on entity 2
+        let mut deps2 = HashSet::new();
+        deps2.insert(2);
+        cache.insert_with_deps("q", "[]", "v2".to_string(), deps2);
+
+        // Entity 1 should NOT invalidate (old dep removed from reverse index)
+        let removed = cache.invalidate_entities(&[1]);
+        assert_eq!(removed, 0);
+        assert_eq!(cache.get("q", "[]").as_deref(), Some("v2"));
+
+        // Entity 2 should invalidate (current dep)
+        let removed = cache.invalidate_entities(&[2]);
+        assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn test_reverse_index_multiple_queries_same_entity() {
+        // Multiple queries depending on the same entity should all be
+        // invalidated when that entity changes.
+        let cache = QueryCache::new(100, Duration::from_secs(60));
+
+        let mut deps_a = HashSet::new();
+        deps_a.insert(42);
+        cache.insert_with_deps("qa", "[]", "a".to_string(), deps_a);
+
+        let mut deps_b = HashSet::new();
+        deps_b.insert(42);
+        deps_b.insert(99);
+        cache.insert_with_deps("qb", "[]", "b".to_string(), deps_b);
+
+        let mut deps_c = HashSet::new();
+        deps_c.insert(99);
+        cache.insert_with_deps("qc", "[]", "c".to_string(), deps_c);
+
+        // Entity 42 changes: qa and qb invalidated, qc survives
+        let removed = cache.invalidate_entities(&[42]);
+        assert_eq!(removed, 2);
+        assert!(cache.get("qa", "[]").is_none());
+        assert!(cache.get("qb", "[]").is_none());
+        assert_eq!(cache.get("qc", "[]").as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn test_reverse_index_untracked_to_tracked_transition() {
+        // Insert untracked, then overwrite with tracked deps.
+        let cache = QueryCache::new(100, Duration::from_secs(60));
+
+        cache.insert("q", "[]", "untracked".to_string());
+
+        // Overwrite with tracked deps
+        let mut deps = HashSet::new();
+        deps.insert(10);
+        cache.insert_with_deps("q", "[]", "tracked".to_string(), deps);
+
+        // Entity 999 should NOT invalidate (no longer untracked)
+        let removed = cache.invalidate_entities(&[999]);
+        assert_eq!(removed, 0);
+        assert_eq!(cache.get("q", "[]").as_deref(), Some("tracked"));
+
+        // Entity 10 should invalidate
+        let removed = cache.invalidate_entities(&[10]);
+        assert_eq!(removed, 1);
+    }
+
+    #[test]
+    fn test_hit_rate_improvement_with_targeted_invalidation() {
+        // Demonstrate that targeted invalidation preserves more cache entries
+        // than global invalidation.
+        let cache = QueryCache::new(100, Duration::from_secs(60));
+
+        // Insert 10 queries, each depending on a different entity
+        for i in 0..10 {
+            let mut deps = HashSet::new();
+            deps.insert(i as i64);
+            cache.insert_with_deps(
+                &format!("q_{}", i),
+                "[]",
+                format!("r_{}", i),
+                deps,
+            );
+        }
+        assert_eq!(cache.len(), 10);
+
+        // Transaction changes only entity 5
+        let removed = cache.invalidate_entities(&[5]);
+        assert_eq!(removed, 1);
+        assert_eq!(cache.len(), 9);
+
+        // 9 of 10 queries survive -- much better than global invalidation
+        // which would have removed all 10.
+        let mut hits = 0;
+        for i in 0..10 {
+            if cache.get(&format!("q_{}", i), "[]").is_some() {
+                hits += 1;
+            }
+        }
+        assert_eq!(hits, 9);
+    }
+
+    #[test]
+    fn test_concurrent_insert_with_deps_and_invalidate() {
+        use std::sync::Arc;
+
+        let cache = Arc::new(QueryCache::new(500, Duration::from_secs(60)));
+        let mut handles = Vec::new();
+
+        // Writers inserting tracked entries
+        for i in 0..5 {
+            let c = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for j in 0..50 {
+                    let mut deps = HashSet::new();
+                    deps.insert((i * 50 + j) as i64);
+                    c.insert_with_deps(
+                        &format!("q_{}_{}", i, j),
+                        "[]",
+                        format!("r_{}_{}", i, j),
+                        deps,
+                    );
+                }
+            }));
+        }
+
+        // Concurrent invalidators
+        for i in 0..5 {
+            let c = Arc::clone(&cache);
+            handles.push(thread::spawn(move || {
+                for j in 0..50 {
+                    let entity_id = (i * 50 + j) as i64;
+                    c.invalidate_entities(&[entity_id]);
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread should not panic");
+        }
+
+        // Cache should still be functional after concurrent operations
+        let mut deps = HashSet::new();
+        deps.insert(9999);
+        cache.insert_with_deps("final", "[]", "ok".to_string(), deps);
+        assert_eq!(cache.get("final", "[]").as_deref(), Some("ok"));
+
+        // Verify stats are coherent
+        let stats = cache.stats();
+        assert!(stats.targeted_invalidations > 0);
     }
 }

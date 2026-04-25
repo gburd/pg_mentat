@@ -28,10 +28,13 @@ enum TransitValue {
     Nil,
     Bool(bool),
     Integer(i64),
+    Float(f64),
     String(String),
     Keyword(String),
     Symbol(String),
     Uuid(Uuid),
+    /// Instant as milliseconds since Unix epoch (from `~m<millis>` tag).
+    Instant(i64),
     Array(Vec<TransitValue>),
     Map(Vec<(TransitValue, TransitValue)>),
 }
@@ -74,8 +77,9 @@ fn json_to_transit_bounded(val: &serde_json::Value, depth: usize) -> Result<Tran
             } else if let Some(u) = n.as_u64() {
                 #[allow(clippy::cast_possible_wrap)]
                 Ok(TransitValue::Integer(u as i64))
+            } else if let Some(f) = n.as_f64() {
+                Ok(TransitValue::Float(f))
             } else {
-                // Floating point -- represent as string
                 Ok(TransitValue::String(n.to_string()))
             }
         }
@@ -108,10 +112,18 @@ fn decode_transit_tagged_string(s: &str) -> TransitValue {
             .map(TransitValue::Uuid)
             .unwrap_or_else(|_| TransitValue::String(s.to_string()))
     } else if let Some(rest) = s.strip_prefix("~m") {
-        // Instant as millis -- store as integer
+        // Transit instant: milliseconds since epoch
         rest.parse::<i64>()
-            .map(TransitValue::Integer)
+            .map(TransitValue::Instant)
             .unwrap_or_else(|_| TransitValue::String(s.to_string()))
+    } else if let Some(rest) = s.strip_prefix("~z") {
+        // Transit special float: NaN, INF, -INF
+        match rest {
+            "NaN" => TransitValue::Float(f64::NAN),
+            "INF" => TransitValue::Float(f64::INFINITY),
+            "-INF" => TransitValue::Float(f64::NEG_INFINITY),
+            _ => TransitValue::String(s.to_string()),
+        }
     } else if let Some(rest) = s.strip_prefix("~~") {
         // Escaped tilde
         TransitValue::String(format!("~{rest}"))
@@ -409,7 +421,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
         0xca => {
             ensure_len(rest, 4)?;
             let val = f32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]);
-            Ok((TransitValue::String(val.to_string()), &rest[4..]))
+            Ok((TransitValue::Float(f64::from(val)), &rest[4..]))
         }
         // float64
         0xcb => {
@@ -417,7 +429,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
             let val = f64::from_be_bytes([
                 rest[0], rest[1], rest[2], rest[3], rest[4], rest[5], rest[6], rest[7],
             ]);
-            Ok((TransitValue::String(val.to_string()), &rest[8..]))
+            Ok((TransitValue::Float(val), &rest[8..]))
         }
 
         other => Err(MsgpackError(format!(
@@ -653,6 +665,8 @@ fn parse_transit_operation(
 
         "basis-t" => Ok(Operation::BasisT),
 
+        "db-snapshot" => Ok(Operation::DbSnapshot),
+
         _ => Err(ParseError::InvalidOperation(op_keyword.to_string())),
     }
 }
@@ -789,10 +803,33 @@ fn transit_value_to_edn_string(val: &TransitValue) -> String {
         TransitValue::Nil => "nil".to_string(),
         TransitValue::Bool(b) => if *b { "true" } else { "false" }.to_string(),
         TransitValue::Integer(i) => i.to_string(),
+        TransitValue::Float(f) => {
+            if f.is_nan() {
+                "##NaN".to_string()
+            } else if f.is_infinite() && f.is_sign_positive() {
+                "##Inf".to_string()
+            } else if f.is_infinite() {
+                "##-Inf".to_string()
+            } else if f.fract() == 0.0 {
+                format!("{:.1}", f)
+            } else {
+                f.to_string()
+            }
+        }
         TransitValue::String(s) => format!("\"{s}\""),
         TransitValue::Keyword(k) => format!(":{k}"),
         TransitValue::Symbol(s) => s.clone(),
         TransitValue::Uuid(u) => format!("#uuid \"{u}\""),
+        TransitValue::Instant(millis) => {
+            // Convert millis to an EDN instant
+            let secs = millis / 1000;
+            let nanos = ((millis % 1000).unsigned_abs() as u32) * 1_000_000;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, nanos) {
+                format!("#inst \"{}\"", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+            } else {
+                format!("#inst \"1970-01-01T00:00:00.000Z\"")
+            }
+        }
         TransitValue::Array(items) => {
             let inner: Vec<String> = items.iter().map(transit_value_to_edn_string).collect();
             format!("[{}]", inner.join(" "))
@@ -1385,5 +1422,298 @@ mod tests {
             err_msg.contains("nesting depth"),
             "Error should mention nesting depth: {err_msg}"
         );
+    }
+
+    // -- Float handling tests -----------------------------------------------
+
+    #[test]
+    fn test_decode_special_float_nan() {
+        match decode_transit_tagged_string("~zNaN") {
+            TransitValue::Float(f) => assert!(f.is_nan()),
+            other => panic!("Expected Float(NaN), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_special_float_inf() {
+        match decode_transit_tagged_string("~zINF") {
+            TransitValue::Float(f) => {
+                assert!(f.is_infinite());
+                assert!(f.is_sign_positive());
+            }
+            other => panic!("Expected Float(INF), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_special_float_neg_inf() {
+        match decode_transit_tagged_string("~z-INF") {
+            TransitValue::Float(f) => {
+                assert!(f.is_infinite());
+                assert!(f.is_sign_negative());
+            }
+            other => panic!("Expected Float(-INF), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_unknown_z_tag_is_string() {
+        match decode_transit_tagged_string("~zUnknown") {
+            TransitValue::String(s) => assert_eq!(s, "~zUnknown"),
+            other => panic!("Expected String, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_json_float_parsed_as_float() {
+        let json: serde_json::Value = serde_json::from_str("3.14").unwrap();
+        let val = json_to_transit_bounded(&json, 0).unwrap();
+        match val {
+            TransitValue::Float(f) => assert!((f - 3.14).abs() < 1e-10),
+            other => panic!("Expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_transit_value_to_edn_string_float() {
+        let val = TransitValue::Float(3.14);
+        assert_eq!(transit_value_to_edn_string(&val), "3.14");
+
+        let nan = TransitValue::Float(f64::NAN);
+        assert_eq!(transit_value_to_edn_string(&nan), "##NaN");
+
+        let inf = TransitValue::Float(f64::INFINITY);
+        assert_eq!(transit_value_to_edn_string(&inf), "##Inf");
+
+        let neg_inf = TransitValue::Float(f64::NEG_INFINITY);
+        assert_eq!(transit_value_to_edn_string(&neg_inf), "##-Inf");
+    }
+
+    // -- Instant handling tests ---------------------------------------------
+
+    #[test]
+    fn test_decode_instant() {
+        match decode_transit_tagged_string("~m1714000000000") {
+            TransitValue::Instant(millis) => assert_eq!(millis, 1714000000000),
+            other => panic!("Expected Instant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_transit_value_to_edn_string_instant() {
+        let val = TransitValue::Instant(1714000000000);
+        let edn = transit_value_to_edn_string(&val);
+        assert!(edn.starts_with("#inst \""), "Expected #inst, got: {edn}");
+        // 1714000000000 ms = 2024-04-24T23:06:40Z
+        assert!(edn.contains("2024-04-24"), "Expected 2024-04-24 date, got: {edn}");
+    }
+
+    // -- Msgpack float roundtrip tests --------------------------------------
+
+    #[test]
+    fn test_msgpack_float64_decode() {
+        // Encode f64 3.14 as msgpack float64: 0xcb + 8 bytes big-endian
+        let val: f64 = 3.14;
+        let mut buf = vec![0xcb];
+        buf.extend_from_slice(&val.to_be_bytes());
+
+        let (result, remaining) = msgpack_read_value_bounded(&buf, 0).unwrap();
+        assert!(remaining.is_empty());
+        match result {
+            TransitValue::Float(f) => assert!((f - 3.14).abs() < 1e-10),
+            other => panic!("Expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_msgpack_float32_decode() {
+        // Encode f32 2.5 as msgpack float32: 0xca + 4 bytes big-endian
+        let val: f32 = 2.5;
+        let mut buf = vec![0xca];
+        buf.extend_from_slice(&val.to_be_bytes());
+
+        let (result, remaining) = msgpack_read_value_bounded(&buf, 0).unwrap();
+        assert!(remaining.is_empty());
+        match result {
+            TransitValue::Float(f) => assert!((f - 2.5).abs() < 1e-5),
+            other => panic!("Expected Float, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_msgpack_float() {
+        use crate::protocol::transit_serializer::serialize_transit_msgpack;
+        use crate::protocol::{Response, ResponseValue};
+
+        let response = Response::Success {
+            result: ResponseValue::Float(3.14),
+        };
+        let bytes = serialize_transit_msgpack(&response);
+
+        let (val, remaining) =
+            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        assert!(remaining.is_empty());
+
+        match val {
+            TransitValue::Map(entries) => {
+                let result = entries.iter().find(|(k, _)| {
+                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
+                });
+                assert!(result.is_some());
+                match &result.unwrap().1 {
+                    TransitValue::Float(f) => assert!((f - 3.14).abs() < 1e-10),
+                    other => panic!("Expected Float, got {other:?}"),
+                }
+            }
+            other => panic!("Expected Map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_msgpack_instant() {
+        use crate::protocol::transit_serializer::serialize_transit_msgpack;
+        use crate::protocol::{Response, ResponseValue};
+
+        // Serializer converts micros to millis with ~m tag
+        let micros = 1714000000000000_i64;
+        let response = Response::Success {
+            result: ResponseValue::Instant(micros),
+        };
+        let bytes = serialize_transit_msgpack(&response);
+
+        let (val, remaining) =
+            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        assert!(remaining.is_empty());
+
+        match val {
+            TransitValue::Map(entries) => {
+                let result = entries.iter().find(|(k, _)| {
+                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
+                });
+                assert!(result.is_some());
+                match &result.unwrap().1 {
+                    TransitValue::Instant(millis) => {
+                        // Serializer divides micros by 1000 to get millis
+                        assert_eq!(*millis, micros / 1000);
+                    }
+                    other => panic!("Expected Instant, got {other:?}"),
+                }
+            }
+            other => panic!("Expected Map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_msgpack_uuid() {
+        use crate::protocol::transit_serializer::serialize_transit_msgpack;
+        use crate::protocol::{Response, ResponseValue};
+
+        let uuid_str = "550e8400-e29b-41d4-a716-446655440000";
+        let response = Response::Success {
+            result: ResponseValue::Uuid(uuid_str.to_string()),
+        };
+        let bytes = serialize_transit_msgpack(&response);
+
+        let (val, remaining) =
+            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        assert!(remaining.is_empty());
+
+        match val {
+            TransitValue::Map(entries) => {
+                let result = entries.iter().find(|(k, _)| {
+                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
+                });
+                assert!(result.is_some());
+                match &result.unwrap().1 {
+                    TransitValue::Uuid(u) => assert_eq!(u.to_string(), uuid_str),
+                    other => panic!("Expected Uuid, got {other:?}"),
+                }
+            }
+            other => panic!("Expected Map, got {other:?}"),
+        }
+    }
+
+    // -- Transit+JSON special float roundtrip --------------------------------
+
+    #[test]
+    fn test_roundtrip_transit_json_special_floats() {
+        use crate::protocol::transit_serializer::serialize_transit_json;
+        use crate::protocol::{Response, ResponseValue};
+
+        // NaN
+        let response = Response::Success {
+            result: ResponseValue::Float(f64::NAN),
+        };
+        let json_out = serialize_transit_json(&response);
+        assert!(json_out.contains("~zNaN"), "Expected ~zNaN in: {json_out}");
+
+        // The parser should decode it back
+        let json_val: serde_json::Value = serde_json::from_str(&json_out).unwrap();
+        if let serde_json::Value::Array(arr) = &json_val {
+            // arr = ["^ ", "~:result", "~zNaN"]
+            if let Some(serde_json::Value::String(s)) = arr.get(2) {
+                match decode_transit_tagged_string(s) {
+                    TransitValue::Float(f) => assert!(f.is_nan()),
+                    other => panic!("Expected Float(NaN), got {other:?}"),
+                }
+            } else {
+                panic!("Expected string at index 2");
+            }
+        }
+
+        // INF
+        let response = Response::Success {
+            result: ResponseValue::Float(f64::INFINITY),
+        };
+        let json_out = serialize_transit_json(&response);
+        assert!(json_out.contains("~zINF"), "Expected ~zINF in: {json_out}");
+    }
+
+    // -- db-snapshot operation -----------------------------------------------
+
+    #[test]
+    fn test_parse_transit_json_db_snapshot() {
+        let input = r#"["^ ","~:op","~:db-snapshot"]"#;
+        let req = parse_transit_json(input);
+        assert!(req.is_ok(), "Failed: {req:?}");
+        match req.expect("should parse").op {
+            Operation::DbSnapshot => {}
+            other => panic!("Expected DbSnapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_transit_json_transact() {
+        let input = r#"["^ ","~:op","~:transact","~:args",["^ ","~:connection-id","abc-123","~:tx-data","[[:db/add -1 :name \"Alice\"]]"]]"#;
+        let req = parse_transit_json(input);
+        assert!(req.is_ok(), "Failed: {req:?}");
+        match req.expect("should parse").op {
+            Operation::Transact { connection_id, tx_data } => {
+                assert_eq!(connection_id, "abc-123");
+                assert!(tx_data.contains("Alice"));
+            }
+            other => panic!("Expected Transact, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_transit_json_delete_db() {
+        let input = r#"["^ ","~:op","~:delete-db","~:args",["^ ","~:db-name","old-db"]]"#;
+        let req = parse_transit_json(input);
+        assert!(req.is_ok(), "Failed: {req:?}");
+        match req.expect("should parse").op {
+            Operation::DeleteDatabase { db_name } => assert_eq!(db_name, "old-db"),
+            other => panic!("Expected DeleteDatabase, got {other:?}"),
+        }
+    }
+
+    // -- Escaped caret test --------------------------------------------------
+
+    #[test]
+    fn test_decode_escaped_caret() {
+        match decode_transit_tagged_string("~^hello") {
+            TransitValue::String(s) => assert_eq!(s, "^hello"),
+            other => panic!("Expected String(^hello), got {other:?}"),
+        }
     }
 }

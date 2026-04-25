@@ -285,3 +285,94 @@
                           fresh-db)]
         (is (empty? results)
             "Charlie should not be found after retractEntity")))))
+
+;; ---------------------------------------------------------------------------
+;; Speculative transactions (d/with) tests
+;; ---------------------------------------------------------------------------
+
+(deftest test-with-returns-report
+  (testing "d/with returns a speculative transaction report"
+    (let [result (d/with *db*
+                   [{:db/id "spec-person"
+                     :person/name "Speculative"
+                     :person/email "spec@example.com"
+                     :person/age 42}])]
+      (is (map? result) "d/with should return a map")
+      (when (map? result)
+        (is (contains? result :db-after) "Should have :db-after")
+        (is (contains? result :tx-data) "Should have :tx-data")
+        (is (seq (:tx-data result)) ":tx-data should not be empty")))))
+
+(deftest test-with-does-not-persist
+  (testing "d/with changes are not visible in the real database"
+    (d/with *db*
+      [{:person/name "Invisible"
+        :person/email "invisible@example.com"}])
+    ;; Query the real database -- Invisible should not exist
+    (let [fresh-db (d/db *conn*)
+          results  (d/q '[:find ?e
+                          :where [?e :person/email "invisible@example.com"]]
+                        fresh-db)]
+      (is (empty? results)
+          "Speculative entity should not exist in the real database"))))
+
+;; ---------------------------------------------------------------------------
+;; Database filtering (d/filter) tests
+;; ---------------------------------------------------------------------------
+
+(deftest test-filter-restricts-visible-datoms
+  (testing "d/filter restricts the datoms visible to queries"
+    (let [;; Create a filtered db that only shows :person/name datoms
+          filtered-db (d/filter *db*
+                        (fn [db datom]
+                          (= :person/name (d/ident db (.a datom)))))
+          results     (d/q '[:find ?e ?v
+                             :where [?e _ ?v]]
+                           filtered-db)]
+      (is (seq results) "Filtered query should return results")
+      ;; All values should be strings (names), not numbers (ages)
+      (when (seq results)
+        (is (every? #(string? (second %)) results)
+            "Filtered results should only contain string values (names)")))))
+
+;; ---------------------------------------------------------------------------
+;; Direct index access (d/datoms) tests
+;; ---------------------------------------------------------------------------
+
+(deftest test-datoms-eavt
+  (testing "d/datoms with :eavt returns datoms"
+    (let [datoms (d/datoms *db* :eavt)]
+      (is (seq datoms) "Should have datoms in EAVT index")
+      (when (seq datoms)
+        (let [d (first datoms)]
+          (is (some? (.e d)) "Datom should have entity")
+          (is (some? (.a d)) "Datom should have attribute")
+          (is (some? (.v d)) "Datom should have value")
+          (is (some? (.tx d)) "Datom should have tx"))))))
+
+(deftest test-datoms-eavt-with-entity-component
+  (testing "d/datoms with :eavt and entity filters by entity"
+    (let [alice-id (ffirst
+                     (d/q '[:find ?e
+                            :where [?e :person/email "alice@example.com"]]
+                          *db*))
+          datoms   (d/datoms *db* :eavt alice-id)]
+      (is (some? alice-id) "Alice should exist")
+      (when alice-id
+        (is (seq datoms) "Should find datoms for Alice")
+        (is (every? #(= alice-id (.e %)) datoms)
+            "All datoms should belong to Alice's entity")))))
+
+(deftest test-datoms-aevt
+  (testing "d/datoms with :aevt returns datoms ordered by attribute"
+    (let [datoms (d/datoms *db* :aevt)]
+      (is (seq datoms) "Should have datoms in AEVT index"))))
+
+(deftest test-datoms-vaet-ref-only
+  (testing "d/datoms with :vaet returns only ref-type datoms"
+    ;; VAET index is specifically for reverse reference lookups
+    (let [datoms (d/datoms *db* :vaet)]
+      ;; May be empty if no ref-type attributes are asserted on user entities
+      (is (or (empty? datoms)
+              (every? #(number? (.v %)) datoms))
+          "VAET datoms should only contain ref values (numbers)"))))

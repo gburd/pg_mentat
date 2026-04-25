@@ -152,7 +152,13 @@ pub enum ResponseValue {
     String(String),
     Boolean(bool),
     Integer(i64),
+    Float(f64),
     Keyword(String),
+    /// An instant in time, stored as microseconds since Unix epoch.
+    /// Serialized as `#inst "ISO-8601"` in EDN and `~m<millis>` in Transit.
+    Instant(i64),
+    /// A UUID value. Serialized as `#uuid "..."` in EDN and `~u...` in Transit.
+    Uuid(String),
     List(Vec<ResponseValue>),
     Vector(Vec<ResponseValue>),
     Map(Vec<(ResponseValue, ResponseValue)>),

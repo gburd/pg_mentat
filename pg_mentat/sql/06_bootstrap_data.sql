@@ -3,10 +3,11 @@
 
 -- Initialize default partitions
 -- Based on mentat's default partition map
+-- Note: next_entid is kept for metadata but actual allocation uses sequences.
 INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-    ('db.part/db', 0, 9999, 100, FALSE),           -- Built-in schema partition
-    ('db.part/user', 10000, 999999999, 10000, FALSE),  -- User entities
-    ('db.part/tx', 1000000000, 1999999999, 1000000000, FALSE); -- Transactions
+    ('db.part/db', 0, 10000, 100, FALSE),
+    ('db.part/user', 10000, 1000000, 10000, FALSE),
+    ('db.part/tx', 1000000, 2000000, 1000001, FALSE);
 
 -- Core schema attributes
 -- These correspond to mentat's built-in :db/* attributes
@@ -59,5 +60,6 @@ INSERT INTO mentat.idents (ident, entid)
 SELECT ident, entid FROM mentat.schema
 WHERE entid < 100;
 
--- Update partition next_entid to reflect bootstrap allocations
-UPDATE mentat.partitions SET next_entid = 100 WHERE name = 'db.part/db';
+-- Advance sequences past bootstrap-allocated IDs.
+-- db.part/db bootstrap uses entids up to 92, so advance to 100.
+SELECT setval('mentat.partition_db_seq', 100, false);

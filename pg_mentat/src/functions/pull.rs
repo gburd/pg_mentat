@@ -196,6 +196,9 @@ pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, Pu
 /// Fetches all requested attributes for all entities in a single SQL query
 /// using `WHERE d.e IN (...)`, then groups the results client-side.
 /// This eliminates the N+1 query problem when pulling many entities.
+///
+/// Component ref attributes are automatically expanded by issuing a second
+/// batched query for referenced component entities.
 fn pull_many_batched(
     specs: &[PullAttrSpec],
     entity_ids: &[i64],
@@ -239,7 +242,7 @@ fn pull_many_batched(
 
     Spi::connect(|client| {
         let query = format!(
-            "SELECT d.e, s.ident, s.cardinality::TEXT, d.value_type_tag, \
+            "SELECT d.e, s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                     d.v_ref, d.v_bool, d.v_long, d.v_double, \
                     d.v_text, d.v_keyword, \
                     EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
@@ -251,21 +254,23 @@ fn pull_many_batched(
              ORDER BY d.e, s.ident"
         );
 
+        // Track component ref IDs for a second-pass expansion.
+        struct PendingComponentRef {
+            parent_eid: i64,
+            output_key: String,
+            cardinality: String,
+            ref_id: i64,
+        }
+        let mut pending_components: Vec<PendingComponentRef> = Vec::new();
+
         for row in client.select(&query, None, &[])? {
             let eid: i64 = row.get(1)?.ok_or("Missing entity id")?;
             let ident: String = row.get(2)?.ok_or("Missing ident")?;
             let cardinality: String = row.get(3)?.ok_or("Missing cardinality")?;
-            let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
+            let is_component: bool = row.get(4)?.unwrap_or(false);
+            let v_type_tag: i16 = row.get(5)?.ok_or("Missing type tag")?;
 
-            let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
-
-            // For ref attributes in simple pulls, return {:db/id N}.
-            let decoded = if v_type_tag == type_tag::REF {
-                let rid = ref_id.ok_or("Missing ref ID")?;
-                json!({":db/id": rid})
-            } else {
-                decoded_val
-            };
+            let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 6)?;
 
             // Determine the output key (handle :as renames).
             let output_key = if let Some(spec) = spec_map.get(&ident) {
@@ -278,8 +283,83 @@ fn pull_many_batched(
                 ident.clone()
             };
 
-            if let Some(result_map) = results_by_eid.get_mut(&eid) {
-                insert_value(result_map, &output_key, decoded, &cardinality);
+            if v_type_tag == type_tag::REF {
+                let rid = ref_id.ok_or("Missing ref ID")?;
+                if is_component {
+                    // Defer component expansion to a batched second pass.
+                    pending_components.push(PendingComponentRef {
+                        parent_eid: eid,
+                        output_key,
+                        cardinality,
+                        ref_id: rid,
+                    });
+                } else {
+                    let ref_obj = json!({":db/id": rid});
+                    if let Some(result_map) = results_by_eid.get_mut(&eid) {
+                        insert_value(result_map, &output_key, ref_obj, &cardinality);
+                    }
+                }
+            } else {
+                if let Some(result_map) = results_by_eid.get_mut(&eid) {
+                    insert_value(result_map, &output_key, decoded_val, &cardinality);
+                }
+            }
+        }
+
+        // Second pass: batch-expand component refs.
+        if !pending_components.is_empty() {
+            let component_ids: HashSet<i64> = pending_components.iter().map(|p| p.ref_id).collect();
+            let comp_eid_csv: String = component_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+
+            let comp_query = format!(
+                "SELECT d.e, s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
+                        d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                        d.v_text, d.v_keyword, \
+                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                        d.v_uuid::TEXT, d.v_bytes \
+                 FROM mentat.datoms d \
+                 JOIN mentat.schema s ON d.a = s.entid \
+                 WHERE d.e IN ({comp_eid_csv}) AND d.added = true \
+                 ORDER BY d.e, s.ident"
+            );
+
+            // Build sub-maps for each component entity.
+            let mut comp_maps: HashMap<i64, serde_json::Map<String, serde_json::Value>> = HashMap::new();
+            for &cid in &component_ids {
+                let mut m = serde_json::Map::new();
+                m.insert(":db/id".to_string(), json!(cid));
+                comp_maps.insert(cid, m);
+            }
+
+            for row in client.select(&comp_query, None, &[])? {
+                let cid: i64 = row.get(1)?.ok_or("Missing entity id")?;
+                let c_ident: String = row.get(2)?.ok_or("Missing ident")?;
+                let c_cardinality: String = row.get(3)?.ok_or("Missing cardinality")?;
+                let c_type_tag: i16 = row.get(5)?.ok_or("Missing type tag")?;
+                let (c_decoded, c_ref_id) = decode_row_typed_value(&row, c_type_tag, 6)?;
+
+                let value = if c_type_tag == type_tag::REF {
+                    let rid = c_ref_id.ok_or("Missing ref ID")?;
+                    json!({":db/id": rid})
+                } else {
+                    c_decoded
+                };
+
+                if let Some(cm) = comp_maps.get_mut(&cid) {
+                    insert_value(cm, &c_ident, value, &c_cardinality);
+                }
+            }
+
+            // Attach expanded component maps to parent results.
+            for pc in &pending_components {
+                if let Some(parent_map) = results_by_eid.get_mut(&pc.parent_eid) {
+                    let comp_val = comp_maps
+                        .get(&pc.ref_id)
+                        .map(|m| serde_json::Value::Object(m.clone()))
+                        .unwrap_or_else(|| json!({":db/id": pc.ref_id}));
+                    insert_value(parent_map, &pc.output_key, comp_val, &pc.cardinality);
+                }
             }
         }
 
@@ -651,6 +731,8 @@ fn execute_pull(
                         default.as_ref(),
                         limit.as_ref(),
                         result_map,
+                        visited,
+                        depth,
                     )?;
                 }
             }
@@ -812,6 +894,8 @@ fn pull_forward_attribute(
     default: Option<&serde_json::Value>,
     limit: Option<&LimitSpec>,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
+    visited: &mut HashSet<i64>,
+    depth: usize,
 ) -> Result<(), PullError> {
     let query = "SELECT s.cardinality::TEXT, s.component, d.value_type_tag, \
                         d.v_ref, d.v_bool, d.v_long, d.v_double, \
@@ -828,13 +912,22 @@ fn pull_forward_attribute(
 
     let max_rows = resolve_limit(limit);
 
-    let mut count = 0usize;
+    // Collect rows first so we can process component refs outside the cursor.
+    struct FwdAttrRow {
+        cardinality: String,
+        is_component: bool,
+        v_type_tag: i16,
+        decoded_val: serde_json::Value,
+        ref_id: Option<i64>,
+    }
+
+    let mut rows = Vec::new();
     for row in client.select(
         query,
         None,
         &[DatumWithOid::from(entity_id), DatumWithOid::from(ident)],
     )? {
-        if count >= max_rows {
+        if rows.len() >= max_rows {
             break;
         }
         found = true;
@@ -842,33 +935,33 @@ fn pull_forward_attribute(
         let is_component: bool = row.get(2)?.unwrap_or(false);
         let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
         let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 4)?;
+        rows.push(FwdAttrRow { cardinality, is_component, v_type_tag, decoded_val, ref_id });
+    }
 
-        let decoded = if v_type_tag == type_tag::REF {
-            let rid = ref_id.ok_or("Missing ref ID")?;
-            if is_component {
+    for fwd_row in &rows {
+        let decoded = if fwd_row.v_type_tag == type_tag::REF {
+            let rid = fwd_row.ref_id.ok_or("Missing ref ID")?;
+            if fwd_row.is_component && depth < MAX_RECURSION_DEPTH && !visited.contains(&rid) {
                 // Component refs are recursively pulled with all attributes.
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(rid));
-                let mut visited = HashSet::new();
-                visited.insert(entity_id);
                 visited.insert(rid);
                 pull_wildcard(
                     client,
                     rid,
                     &mut sub_map,
                     &HashSet::new(),
-                    &mut visited,
-                    1,
+                    visited,
+                    depth + 1,
                 )?;
                 serde_json::Value::Object(sub_map)
             } else {
                 json!({":db/id": rid})
             }
         } else {
-            decoded_val
+            fwd_row.decoded_val.clone()
         };
-        insert_value(result_map, output_key, decoded, &cardinality);
-        count += 1;
+        insert_value(result_map, output_key, decoded, &fwd_row.cardinality);
     }
 
     if !found {
@@ -1090,8 +1183,10 @@ fn pull_recursive(
             let was_new = visited.insert(ref_id);
             let mut sub_map = serde_json::Map::new();
             sub_map.insert(":db/id".to_string(), json!(ref_id));
-            // Pull all non-recursive attributes of the target, plus the recursive one.
-            pull_all_attributes_simple(client, ref_id, &mut sub_map)?;
+            // Pull all attributes of the target (excluding the recursive one), plus recurse.
+            pull_all_attributes_for_recursive(
+                client, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+            )?;
             execute_pull(
                 client,
                 ref_id,
@@ -1115,7 +1210,9 @@ fn pull_recursive(
                 let was_new = visited.insert(*ref_id);
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(*ref_id));
-                pull_all_attributes_simple(client, *ref_id, &mut sub_map)?;
+                pull_all_attributes_for_recursive(
+                    client, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                )?;
                 execute_pull(
                     client,
                     *ref_id,
@@ -1209,6 +1306,49 @@ fn query_reverse_refs(
     Ok(ref_ids)
 }
 
+/// Batch query forward ref values for multiple entities at once.
+/// Returns a map from source entity ID to the list of referenced entity IDs.
+///
+/// This eliminates the N+1 problem when following refs across many entities,
+/// e.g., for map specs in `pull_many`.
+#[allow(dead_code)]
+fn query_forward_refs_batched(
+    client: &SpiClient<'_>,
+    entity_ids: &[i64],
+    ident: &str,
+    limit: Option<&LimitSpec>,
+) -> Result<HashMap<i64, Vec<i64>>, PullError> {
+    if entity_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let max_rows = resolve_limit(limit);
+    let eid_csv: String = entity_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+    let escaped_ident = ident.replace('\'', "''");
+
+    let query = format!(
+        "SELECT d.e, d.v_ref \
+         FROM mentat.datoms d \
+         JOIN mentat.schema s ON d.a = s.entid \
+         WHERE d.e IN ({eid_csv}) AND s.ident = '{escaped_ident}' \
+               AND d.value_type_tag = {ref_tag} AND d.added = true \
+         ORDER BY d.e",
+        ref_tag = type_tag::REF,
+    );
+
+    let mut result: HashMap<i64, Vec<i64>> = HashMap::new();
+    for row in client.select(&query, None, &[])? {
+        let eid: i64 = row.get(1)?.ok_or("Missing entity id")?;
+        let ref_id: i64 = row.get(2)?.ok_or("Missing v_ref")?;
+        let entry = result.entry(eid).or_default();
+        if entry.len() < max_rows {
+            entry.push(ref_id);
+        }
+    }
+
+    Ok(result)
+}
+
 /// Look up the cardinality of an attribute.
 fn lookup_cardinality(client: &SpiClient<'_>, ident: &str) -> Result<String, PullError> {
     let query = "SELECT cardinality::TEXT FROM mentat.schema WHERE ident = $1";
@@ -1223,13 +1363,22 @@ fn lookup_cardinality(client: &SpiClient<'_>, ident: &str) -> Result<String, Pul
     Ok("one".to_string())
 }
 
-/// Pull all non-ref attributes for an entity (used during recursive pulls).
-fn pull_all_attributes_simple(
+/// Pull all attributes for an entity during recursive pulls.
+///
+/// Non-ref attributes are included directly. Ref attributes that are NOT the
+/// recursive attribute itself are included as `{:db/id N}` stubs (or
+/// recursively expanded if the attribute is `:db/isComponent`). The recursive
+/// attribute is excluded because the caller handles it via its own
+/// `RecursiveSpec`.
+fn pull_all_attributes_for_recursive(
     client: &SpiClient<'_>,
     entity_id: i64,
+    recursive_forward_ident: &str,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
+    visited: &mut HashSet<i64>,
+    depth: usize,
 ) -> Result<(), PullError> {
-    let query = "SELECT s.ident, s.cardinality::TEXT, d.value_type_tag, \
+    let query = "SELECT s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                         d.v_ref, d.v_bool, d.v_long, d.v_double, \
                         d.v_text, d.v_keyword, \
                         EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
@@ -1240,18 +1389,50 @@ fn pull_all_attributes_simple(
                  WHERE d.e = $1 AND d.added = true \
                  ORDER BY s.ident";
 
+    // Collect rows first so we can process component refs after releasing the cursor.
+    struct AttrRow {
+        ident: String,
+        cardinality: String,
+        is_component: bool,
+        v_type_tag: i16,
+        decoded: serde_json::Value,
+        ref_id: Option<i64>,
+    }
+
+    let mut rows = Vec::new();
     for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
         let ident: String = row.get(1)?.ok_or("Missing ident")?;
         let cardinality: String = row.get(2)?.ok_or("Missing cardinality")?;
-        let v_type_tag: i16 = row.get(3)?.ok_or("Missing type tag")?;
+        let is_component: bool = row.get(3)?.unwrap_or(false);
+        let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
+        let (decoded, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
+        rows.push(AttrRow { ident, cardinality, is_component, v_type_tag, decoded, ref_id });
+    }
 
-        // Skip ref attributes -- the recursive spec handles those.
-        if v_type_tag == type_tag::REF {
+    for attr_row in &rows {
+        // Skip the recursive attribute -- the caller handles it.
+        if attr_row.ident == recursive_forward_ident {
             continue;
         }
 
-        let (decoded, _) = decode_row_typed_value(&row, v_type_tag, 4)?;
-        insert_value(result_map, &ident, decoded, &cardinality);
+        if attr_row.v_type_tag == type_tag::REF {
+            let rid = attr_row.ref_id.ok_or("Missing ref ID")?;
+            if attr_row.is_component && depth < MAX_RECURSION_DEPTH && !visited.contains(&rid) {
+                // Component ref: recursively pull all attributes.
+                let mut sub_map = serde_json::Map::new();
+                sub_map.insert(":db/id".to_string(), json!(rid));
+                visited.insert(rid);
+                pull_wildcard(client, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
+                let value = serde_json::Value::Object(sub_map);
+                insert_value(result_map, &attr_row.ident, value, &attr_row.cardinality);
+            } else {
+                // Non-component ref: return as {:db/id N}.
+                let ref_obj = json!({":db/id": rid});
+                insert_value(result_map, &attr_row.ident, ref_obj, &attr_row.cardinality);
+            }
+        } else {
+            insert_value(result_map, &attr_row.ident, attr_row.decoded.clone(), &attr_row.cardinality);
+        }
     }
 
     Ok(())
@@ -1903,6 +2084,536 @@ mod tests {
         let result = mentat_pull_many("[:person/name]", vec![])?;
         let arr = result.0.as_array().expect("should be array");
         assert!(arr.is_empty(), "empty input should produce empty output");
+        Ok(())
+    }
+
+    /// Test recursive pull with mixed attributes: name + recursive friends.
+    ///
+    /// Pattern: `[:person/name {:person/friend ...}]`
+    /// Verifies that at each level of recursion, the entity's :person/name
+    /// attribute is included alongside the recursive :person/friend traversal.
+    #[pg_test]
+    fn test_recursive_pull_with_mixed_attrs() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (500, ':person/friend', 'ref', 'one', false),
+             (501, ':person/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Chain: Alice -> Bob -> Carol (no cycle)
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (5000, 5001, 5002);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (5000, 501, 7, 'Alice', 9000, true),
+             (5001, 501, 7, 'Bob', 9000, true),
+             (5002, 501, 7, 'Carol', 9000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (5000, 500, 0, 5001, 9000, true),
+             (5001, 500, 0, 5002, 9000, true);",
+        )?;
+
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[{:person/friend ...}]', 5000)",
+        )?;
+
+        assert!(result.is_some(), "Mixed recursive pull should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let obj = json_val.as_object().expect("root should be object");
+            assert_eq!(obj.get(":db/id"), Some(&json!(5000)));
+
+            // Alice should have :person/name via recursive attr expansion
+            assert_eq!(
+                obj.get(":person/name"),
+                Some(&json!("Alice")),
+                "Root entity should have :person/name from pull_all_attributes_for_recursive"
+            );
+
+            // Follow to Bob
+            let bob = obj.get(":person/friend").expect("should have :person/friend");
+            let bob_obj = bob.as_object().expect("friend should be object");
+            assert_eq!(bob_obj.get(":db/id"), Some(&json!(5001)));
+            assert_eq!(
+                bob_obj.get(":person/name"),
+                Some(&json!("Bob")),
+                "Bob should have :person/name"
+            );
+
+            // Follow to Carol
+            let carol = bob_obj.get(":person/friend").expect("Bob should have :person/friend");
+            let carol_obj = carol.as_object().expect("Carol should be object");
+            assert_eq!(carol_obj.get(":db/id"), Some(&json!(5002)));
+            assert_eq!(
+                carol_obj.get(":person/name"),
+                Some(&json!("Carol")),
+                "Carol should have :person/name"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Test bounded recursion depth limit.
+    ///
+    /// Pattern: `{:person/friend 2}` on chain A -> B -> C -> D
+    /// Should stop at depth 2, so D should not appear.
+    #[pg_test]
+    fn test_recursive_bounded_depth() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (600, ':node/next', 'ref', 'one', false),
+             (601, ':node/label', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Chain: N0 -> N1 -> N2 -> N3
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (6000, 6001, 6002, 6003);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (6000, 601, 7, 'N0', 10000, true),
+             (6001, 601, 7, 'N1', 10000, true),
+             (6002, 601, 7, 'N2', 10000, true),
+             (6003, 601, 7, 'N3', 10000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (6000, 600, 0, 6001, 10000, true),
+             (6001, 600, 0, 6002, 10000, true),
+             (6002, 600, 0, 6003, 10000, true);",
+        )?;
+
+        // Depth 2: should get N0 -> N1 -> N2, but N2 should NOT have :node/next
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[{:node/next 2}]', 6000)",
+        )?;
+
+        assert!(result.is_some(), "Bounded depth pull should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let n0 = json_val.as_object().expect("root should be object");
+            assert_eq!(n0.get(":db/id"), Some(&json!(6000)));
+
+            let n1 = n0.get(":node/next")
+                .expect("N0 should have :node/next")
+                .as_object()
+                .expect("N1 should be object");
+            assert_eq!(n1.get(":db/id"), Some(&json!(6001)));
+            assert_eq!(n1.get(":node/label"), Some(&json!("N1")));
+
+            let n2 = n1.get(":node/next")
+                .expect("N1 should have :node/next")
+                .as_object()
+                .expect("N2 should be object");
+            assert_eq!(n2.get(":db/id"), Some(&json!(6002)));
+            assert_eq!(n2.get(":node/label"), Some(&json!("N2")));
+
+            // N2 should NOT have :node/next because we hit depth limit 2.
+            assert!(
+                n2.get(":node/next").is_none(),
+                "N2 should NOT have :node/next at depth 2, got: {:?}",
+                n2
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Test reverse recursive pulls.
+    ///
+    /// Pattern: `{:person/_friend ...}` follows reverse refs recursively.
+    #[pg_test]
+    fn test_reverse_recursive_pull() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (700, ':mgr/reports-to', 'ref', 'one', false),
+             (701, ':mgr/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Org chart: Employee(7002) reports-to Manager(7001) reports-to VP(7000)
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (7000, 7001, 7002);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (7000, 701, 7, 'VP', 11000, true),
+             (7001, 701, 7, 'Manager', 11000, true),
+             (7002, 701, 7, 'Employee', 11000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (7001, 700, 0, 7000, 11000, true),
+             (7002, 700, 0, 7001, 11000, true);",
+        )?;
+
+        // Reverse recursive: from VP, find who reports to them recursively
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[{:mgr/_reports-to 3}]', 7000)",
+        )?;
+
+        assert!(result.is_some(), "Reverse recursive pull should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let vp = json_val.as_object().expect("root should be object");
+            assert_eq!(vp.get(":db/id"), Some(&json!(7000)));
+
+            // VP should have reverse lookup results
+            let reports = vp.get(":mgr/_reports-to")
+                .expect("VP should have :mgr/_reports-to");
+            let reports_arr = reports.as_array()
+                .expect("reverse recursive should produce array");
+            assert!(!reports_arr.is_empty(), "VP should have at least one report");
+
+            // Find the manager in the reports
+            let manager = reports_arr.iter()
+                .find(|r| r.get(":db/id") == Some(&json!(7001)))
+                .expect("Manager should appear in VP's reports");
+            let manager_obj = manager.as_object().expect("manager should be object");
+            assert_eq!(
+                manager_obj.get(":mgr/name"),
+                Some(&json!("Manager")),
+                "Manager should have their name"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Test component with recursive combined: component attribute within a recursively-pulled entity.
+    ///
+    /// Setup: Person has :person/friend (recursive) and :person/address (component).
+    /// Pattern: `{:person/friend ...}` should at each level include addresses as expanded components.
+    #[pg_test]
+    fn test_component_within_recursive_pull() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (800, ':person/friend', 'ref', 'one', false),
+             (801, ':person/name', 'string', 'one', false),
+             (802, ':person/address', 'ref', 'one', true),
+             (803, ':address/city', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Alice(8000) -> addr(8010, city=NYC)
+        // Alice friends Bob(8001) -> addr(8011, city=LA)
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (8000, 8001, 8010, 8011);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (8000, 801, 7, 'Alice', 12000, true),
+             (8001, 801, 7, 'Bob', 12000, true),
+             (8010, 803, 7, 'NYC', 12000, true),
+             (8011, 803, 7, 'LA', 12000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (8000, 800, 0, 8001, 12000, true),
+             (8000, 802, 0, 8010, 12000, true),
+             (8001, 802, 0, 8011, 12000, true);",
+        )?;
+
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[{:person/friend ...}]', 8000)",
+        )?;
+
+        assert!(result.is_some(), "Component+recursive pull should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let alice = json_val.as_object().expect("root should be object");
+            assert_eq!(alice.get(":person/name"), Some(&json!("Alice")));
+
+            // Alice's address should be a fully-expanded component entity
+            let addr = alice.get(":person/address")
+                .expect("Alice should have :person/address");
+            let addr_obj = addr.as_object()
+                .expect("address should be object (component expanded)");
+            assert_eq!(
+                addr_obj.get(":address/city"),
+                Some(&json!("NYC")),
+                "Alice's address should have city=NYC"
+            );
+
+            // Bob should also have his address expanded as a component
+            let bob = alice.get(":person/friend")
+                .expect("Alice should have :person/friend");
+            let bob_obj = bob.as_object().expect("Bob should be object");
+            assert_eq!(bob_obj.get(":person/name"), Some(&json!("Bob")));
+
+            let bob_addr = bob_obj.get(":person/address")
+                .expect("Bob should have :person/address");
+            let bob_addr_obj = bob_addr.as_object()
+                .expect("Bob's address should be object (component expanded)");
+            assert_eq!(
+                bob_addr_obj.get(":address/city"),
+                Some(&json!("LA")),
+                "Bob's address should have city=LA"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Test pull_many with recursive map specs.
+    ///
+    /// Verifies that mentat_pull_many correctly handles map specs
+    /// by falling back to per-entity pulls.
+    #[pg_test]
+    fn test_pull_many_with_map_spec() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (900, ':team/members', 'ref', 'many', false),
+             (901, ':person/name', 'string', 'one', false),
+             (902, ':team/name', 'string', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e IN (9000, 9001, 9100, 9101);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
+             (9000, 902, 7, 'Alpha', 13000, true),
+             (9001, 902, 7, 'Beta', 13000, true),
+             (9100, 901, 7, 'Alice', 13000, true),
+             (9101, 901, 7, 'Bob', 13000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (9000, 900, 0, 9100, 13000, true),
+             (9001, 900, 0, 9101, 13000, true);",
+        )?;
+
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull_many('[:team/name {:team/members [:person/name]}]', ARRAY[9000, 9001])",
+        )?;
+
+        assert!(result.is_some(), "Pull many with map spec should succeed");
+        if let Some(JsonB(json_val)) = result {
+            let arr = json_val.as_array().expect("result should be array");
+            assert_eq!(arr.len(), 2, "should have 2 teams");
+
+            let alpha = arr[0].as_object().expect("first should be object");
+            assert_eq!(alpha.get(":team/name"), Some(&json!("Alpha")));
+            let members = alpha.get(":team/members")
+                .expect("Alpha should have members")
+                .as_array()
+                .expect("members should be array");
+            assert_eq!(members.len(), 1);
+            let alice = members[0].as_object().expect("member should be object");
+            assert_eq!(alice.get(":person/name"), Some(&json!("Alice")));
+
+            let beta = arr[1].as_object().expect("second should be object");
+            assert_eq!(beta.get(":team/name"), Some(&json!("Beta")));
+        }
+
+        Ok(())
+    }
+
+    /// Test that self-referencing entity (points to itself) terminates.
+    #[pg_test]
+    fn test_recursive_self_reference() -> spi::Result<()> {
+        Spi::run(
+            "CREATE SCHEMA IF NOT EXISTS mentat;
+             CREATE TABLE IF NOT EXISTS mentat.schema (
+                 entid BIGINT PRIMARY KEY,
+                 ident TEXT UNIQUE NOT NULL,
+                 value_type TEXT NOT NULL,
+                 cardinality TEXT NOT NULL,
+                 unique_identity BOOLEAN DEFAULT FALSE,
+                 index_av BOOLEAN DEFAULT FALSE,
+                 index_fulltext BOOLEAN DEFAULT FALSE,
+                 component BOOLEAN DEFAULT FALSE
+             );
+             CREATE TABLE IF NOT EXISTS mentat.datoms (
+                 e BIGINT NOT NULL,
+                 a BIGINT NOT NULL,
+                 value_type_tag SMALLINT NOT NULL,
+                 v_ref BIGINT,
+                 v_bool BOOLEAN,
+                 v_long BIGINT,
+                 v_double DOUBLE PRECISION,
+                 v_text TEXT,
+                 v_keyword TEXT,
+                 v_instant TIMESTAMPTZ,
+                 v_uuid UUID,
+                 v_bytes BYTEA,
+                 tx BIGINT NOT NULL,
+                 added BOOLEAN NOT NULL
+             );",
+        )?;
+
+        Spi::run(
+            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
+             (1000, ':node/self', 'ref', 'one', false),
+             (1001, ':node/val', 'long', 'one', false)
+             ON CONFLICT (ident) DO NOTHING;",
+        )?;
+
+        // Entity 10000 points to itself
+        Spi::run(
+            "DELETE FROM mentat.datoms WHERE e = 10000;
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
+             (10000, 1001, 2, 42, 14000, true);
+             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+             (10000, 1000, 0, 10000, 14000, true);",
+        )?;
+
+        let result = Spi::get_one::<JsonB>(
+            "SELECT mentat_pull('[{:node/self ...}]', 10000)",
+        )?;
+
+        assert!(result.is_some(), "Self-referencing pull should complete");
+        if let Some(JsonB(json_val)) = result {
+            let obj = json_val.as_object().expect("root should be object");
+            assert_eq!(obj.get(":db/id"), Some(&json!(10000)));
+            assert_eq!(obj.get(":node/val"), Some(&json!(42)));
+
+            // The :node/self should be a {:db/id 10000} stub (cycle)
+            let self_ref = obj.get(":node/self")
+                .expect("should have :node/self");
+            let self_obj = self_ref.as_object()
+                .expect(":node/self should be an object");
+            assert_eq!(
+                self_obj.get(":db/id"),
+                Some(&json!(10000)),
+                "Self-reference should be a {:db/id} stub"
+            );
+        }
+
         Ok(())
     }
 }

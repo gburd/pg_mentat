@@ -192,14 +192,14 @@ impl QueryComplexity {
 /// Uses `Spi::run` to issue SET LOCAL statements in the current
 /// transaction.  These settings revert automatically at transaction end.
 fn apply_optimizer_hints(
-    client: &pgrx::spi::SpiClient<'_>,
+    client: &mut pgrx::spi::SpiClient<'_>,
     complexity: &QueryComplexity,
 ) {
     // Set query timeout first (applies even if optimizer hints are disabled)
     let timeout_ms = crate::planner::query_timeout_ms();
     if timeout_ms > 0 {
         let timeout_sql = format!("SET LOCAL statement_timeout = '{}'", timeout_ms);
-        let _ = client.select(&timeout_sql, None, &[]);
+        let _ = client.update(&timeout_sql, None, &[]);
     }
 
     if !crate::planner::optimizer_hints_enabled() {
@@ -209,7 +209,7 @@ fn apply_optimizer_hints(
     // For any Mentat query that touches the datoms table, discourage
     // sequential scans so the planner prefers the covering indexes
     // (EAVT, AEVT, AVET, VAET).
-    let _ = client.select("SET LOCAL enable_seqscan = off", None, &[]);
+    let _ = client.update("SET LOCAL enable_seqscan = off", None, &[]);
 
     // For complex queries, bump work_mem to allow larger in-memory
     // sorts and hash tables.
@@ -219,7 +219,7 @@ fn apply_optimizer_hints(
         // (digits optionally followed by a unit suffix).
         if work_mem.chars().all(|c| c.is_ascii_alphanumeric()) {
             let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
-            let _ = client.select(&set_sql, None, &[]);
+            let _ = client.update(&set_sql, None, &[]);
         }
     }
 }
@@ -518,14 +518,14 @@ pub fn mentat_query(
     }
 
     let params = builder.params;
-    let results = Spi::connect(|client| {
+    let results = Spi::connect_mut(|client| {
         // Apply optimizer hints (SET LOCAL) before executing the query.
         // These are transaction-local and revert automatically.
-        apply_optimizer_hints(&client, &complexity);
+        apply_optimizer_hints(client, &complexity);
 
         let mut rows_json = Vec::new();
 
-        for row in execute_cached_query(&client, &sql_query, &params)? {
+        for row in execute_cached_query(client, &sql_query, &params)? {
             let mut row_values = Vec::new();
 
             for (idx, _var) in find_vars.iter().enumerate() {
@@ -1180,6 +1180,7 @@ fn build_sql_from_datalog(
 // ============================================================================
 
 /// Represents a fulltext search join with its FROM and WHERE fragments.
+#[derive(Clone)]
 struct FtsJoin {
     from_fragment: String,
     where_parts: Vec<String>,

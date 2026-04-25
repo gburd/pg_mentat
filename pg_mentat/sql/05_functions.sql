@@ -47,7 +47,7 @@ BEGIN
     tx_id := nextval('mentat.partition_tx_seq');
 
     -- Create transaction record
-    INSERT INTO mentat.transactions (tx_id, instant)
+    INSERT INTO mentat.transactions (tx, tx_instant)
     VALUES (tx_id, CURRENT_TIMESTAMP);
 
     RETURN tx_id;

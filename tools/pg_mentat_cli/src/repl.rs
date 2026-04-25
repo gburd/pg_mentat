@@ -52,7 +52,7 @@ impl Repl {
                 // Colons are NOT word-break chars so :person/name completes as one word
                 r.set_word_break_chars(" \t\n!\"#$%&'(){}*+,-;<=>?@[\\]^`");
             }
-            iface.set_completer(Arc::clone(&completer));
+            iface.set_completer(Arc::clone(&completer) as Arc<dyn linefeed::Completer<linefeed::DefaultTerminal>>);
             // Load history
             let p = history_file_path();
             let _ = iface.load_history(&p);

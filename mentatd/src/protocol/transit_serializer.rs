@@ -76,9 +76,34 @@ fn value_to_transit_json(value: &ResponseValue, output: &mut String) {
                 write!(output, "{}", i).ok();
             }
         }
+        ResponseValue::Float(f) => {
+            // Transit encodes floats as JSON numbers
+            if f.is_finite() {
+                if f.fract() == 0.0 {
+                    write!(output, "{:.1}", f).ok();
+                } else {
+                    write!(output, "{}", f).ok();
+                }
+            } else if f.is_nan() {
+                output.push_str("\"~zNaN\"");
+            } else if f.is_sign_positive() {
+                output.push_str("\"~zINF\"");
+            } else {
+                output.push_str("\"~z-INF\"");
+            }
+        }
         ResponseValue::Keyword(k) => {
             // Keywords use the ~: prefix in Transit
             write!(output, "\"~:{}\"", k).ok();
+        }
+        ResponseValue::Instant(micros) => {
+            // Transit instant: "~m<millis>" (milliseconds since epoch)
+            let millis = micros / 1000;
+            write!(output, "\"~m{}\"", millis).ok();
+        }
+        ResponseValue::Uuid(u) => {
+            // Transit UUID: "~u<uuid-string>"
+            write!(output, "\"~u{}\"", u).ok();
         }
         ResponseValue::List(items) => {
             // Lists are tagged arrays: ["~#list", [items...]]
@@ -197,8 +222,23 @@ fn value_to_msgpack(value: &ResponseValue, buf: &mut Vec<u8>) {
             // 64-bit ints natively, so we encode them directly.
             msgpack_write_i64(buf, *i);
         }
+        ResponseValue::Float(f) => {
+            // Encode as msgpack float64
+            msgpack_write_f64(buf, *f);
+        }
         ResponseValue::Keyword(k) => {
             let tagged = format!("~:{k}");
+            msgpack_write_str(buf, &tagged);
+        }
+        ResponseValue::Instant(micros) => {
+            // Transit instant: "~m<millis>" as a tagged string
+            let millis = micros / 1000;
+            let tagged = format!("~m{millis}");
+            msgpack_write_str(buf, &tagged);
+        }
+        ResponseValue::Uuid(u) => {
+            // Transit UUID: "~u<uuid-string>"
+            let tagged = format!("~u{u}");
             msgpack_write_str(buf, &tagged);
         }
         ResponseValue::List(items) => {
@@ -338,6 +378,11 @@ fn msgpack_write_i64(buf: &mut Vec<u8>, val: i64) {
         buf.push(0xd3);
         buf.extend_from_slice(&val.to_be_bytes());
     }
+}
+
+fn msgpack_write_f64(buf: &mut Vec<u8>, val: f64) {
+    buf.push(0xcb); // float 64 format
+    buf.extend_from_slice(&val.to_be_bytes());
 }
 
 fn msgpack_write_u64(buf: &mut Vec<u8>, val: u64) {

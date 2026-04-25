@@ -373,3 +373,108 @@
         (let [result (decode-transit-json (:body response))]
           (is (contains? result :error)
               "Malformed Transit+MessagePack should produce an :error response"))))))
+
+;; ===================================================================
+;; 6. Transit encoding of transaction reports
+;; ===================================================================
+
+(deftest test-transit-json-transact-report-structure
+  (testing "Transaction report via Transit+JSON contains all Datomic fields"
+    ;; First create a database and connect
+    (let [create-body (encode-transit-json {:op :create-db
+                                            :args {:db-name "transit-tx-test"}})
+          _ (post-raw "/" create-body
+                      "application/transit+json"
+                      "application/transit+json")
+          conn-body (encode-transit-json {:op :connect
+                                          :args {:db-name "transit-tx-test"}})
+          conn-resp (post-raw "/" conn-body
+                              "application/transit+json"
+                              "application/transit+json")]
+      (when (and (= 200 (:status conn-resp)) (:body conn-resp))
+        (let [conn-result (decode-transit-json (:body conn-resp))
+              conn-id (get-in conn-result [:result :connection-id])]
+          (when conn-id
+            ;; Install schema
+            (let [schema-body (encode-transit-json
+                                {:op :transact
+                                 :args {:connection-id (str conn-id)
+                                        :tx-data "[{:db/ident :test/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]"}})
+                  _ (post-raw "/" schema-body
+                              "application/transit+json"
+                              "application/transit+json")
+                  ;; Now transact data and check the report
+                  tx-body (encode-transit-json
+                            {:op :transact
+                             :args {:connection-id (str conn-id)
+                                    :tx-data "[{:db/id \"temp\" :test/name \"Hello\"}]"}})
+                  tx-resp (post-raw "/" tx-body
+                                    "application/transit+json"
+                                    "application/transit+json")]
+              (when (and (= 200 (:status tx-resp)) (:body tx-resp))
+                (let [tx-result (decode-transit-json (:body tx-resp))
+                      report (:result tx-result)]
+                  (is (map? report) "Transaction result should be a map")
+                  (when (map? report)
+                    (is (contains? report :db-before) "Report should contain :db-before")
+                    (is (contains? report :db-after) "Report should contain :db-after")
+                    (is (contains? report :tx-data) "Report should contain :tx-data")
+                    (is (contains? report :tempids) "Report should contain :tempids")
+                    ;; Verify tempids have string keys via Transit
+                    (when-let [tempids (:tempids report)]
+                      (is (map? tempids) ":tempids should be a map")
+                      (when (map? tempids)
+                        (is (every? string? (keys tempids))
+                            (str "tempid keys should be strings, got: "
+                                 (mapv type (keys tempids)))))))))
+              ;; Cleanup
+              (let [del-body (encode-transit-json {:op :delete-db
+                                                    :args {:db-name "transit-tx-test"}})]
+                (post-raw "/" del-body
+                          "application/transit+json"
+                          "application/transit+json")))))))))
+
+(deftest test-transit-msgpack-transact-report-structure
+  (testing "Transaction report via Transit+MessagePack contains all Datomic fields"
+    (let [create-body (encode-transit-msgpack {:op :create-db
+                                               :args {:db-name "transit-mp-tx-test"}})
+          _ (post-raw "/" create-body
+                      "application/transit+msgpack"
+                      "application/transit+msgpack")
+          conn-body (encode-transit-msgpack {:op :connect
+                                             :args {:db-name "transit-mp-tx-test"}})
+          conn-resp (post-raw "/" conn-body
+                              "application/transit+msgpack"
+                              "application/transit+msgpack")]
+      (when (and (= 200 (:status conn-resp)) (:body conn-resp))
+        (let [conn-result (decode-transit-msgpack (:body conn-resp))
+              conn-id (get-in conn-result [:result :connection-id])]
+          (when conn-id
+            (let [schema-body (encode-transit-msgpack
+                                {:op :transact
+                                 :args {:connection-id (str conn-id)
+                                        :tx-data "[{:db/ident :test/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]"}})
+                  _ (post-raw "/" schema-body
+                              "application/transit+msgpack"
+                              "application/transit+msgpack")
+                  tx-body (encode-transit-msgpack
+                            {:op :transact
+                             :args {:connection-id (str conn-id)
+                                    :tx-data "[{:db/id \"temp\" :test/name \"World\"}]"}})
+                  tx-resp (post-raw "/" tx-body
+                                    "application/transit+msgpack"
+                                    "application/transit+msgpack")]
+              (when (and (= 200 (:status tx-resp)) (:body tx-resp))
+                (let [tx-result (decode-transit-msgpack (:body tx-resp))
+                      report (:result tx-result)]
+                  (is (map? report) "Transaction result should be a map")
+                  (when (map? report)
+                    (is (contains? report :db-before) "Report should contain :db-before")
+                    (is (contains? report :db-after) "Report should contain :db-after")
+                    (is (contains? report :tx-data) "Report should contain :tx-data")
+                    (is (contains? report :tempids) "Report should contain :tempids"))))
+              (let [del-body (encode-transit-msgpack {:op :delete-db
+                                                      :args {:db-name "transit-mp-tx-test"}})]
+                (post-raw "/" del-body
+                          "application/transit+msgpack"
+                          "application/transit+msgpack")))))))))

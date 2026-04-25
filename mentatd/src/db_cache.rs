@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ pub struct DbSnapshot {
 /// Each snapshot captures a point-in-time view of the database (basis-t)
 /// and can be reused across multiple queries to avoid HTTP overhead.
 pub struct DbValueCache {
-    snapshots: Arc<Mutex<HashMap<String, DbSnapshot>>>,
+    snapshots: Arc<RwLock<HashMap<String, DbSnapshot>>>,
     ttl: Duration,
 }
 
@@ -26,7 +26,7 @@ impl DbValueCache {
     /// Snapshots expire after the TTL and are cleaned up periodically.
     pub fn new(ttl: Duration) -> Self {
         Self {
-            snapshots: Arc::new(Mutex::new(HashMap::new())),
+            snapshots: Arc::new(RwLock::new(HashMap::new())),
             ttl,
         }
     }
@@ -42,7 +42,7 @@ impl DbValueCache {
             created_at: Instant::now(),
         };
 
-        let mut snapshots = self.snapshots.lock().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap();
         snapshots.insert(db_id.clone(), snapshot);
         db_id
     }
@@ -51,16 +51,30 @@ impl DbValueCache {
     ///
     /// Returns None if the snapshot doesn't exist or has expired.
     pub fn get_basis_t(&self, db_id: &str) -> Option<i64> {
-        let mut snapshots = self.snapshots.lock().unwrap();
+        // First try with a read lock (common case)
+        {
+            let snapshots = self.snapshots.read().unwrap();
+            if let Some(snapshot) = snapshots.get(db_id) {
+                if snapshot.created_at.elapsed() < self.ttl {
+                    return Some(snapshot.basis_t);
+                }
+                // Expired, need write lock to remove
+            } else {
+                return None; // Not found
+            }
+        }
 
-        // Check if snapshot exists and is still valid
+        // If we get here, the snapshot expired and needs removal
+        let mut snapshots = self.snapshots.write().unwrap();
+
+        // Double-check it's still expired
         if let Some(snapshot) = snapshots.get(db_id) {
             if snapshot.created_at.elapsed() < self.ttl {
+                // Race condition: another thread might have updated it
                 return Some(snapshot.basis_t);
-            } else {
-                // Expired - remove it
-                snapshots.remove(db_id);
             }
+            // Remove expired snapshot
+            snapshots.remove(db_id);
         }
         None
     }
@@ -69,7 +83,7 @@ impl DbValueCache {
     ///
     /// This should be called periodically by a background task.
     pub fn cleanup_expired(&self) {
-        let mut snapshots = self.snapshots.lock().unwrap();
+        let mut snapshots = self.snapshots.write().unwrap();
         let now = Instant::now();
 
         snapshots.retain(|_, snapshot| {
@@ -79,12 +93,12 @@ impl DbValueCache {
 
     /// Get the number of active snapshots.
     pub fn len(&self) -> usize {
-        self.snapshots.lock().unwrap().len()
+        self.snapshots.read().unwrap().len()
     }
 
     /// Clear all snapshots.
     pub fn clear(&self) {
-        self.snapshots.lock().unwrap().clear();
+        self.snapshots.write().unwrap().clear();
     }
 }
 

@@ -5,19 +5,20 @@ use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use std::collections::BTreeMap;
 
-/// Entids for built-in schema attributes (from bootstrap data in lib.rs bootstrap_schema()).
+/// Entids for built-in schema attributes (from bootstrap data in 06_bootstrap_data.sql).
 mod bootstrap_entids {
-    pub const DB_IDENT: i64 = 1;
-    pub const DB_VALUE_TYPE: i64 = 2;
-    pub const DB_CARDINALITY: i64 = 3;
-    pub const DB_UNIQUE: i64 = 4;
+    pub const DB_IDENT: i64 = 10;
+    pub const DB_VALUE_TYPE: i64 = 11;
+    pub const DB_CARDINALITY: i64 = 12;
+    pub const DB_UNIQUE: i64 = 13;
+    pub const DB_INDEX: i64 = 14;
+    pub const DB_FULLTEXT: i64 = 15;
+    pub const DB_COMPONENT: i64 = 16;
+    pub const DB_NO_HISTORY: i64 = 17;
+    pub const DB_IS_COMPONENT: i64 = 18;
     #[allow(dead_code)]
-    pub const DB_DOC: i64 = 5;
-    pub const DB_IS_COMPONENT: i64 = 6;
-    pub const DB_FULLTEXT: i64 = 7;
-    pub const DB_INDEX: i64 = 8;
-    pub const DB_NO_HISTORY: i64 = 9;
-    pub const DB_TX_INSTANT: i64 = 10;
+    pub const DB_DOC: i64 = 19;
+    pub const DB_TX_INSTANT: i64 = 50;
 }
 
 /// Schema attribute properties collected during the first pass.
@@ -251,11 +252,14 @@ fn execute_transaction_body(
 
     let mut tempid_map: BTreeMap<String, i64> = BTreeMap::new();
     let mut schema_builders: BTreeMap<i64, SchemaBuilder> = BTreeMap::new();
+    // Track entity IDs allocated for map entities (by index) so Pass 2 reuses
+    // the same IDs instead of calling nextval again.
+    let mut map_entity_ids: std::collections::HashMap<usize, i64> = std::collections::HashMap::new();
 
     // --- Pass 1: Scan for schema definitions ---
     // Only process :db/ident, :db/valueType, :db/cardinality, etc. assertions.
     // Allocate tempids encountered so they're stable across passes.
-    for entity_value in entities {
+    for (entity_idx, entity_value) in entities.iter().enumerate() {
         match entity_value {
             edn::Value::Vector(ref entity_vec) if entity_vec.len() >= 4 => {
                 // Only process :db/add
@@ -278,18 +282,21 @@ fn execute_transaction_body(
                 collect_schema_assertion(e, a, &entity_vec[3], &mut schema_builders);
             }
             edn::Value::Map(ref map) => {
-                // Resolve entity for stable tempid allocation
+                // Resolve entity for stable tempid allocation.
+                // Store the allocated ID so Pass 2 reuses it.
                 let e = if let Some(id_val) =
                     map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
                 {
                     resolve_entity_place(id_val, &mut tempid_map)?
                 } else {
-                    Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
+                    let id = Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
                         .ok()
                         .flatten()
                         .ok_or_else(|| MentatError::AllocationFailed {
                             partition: "db.part/user".to_string(),
-                        })?
+                        })?;
+                    map_entity_ids.insert(entity_idx, id);
+                    id
                 };
 
                 for (attr_key, attr_value) in map {
@@ -328,7 +335,7 @@ fn execute_transaction_body(
     // Now all idents (both bootstrap and newly-defined) are resolvable.
     let mut pending_datoms: Vec<PendingDatom> = Vec::new();
 
-    for entity_value in entities {
+    for (entity_idx, entity_value) in entities.iter().enumerate() {
         match entity_value {
             // Handle :db/retractEntity - format: [:db/retractEntity entity-id]
             edn::Value::Vector(ref entity_vec)
@@ -507,10 +514,14 @@ fn execute_transaction_body(
                 });
             }
             edn::Value::Map(ref map) => {
+                // Reuse entity ID from Pass 1 if one was pre-allocated,
+                // otherwise allocate a new one (for non-schema map entities).
                 let e = if let Some(id_val) =
                     map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
                 {
                     resolve_entity_place(id_val, &mut tempid_map)?
+                } else if let Some(&pre_allocated) = map_entity_ids.get(&entity_idx) {
+                    pre_allocated
                 } else {
                     Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
                         .ok()
@@ -730,7 +741,7 @@ fn collect_schema_assertion(
                 builders.entry(entity_id).or_default().fulltext = Some(*b);
             }
         }
-        bootstrap_entids::DB_IS_COMPONENT => {
+        bootstrap_entids::DB_COMPONENT | bootstrap_entids::DB_IS_COMPONENT => {
             if let edn::Value::Boolean(b) = value {
                 builders.entry(entity_id).or_default().component = Some(*b);
             }
@@ -897,30 +908,19 @@ fn resolve_entity_place(
                 }.into());
             }
 
-            let (v_bytes, v_type_tag) = encode_value(&vec[1])?;
+            let typed_val = encode_value(&vec[1])?;
 
-            // Query for entity with this unique attribute value
-            let eid = Spi::get_one_with_args::<i64>(
-                "SELECT e FROM mentat.datoms \
-                 WHERE a = $1 AND v = $2 AND value_type_tag = $3 AND added = true \
-                 LIMIT 1",
-                &[
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(v_bytes),
-                    DatumWithOid::from(v_type_tag),
-                ],
-            )
-            .ok()
-            .flatten()
-            .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
-                let attr_ident_display = crate::cache::get_cache()
-                    .get_ident(a)
-                    .unwrap_or_else(|| format!("entid:{}", a));
-                MentatError::LookupRefNotFound {
-                    attr: attr_ident_display,
-                    message: "Ensure an entity with this attribute value has been transacted.".to_string(),
-                }.into()
-            })?;
+            // Query for entity with this unique attribute value using typed columns
+            let eid = check_unique_typed_value(a, &typed_val)?
+                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+                    let attr_ident_display = crate::cache::get_cache()
+                        .get_ident(a)
+                        .unwrap_or_else(|| format!("entid:{}", a));
+                    MentatError::LookupRefNotFound {
+                        attr: attr_ident_display,
+                        message: "Ensure an entity with this attribute value has been transacted.".to_string(),
+                    }.into()
+                })?;
 
             Ok(eid)
         }
@@ -1310,13 +1310,26 @@ fn compute_typed_value_hash(v: &TypedValue) -> u64 {
 }
 
 /// Format a TypedValue into a JSON-compatible representation for tx-data.
+///
+/// Uses type-tagged objects for types that JSON cannot natively distinguish:
+/// - Instants:  `{"_t":"inst","v":<micros>}` (microseconds since Unix epoch)
+/// - UUIDs:     `{"_t":"uuid","v":"<uuid-string>"}`
+/// - Doubles:   `{"_t":"double","v":<number>}`
+/// - Keywords:  Encoded as `":keyword"` (prefix `:` allows detection)
+/// - Refs, Booleans, Longs, Text: Plain JSON values (natively distinguishable)
 fn format_typed_value_for_json(v: &TypedValue) -> String {
     match v {
         TypedValue::Ref(id) => format!("{}", id),
         TypedValue::Boolean(b) => format!("{}", b),
         TypedValue::Long(n) => format!("{}", n),
-        TypedValue::Double(f) => format!("{}", f),
-        TypedValue::Instant(micros) => format!("{}", micros),
+        TypedValue::Double(f) => {
+            // Type-tagged to distinguish from integers
+            format!("{{\"_t\":\"double\",\"v\":{}}}", f)
+        }
+        TypedValue::Instant(micros) => {
+            // Type-tagged instant with microseconds since epoch
+            format!("{{\"_t\":\"inst\",\"v\":{}}}", micros)
+        }
         TypedValue::Text(s) => {
             let escaped = s
                 .replace('\\', "\\\\")
@@ -1327,7 +1340,10 @@ fn format_typed_value_for_json(v: &TypedValue) -> String {
             format!("\"{}\"", escaped)
         }
         TypedValue::Keyword(s) => format!("\":{}\"", s),
-        TypedValue::Uuid(u) => format!("\"{}\"", u),
+        TypedValue::Uuid(u) => {
+            // Type-tagged UUID
+            format!("{{\"_t\":\"uuid\",\"v\":\"{}\"}}", u)
+        }
         TypedValue::Bytes(b) => {
             let hex: String = b.iter().map(|byte| format!("{:02x}", byte)).collect();
             format!("\"{}\"", hex)
@@ -1607,7 +1623,7 @@ fn read_typed_value_from_row(
         }
         10 => {
             let v: pgrx::Uuid = row.get(offset + 8)?.ok_or("Missing v_uuid")?;
-            let bytes: [u8; 16] = v.as_bytes().try_into().map_err(|_| "Invalid UUID")?;
+            let bytes: [u8; 16] = *v.as_bytes();
             Ok(TypedValue::Uuid(uuid::Uuid::from_bytes(bytes)))
         }
         11 => {

@@ -33,8 +33,8 @@ CREATE TABLE mentat.schema (
 -- Transaction metadata
 -- Stores transaction attributes (timestamp, user info, etc.)
 CREATE TABLE mentat.transactions (
-    tx_id BIGINT PRIMARY KEY,
-    instant TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    tx BIGINT PRIMARY KEY,
+    tx_instant TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Datoms: The core fact table
@@ -73,7 +73,7 @@ CREATE TABLE mentat.datoms (
 
     -- Reference to transactions table
     CONSTRAINT fk_datoms_tx FOREIGN KEY (tx)
-        REFERENCES mentat.transactions(tx_id),
+        REFERENCES mentat.transactions(tx),
 
     -- Reference to schema table for attribute
     CONSTRAINT fk_datoms_attr FOREIGN KEY (a)
@@ -106,7 +106,13 @@ CREATE TABLE mentat.transaction_attrs (
     PRIMARY KEY (tx_id, attr_entid),
 
     CONSTRAINT fk_tx_attrs_tx FOREIGN KEY (tx_id)
-        REFERENCES mentat.transactions(tx_id),
+        REFERENCES mentat.transactions(tx),
     CONSTRAINT fk_tx_attrs_attr FOREIGN KEY (attr_entid)
         REFERENCES mentat.schema(entid)
 );
+
+-- Sequences for lock-free entity ID allocation (replaces UPDATE-based locking)
+-- CACHE pre-allocates IDs per backend connection for high concurrency without row locks.
+CREATE SEQUENCE mentat.partition_db_seq START WITH 100 CACHE 10;
+CREATE SEQUENCE mentat.partition_user_seq START WITH 10000 CACHE 100;
+CREATE SEQUENCE mentat.partition_tx_seq START WITH 1000001 CACHE 100;

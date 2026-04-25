@@ -659,3 +659,315 @@
                            db)]
           (is (= #{[99]} results)
               "Upsert should update Alice's age to 99"))))))
+
+;; ===================================================================
+;; 10. Transaction report structure (Datomic wire format)
+;; ===================================================================
+
+(deftest test-tx-report-contains-db-before
+  (testing "transaction report contains :db-before with :basis-t"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:person/name  "Frank"
+                                      :person/email "frank@example.com"}])]
+          (is (contains? tx :db-before) "Report should contain :db-before")
+          (when-let [db-before (:db-before tx)]
+            (is (map? db-before) ":db-before should be a map")
+            (is (contains? db-before :basis-t)
+                ":db-before should have :basis-t")))))))
+
+(deftest test-tx-report-contains-db-after
+  (testing "transaction report contains :db-after with :basis-t"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:person/name  "Grace"
+                                      :person/email "grace@example.com"}])]
+          (is (contains? tx :db-after) "Report should contain :db-after")
+          (when-let [db-after (:db-after tx)]
+            (is (map? db-after) ":db-after should be a map")
+            (is (contains? db-after :basis-t)
+                ":db-after should have :basis-t")))))))
+
+(deftest test-tx-report-basis-t-increases
+  (testing ":db-after :basis-t should be greater than :db-before :basis-t"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:person/name  "Hank"
+                                      :person/email "hank@example.com"}])]
+          (let [t-before (get-in tx [:db-before :basis-t])
+                t-after  (get-in tx [:db-after :basis-t])]
+            (when (and t-before t-after)
+              (is (> t-after t-before)
+                  (str ":db-after.basis-t (" t-after ") should be > :db-before.basis-t (" t-before ")")))))))))
+
+(deftest test-tx-report-tx-data-structure
+  (testing "tx-data contains vectors of [e a v tx added]"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:person/name  "Ivy"
+                                      :person/email "ivy@example.com"}])]
+          (is (seq (:tx-data tx)) ":tx-data should not be empty")
+          (doseq [datom (:tx-data tx)]
+            (is (or (vector? datom) (sequential? datom))
+                (str "Each datom should be a vector, got: " (type datom)))
+            (when (sequential? datom)
+              (is (= 5 (count datom))
+                  (str "Each datom should have 5 elements [e a v tx added], got "
+                       (count datom) ": " datom)))))))))
+
+(deftest test-tx-report-tempids-string-keys
+  (testing "tempids map uses string keys (not keyword keys)"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:db/id        "test-person"
+                                      :person/name  "Jack"
+                                      :person/email "jack@example.com"}])]
+          (is (contains? tx :tempids) "Report should contain :tempids")
+          (is (map? (:tempids tx)) ":tempids should be a map")
+          (is (contains? (:tempids tx) "test-person")
+              "tempids should have string key 'test-person'")
+          (is (number? (get (:tempids tx) "test-person"))
+              "tempid value should resolve to a number"))))))
+
+(deftest test-tx-report-complete-datomic-format
+  (testing "transaction report has all 4 required Datomic fields"
+    (with-fresh-db
+      (fn [conn]
+        (let [tx @(d/transact conn [{:db/id        "full-test"
+                                      :person/name  "Kim"
+                                      :person/email "kim@example.com"
+                                      :person/age   27}])]
+          (is (map? tx) "Transaction result should be a map")
+          ;; All 4 fields must be present
+          (is (contains? tx :db-before) "Missing :db-before")
+          (is (contains? tx :db-after) "Missing :db-after")
+          (is (contains? tx :tx-data) "Missing :tx-data")
+          (is (contains? tx :tempids) "Missing :tempids")
+          ;; Structural checks
+          (is (map? (:db-before tx)) ":db-before should be a map")
+          (is (map? (:db-after tx)) ":db-after should be a map")
+          (is (sequential? (:tx-data tx)) ":tx-data should be sequential")
+          (is (map? (:tempids tx)) ":tempids should be a map")
+          ;; tempid resolution
+          (is (pos? (get (:tempids tx) "full-test"))
+              "Tempid 'full-test' should resolve to a positive entity id"))))))
+
+;; ===================================================================
+;; 11. Recursive Pull API
+;; ===================================================================
+
+(def recursive-pull-schema
+  "Extended schema for recursive pull and component traversal tests."
+  [{:db/ident       :person/name
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one}
+   {:db/ident       :person/friend
+    :db/valueType   :db.type/ref
+    :db/cardinality :db.cardinality/one
+    :db/doc         "Single best friend (cardinality one, for chain testing)"}
+   {:db/ident       :person/friends
+    :db/valueType   :db.type/ref
+    :db/cardinality :db.cardinality/many
+    :db/doc         "Multiple friends (cardinality many)"}
+   {:db/ident       :person/address
+    :db/valueType   :db.type/ref
+    :db/cardinality :db.cardinality/one
+    :db/isComponent true
+    :db/doc         "Component ref: address is owned by the person"}
+   {:db/ident       :address/city
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one}
+   {:db/ident       :address/zip
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one}])
+
+(defn with-recursive-db
+  "Helper that creates a fresh database with recursive-pull-schema,
+   seeds a chain of people, and calls (f conn)."
+  [f]
+  (let [uri (fresh-uri)]
+    (d/create-database uri)
+    (try
+      (let [conn (d/connect uri)]
+        @(d/transact conn recursive-pull-schema)
+        ;; Chain: Alice -> Bob -> Carol (via :person/friend)
+        ;; Alice and Bob have component addresses.
+        ;; Alice also has friends [Bob, Carol] via :person/friends (many).
+        @(d/transact conn
+           [{:db/id          "alice"
+             :person/name    "Alice"
+             :person/friend  "bob"
+             :person/friends #{"bob" "carol"}
+             :person/address {:db/id "alice-addr"
+                              :address/city "NYC"
+                              :address/zip  "10001"}}
+            {:db/id          "bob"
+             :person/name    "Bob"
+             :person/friend  "carol"
+             :person/address {:db/id "bob-addr"
+                              :address/city "LA"
+                              :address/zip  "90001"}}
+            {:db/id       "carol"
+             :person/name "Carol"}])
+        (f conn))
+      (finally
+        (d/delete-database uri)))))
+
+(deftest test-pull-recursive-unbounded
+  (testing "pull with unbounded recursion {:person/friend ...} follows chain"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[{:person/friend ...}] alice-id)]
+          (is (map? result) "Recursive pull should return a map")
+          ;; Alice -> Bob -> Carol chain
+          (is (some? (:person/friend result)) "Alice should have :person/friend")
+          (when-let [bob (:person/friend result)]
+            (is (= "Bob" (:person/name bob)) "Friend should be Bob")
+            (when-let [carol (:person/friend bob)]
+              (is (= "Carol" (:person/name carol)) "Bob's friend should be Carol")
+              ;; Carol has no friend, so recursion ends
+              (is (nil? (:person/friend carol))
+                  "Carol should have no :person/friend (end of chain)"))))))))
+
+(deftest test-pull-recursive-bounded
+  (testing "pull with bounded recursion {:person/friend 1} limits depth"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[{:person/friend 1}] alice-id)]
+          ;; Depth 1: should get Alice -> Bob, but Bob should NOT recurse further
+          (is (some? (:person/friend result)) "Alice should have :person/friend")
+          (when-let [bob (:person/friend result)]
+            (is (= "Bob" (:person/name bob)) "Friend should be Bob")
+            ;; At depth 1, Bob's :person/friend should either be absent or a {:db/id} stub
+            (let [bob-friend (:person/friend bob)]
+              (is (or (nil? bob-friend)
+                      (and (map? bob-friend)
+                           (contains? bob-friend :db/id)
+                           (nil? (:person/name bob-friend))))
+                  "At depth 1, Bob's friend should be nil or a {:db/id} stub"))))))))
+
+(deftest test-pull-recursive-cycle-detection
+  (testing "recursive pull detects cycles and terminates"
+    (with-recursive-db
+      (fn [conn]
+        ;; Create a cycle: Carol -> Alice
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              carol-id (ffirst (d/q '[:find ?e :where [?e :person/name "Carol"]] db))]
+          @(d/transact conn [[:db/add carol-id :person/friend alice-id]])
+          ;; Now: Alice -> Bob -> Carol -> Alice (cycle)
+          (let [fresh-db (d/db conn)
+                result   (d/pull fresh-db '[{:person/friend ...}] alice-id)]
+            ;; Should complete without hanging
+            (is (map? result) "Cyclic recursive pull should complete")
+            ;; The cycle should be broken with a {:db/id} stub
+            (when-let [bob (:person/friend result)]
+              (when-let [carol (:person/friend bob)]
+                (let [cycle-ref (:person/friend carol)]
+                  (is (or (nil? cycle-ref)
+                          (and (map? cycle-ref)
+                               (= alice-id (:db/id cycle-ref))
+                               ;; Cycle stub should NOT have :person/name
+                               (nil? (:person/name cycle-ref))))
+                      "Cycle should be broken with {:db/id} stub"))))))))))
+
+(deftest test-pull-recursive-cardinality-many
+  (testing "recursive pull with cardinality-many {:person/friends ...}"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[{:person/friends ...}] alice-id)]
+          (is (map? result) "Recursive pull-many should return a map")
+          (when-let [friends (:person/friends result)]
+            (is (sequential? friends) ":person/friends should be a vector/list")
+            (is (>= (count friends) 2) "Alice should have at least 2 friends")
+            ;; Each friend should have :person/name pulled
+            (is (every? :person/name friends)
+                "Each friend should have :person/name")))))))
+
+;; ===================================================================
+;; 12. Component traversal
+;; ===================================================================
+
+(deftest test-pull-component-auto-expand
+  (testing "pull with [*] auto-expands component refs"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[*] alice-id)]
+          ;; :person/address is a component -- should be fully expanded, not {:db/id N}
+          (when-let [addr (:person/address result)]
+            (is (map? addr) "Component address should be a map")
+            (is (= "NYC" (:address/city addr))
+                "Component address should have :address/city expanded")
+            (is (= "10001" (:address/zip addr))
+                "Component address should have :address/zip expanded")))))))
+
+(deftest test-pull-component-explicit-attribute
+  (testing "pull with explicit :person/address auto-expands because it's a component"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[:person/name :person/address] alice-id)]
+          (is (= "Alice" (:person/name result)))
+          (when-let [addr (:person/address result)]
+            (is (map? addr) "Component ref should be auto-expanded")
+            (is (= "NYC" (:address/city addr))
+                "Address city should be NYC")))))))
+
+(deftest test-pull-component-within-recursive
+  (testing "component attributes are expanded inside recursive pulls"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[{:person/friend ...}] alice-id)]
+          ;; At each recursion level, :person/address (component) should be expanded
+          (when-let [alice-addr (:person/address result)]
+            (is (= "NYC" (:address/city alice-addr))
+                "Alice's address should be expanded"))
+          (when-let [bob (:person/friend result)]
+            (when-let [bob-addr (:person/address bob)]
+              (is (= "LA" (:address/city bob-addr))
+                  "Bob's address should be expanded inside recursive pull"))))))))
+
+(deftest test-pull-non-component-ref-not-expanded
+  (testing "non-component ref returns {:db/id N} in wildcard pull"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[*] alice-id)]
+          ;; :person/friend is NOT a component -- should be {:db/id N}
+          (when-let [friend (:person/friend result)]
+            (is (map? friend) "Non-component ref should be a map")
+            (is (contains? friend :db/id) "Non-component ref should have :db/id")
+            ;; Should NOT be recursively expanded (no :person/name unless explicitly pulled)
+            (is (nil? (:person/name friend))
+                "Non-component ref in wildcard should not be fully expanded")))))))
+
+;; ===================================================================
+;; 13. Pull API - wildcard with overrides
+;; ===================================================================
+
+(deftest test-pull-wildcard-with-map-override
+  (testing "pull [* {:person/friend [:person/name]}] overrides friend handling"
+    (with-recursive-db
+      (fn [conn]
+        (let [db       (d/db conn)
+              alice-id (ffirst (d/q '[:find ?e :where [?e :person/name "Alice"]] db))
+              result   (d/pull db '[* {:person/friend [:person/name]}] alice-id)]
+          ;; Wildcard should pull all scalar attrs
+          (is (= "Alice" (:person/name result)))
+          ;; :person/friend should be handled by the map spec, not wildcard
+          (when-let [friend (:person/friend result)]
+            (is (map? friend) "Friend should be a map")
+            (is (= "Bob" (:person/name friend))
+                "Map override should pull friend's name")))))))

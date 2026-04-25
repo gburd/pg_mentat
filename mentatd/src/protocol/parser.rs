@@ -73,14 +73,28 @@ pub fn parse_request(input: &str) -> Result<Request, ParseError> {
         .get(&*KEY_OP)
         .ok_or_else(|| ParseError::MissingField("op".to_string()))?;
 
-    let op = parse_operation(op_value, map)?;
+    let op = parse_operation(op_value, map, input)?;
 
     Ok(Request { op })
+}
+
+/// Extract the original EDN text for a `ValueAndSpan` using its span offsets.
+/// Falls back to Debug formatting if the span is invalid.
+fn extract_edn_text(input: &str, v: &ValueAndSpan) -> String {
+    let start = v.span.0 as usize;
+    let end = v.span.1 as usize;
+    if start < end && end <= input.len() {
+        input[start..end].to_string()
+    } else {
+        // Fallback: this shouldn't happen with valid spans
+        format!("{:?}", v.inner)
+    }
 }
 
 fn parse_operation(
     op_value: &ValueAndSpan,
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
+    input: &str,
 ) -> Result<Operation, ParseError> {
     let op_keyword = match &op_value.inner {
         SpannedValue::Keyword(k) => k,
@@ -122,14 +136,14 @@ fn parse_operation(
 
             // Phase 0 Optimization: Use pre-allocated keys
             let query = match args_map.get(&*KEY_QUERY) {
-                Some(v) => format!("{:?}", v.inner),
+                Some(v) => extract_edn_text(input, v),
                 None => return Err(ParseError::MissingField("query".to_string())),
             };
 
             let args = match args_map.get(&*KEY_ARGS) {
                 Some(v) => match &v.inner {
                     SpannedValue::Vector(vec) => {
-                        vec.iter().map(|arg| format!("{:?}", arg.inner)).collect()
+                        vec.iter().map(|arg| extract_edn_text(input, arg)).collect()
                     }
                     _ => Vec::new(),
                 },
@@ -164,7 +178,7 @@ fn parse_operation(
             };
 
             let tx_data = match args_map.get(&*KEY_TX_DATA) {
-                Some(v) => format!("{:?}", v.inner),
+                Some(v) => extract_edn_text(input, v),
                 None => return Err(ParseError::MissingField("tx-data".to_string())),
             };
 
@@ -176,7 +190,7 @@ fn parse_operation(
 
         "pull" => {
             let args_map = extract_args_map(map)?;
-            let pattern = extract_value_as_string(&args_map, "pattern")?;
+            let pattern = extract_value_as_string(&args_map, input,"pattern")?;
             let entity_id = extract_required_int(&args_map, "entity-id")?;
 
             Ok(Operation::Pull { pattern, entity_id })
@@ -184,9 +198,9 @@ fn parse_operation(
 
         "datoms" => {
             let args_map = extract_args_map(map)?;
-            let index_str = extract_value_as_string(&args_map, "index")?;
+            let index_str = extract_value_as_string(&args_map, input,"index")?;
             let index = parse_datoms_index(&index_str)?;
-            let components = extract_optional_vector(&args_map, "components")
+            let components = extract_optional_vector(&args_map, input,"components")
                 .unwrap_or_default();
 
             Ok(Operation::Datoms { index, components })
@@ -194,8 +208,8 @@ fn parse_operation(
 
         "as-of" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, "query")?;
-            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, input,"query")?;
+            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
             let t = extract_required_int(&args_map, "t")?;
 
             Ok(Operation::AsOf { query, args, t })
@@ -203,8 +217,8 @@ fn parse_operation(
 
         "since" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, "query")?;
-            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, input,"query")?;
+            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
             let t = extract_required_int(&args_map, "t")?;
 
             Ok(Operation::Since { query, args, t })
@@ -212,8 +226,8 @@ fn parse_operation(
 
         "history" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, "query")?;
-            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, input,"query")?;
+            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
 
             Ok(Operation::History { query, args })
         }
@@ -231,7 +245,7 @@ fn parse_operation(
 
             // Phase 0 Optimization: Use pre-allocated key
             let tx_data = match args_map.get(&*KEY_TX_DATA) {
-                Some(v) => format!("{:?}", v.inner),
+                Some(v) => extract_edn_text(input, v),
                 None => return Err(ParseError::MissingField("tx-data".to_string())),
             };
 
@@ -241,8 +255,8 @@ fn parse_operation(
         "filter" => {
             let args_map = extract_args_map(map)?;
             let predicate = parse_filter_predicate(&args_map)?;
-            let query = extract_value_as_string(&args_map, "query")?;
-            let args = extract_optional_vector(&args_map, "args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, input,"query")?;
+            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
 
             Ok(Operation::Filter {
                 predicate,
@@ -407,10 +421,11 @@ fn extract_required_int(
 fn extract_value_as_string(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
+    input: &str,
 ) -> Result<String, ParseError> {
     let key_value = get_key_for(key);
     match map.get(key_value.as_ref()) {
-        Some(v) => Ok(format!("{:?}", v.inner)),
+        Some(v) => Ok(extract_edn_text(input, v)),
         None => Err(ParseError::MissingField(key.to_string())),
     }
 }
@@ -418,11 +433,12 @@ fn extract_value_as_string(
 fn extract_optional_vector(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
+    input: &str,
 ) -> Option<Vec<String>> {
     let key_value = get_key_for(key);
     map.get(key_value.as_ref()).and_then(|v| match &v.inner {
         SpannedValue::Vector(vec) => {
-            Some(vec.iter().map(|arg| format!("{:?}", arg.inner)).collect())
+            Some(vec.iter().map(|arg| extract_edn_text(input, arg)).collect())
         }
         _ => None,
     })
@@ -705,12 +721,9 @@ mod tests {
 
     // ---- Datoms operation parsing ----
 
-    // NOTE: The datoms parser uses `extract_value_as_string` which applies
-    // Rust's Debug formatting (`{:?}`) to EDN values.  This wraps string
-    // values as `Text("eavt")` and keywords as `Keyword(eavt)`, which
-    // `parse_datoms_index` cannot currently handle.  These tests document
-    // this known limitation (tracked as a parser bug) and verify the
-    // `parse_datoms_index` function directly.
+    // The datoms parser uses `extract_value_as_string` which extracts the
+    // original EDN text from the input using span offsets. Keywords like
+    // `:eavt` are returned as ":eavt" and strings as "\"eavt\"".
 
     #[test]
     fn test_parse_datoms_index_direct_eavt() {
@@ -745,17 +758,15 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_datoms_keyword_index_known_limitation() {
-        // extract_value_as_string applies {:?} to the EDN SpannedValue,
-        // producing "Keyword(eavt)" for keyword `:eavt` and "Text(\"eavt\")"
-        // for string "eavt".  parse_datoms_index only strips `:` and `"`,
-        // so neither form currently works through the full parser pipeline.
-        // This documents the known behavior.
+    fn test_parse_datoms_keyword_index() {
+        // extract_value_as_string now uses span-based extraction, returning
+        // the original EDN text (e.g., ":eavt" or "\"eavt\"") instead of
+        // Debug-formatted Rust types.
         let keyword_input = r#"{:op :datoms :args {:index :eavt :components []}}"#;
-        assert!(parse_request(keyword_input).is_err());
+        assert!(parse_request(keyword_input).is_ok());
 
         let string_input = r#"{:op :datoms :args {:index "eavt" :components []}}"#;
-        assert!(parse_request(string_input).is_err());
+        assert!(parse_request(string_input).is_ok());
     }
 
     // ---- Time-travel operation parsing ----

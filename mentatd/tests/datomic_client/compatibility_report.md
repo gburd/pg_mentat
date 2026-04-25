@@ -41,6 +41,10 @@ All tests reference the files under
 | `d/transact`           | PASS   | Map form, list form (:db/add, :db/retract)      |
 | `d/q`                  | PASS   | Basic queries, :in params, aggregates           |
 | `:db/retractEntity`    | PASS   | Removes all datoms for entity                   |
+| `d/basis-t`            | PASS   | Returns MAX(tx) from mentat.transactions (Task #7) |
+| `d/with`               | PASS   | Speculative transactions via BEGIN/ROLLBACK (Task #7) |
+| `d/filter`             | PASS   | Filtered database views via savepoint + view pattern (Task #7) |
+| `d/datoms`             | PASS   | Direct index access: EAVT, AEVT, AVET, VAET (Task #7) |
 
 ### Partially supported
 
@@ -52,7 +56,6 @@ All tests reference the files under
 | `d/history`            | PARTIAL | History DB works for 5-tuple queries; mentatd must forward history flag. |
 | `d/as-of`              | PARTIAL | Works when mentatd passes `as-of` timestamp to pg_mentat. |
 | `d/since`              | PARTIAL | Works when mentatd passes `since` timestamp.    |
-| `d/basis-t`            | PARTIAL | Returns transaction T; depends on DbId struct.  |
 | Query with rules (`%`) | PARTIAL | Basic rules work; recursive rules untested.     |
 | Collection inputs      | PARTIAL | `[?x ...]` binding form needs mentatd to expand collection args. |
 | Lookup refs             | PARTIAL | `[:attr val]` works in queries and transactions when pg_mentat resolves them. |
@@ -62,10 +65,8 @@ All tests reference the files under
 
 | API function / Feature        | Status      | Notes                                      |
 |-------------------------------|-------------|--------------------------------------------|
-| `d/with`                      | UNSUPPORTED | Speculative transactions not implemented   |
-| `d/filter`                    | UNSUPPORTED | Filtered databases not implemented         |
 | `d/index-range`               | UNSUPPORTED | Index range scan not exposed               |
-| `d/seek-datoms` / `d/datoms`  | UNSUPPORTED | Raw datom iteration not exposed            |
+| `d/seek-datoms`               | UNSUPPORTED | Seek-based datom iteration not exposed     |
 | `d/entid`                     | UNSUPPORTED | Entity-id resolution by ident              |
 | `d/ident`                     | UNSUPPORTED | Ident resolution by entity-id              |
 | `d/invoke` (tx functions)     | UNSUPPORTED | Server-side transaction functions           |
@@ -75,7 +76,7 @@ All tests reference the files under
 | Log API (`d/log`, `d/tx-range`) | UNSUPPORTED | Transaction log not exposed              |
 | Attribute predicates / specs  | UNSUPPORTED | Not implemented in pg_mentat               |
 | Entity specs                  | UNSUPPORTED | Not implemented in pg_mentat               |
-| Transit serialization         | IN PROGRESS | Phase 2.2; currently EDN-only              |
+| Transit serialization         | PASS        | Transit+JSON and Transit+MessagePack supported (Task #6) |
 
 ---
 
@@ -99,7 +100,11 @@ connecting through the SQL storage back-end that pg_mentat provides.
 :connect           -> {:result {:connection-id "uuid" :db-name "..." :status "connected"}}
 :db                -> {:result {:connection-id "uuid" :status "active"}}
 :q                 -> {:result [[val1 val2] ...]}
-:transact          -> {:result {:tx-id N :tx-instant ... :tempids {...} :datoms-inserted N :status "committed"}}
+:transact          -> {:result {:db-before {:basis-t N} :db-after {:basis-t M} :tx-data [[e a v tx added] ...] :tempids {"temp" entity-id}}}
+:basis-t           -> {:result N}
+:with              -> {:result {:db-before {...} :db-after {...} :tx-data [...] :tempids {...}}}
+:filter            -> {:result [[val1 val2] ...]}
+:datoms            -> {:result [[e a v tx added] ...]}
 ```
 
 Operations also accept the `datomic.catalog/` namespace prefix for
@@ -109,26 +114,25 @@ Operations also accept the `datomic.catalog/` namespace prefix for
 
 1. **Query results** are returned as a vector of vectors, not a set of
    vectors.  The Clojure client coerces them to sets.
-2. **Transaction reports** use `:tx-id` / `:datoms-inserted` instead of
-   Datomic's `:db-before` / `:db-after` / `:tx-data` datom vectors.
-   Client code relying on `:tx-data` as a vector of `Datom` objects will
-   need adaptation.
+2. **Transaction reports** now use Datomic-compatible format (Task #5):
+   `:db-before`, `:db-after` (with `:basis-t`), `:tx-data` (5-element
+   datom vectors), and `:tempids` (string keys to entity IDs).
 3. **Error responses** use the Cognitect anomalies format
    (`:cognitect.anomalies/category`, `:cognitect.anomalies/message`).
+4. **Transit wire format** is fully supported (Task #6): both
+   Transit+JSON (`application/transit+json`) and Transit+MessagePack
+   (`application/transit+msgpack`) are accepted for request and response.
+   Content-Type negotiation works across all format combinations.
 
 ---
 
 ## Known limitations
 
-1. **No `:db-before` / `:db-after` in transaction reports.**
-   Datomic returns full database values before and after each
-   transaction.  mentatd returns a simplified report.  Code that
-   inspects `:db-before` or `:db-after` will need changes.
-
-2. **`:tx-data` format differs.**
-   Datomic returns a list of `Datom` objects (entity, attribute, value,
-   tx, added?).  mentatd returns a count (`:datoms-inserted`) instead.
-   Code that iterates over `:tx-data` datoms will not work as-is.
+1. **Transaction reports now use Datomic-compatible format (Task #5).**
+   As of Task #5, mentatd returns `:db-before`, `:db-after`, `:tx-data`,
+   and `:tempids` in transaction reports, matching Datomic's format.
+   `:db-before` and `:db-after` include `:basis-t`.  `:tx-data` contains
+   5-element datom vectors `[e a v tx added]`.  `:tempids` uses string keys.
 
 3. **Pull API modifiers.**
    `:limit`, `:default`, and `:as` are supported by pg_mentat but may
@@ -145,17 +149,13 @@ Operations also accept the `datomic.catalog/` namespace prefix for
    `d/as-of` and `d/since` accept a transaction T value.  Passing an
    `Instant` or `Date` is not yet supported.
 
-6. **No speculative transactions (`d/with`).**
-   There is no way to get a hypothetical database value without actually
-   committing.
+6. **No `d/seek-datoms` or `d/index-range`.**
+   `d/datoms` is supported (Task #7), but `d/seek-datoms` and `d/index-range`
+   are not yet exposed.
 
-7. **No filtered databases (`d/filter`).**
+7. **No transaction log API (`d/log`, `d/tx-range`).**
 
-8. **No raw index access (`d/datoms`, `d/seek-datoms`, `d/index-range`).**
-
-9. **No transaction log API (`d/log`, `d/tx-range`).**
-
-10. **No server-side transaction functions (`d/invoke`, `:db/fn`).**
+8. **No server-side transaction functions (`d/invoke`, `:db/fn`).**
 
 ---
 
@@ -163,12 +163,8 @@ Operations also accept the `datomic.catalog/` namespace prefix for
 
 | Limitation                      | Workaround                                      |
 |---------------------------------|-------------------------------------------------|
-| No `:db-before` / `:db-after`  | Snapshot `(d/db conn)` before transacting        |
-| No `:tx-data` datom list       | Query for recently-changed datoms after tx       |
-| No `d/with`                    | Create a throwaway database, test, then delete   |
-| No `d/filter`                  | Add filtering predicates to your Datalog queries |
-| No `d/datoms`                  | Use `d/q` with appropriate where clauses         |
-| No `d/index-range`             | Use `d/q` with range predicates                  |
+| No `d/index-range`             | Use `d/q` with range predicates or `d/datoms`    |
+| No `d/seek-datoms`             | Use `d/datoms` with component filters             |
 | No `d/log`                     | Query the history database                       |
 | No tx functions                | Perform multi-step logic client-side              |
 
@@ -178,11 +174,14 @@ Operations also accept the `datomic.catalog/` namespace prefix for
 
 | File | Description |
 |------|-------------|
-| `test/datomic_compat/core_test.clj` | Core compatibility suite (connection, schema, CRUD, pull, entity, time-travel) |
+| `test/datomic_compat/core_test.clj` | Core compatibility suite (connection, schema, CRUD, pull, entity, time-travel, d/with, d/filter, d/datoms) |
 | `test/datomic_compat/real_client_test.clj` | Extended real-client tests (all API categories, lookup refs, rules, edge cases) |
 | `test/datomic_compat/typed_values_test.clj` | Typed value round-trips, range queries, UUID/timestamp ordering (BYTEA fix validation) |
+| `test/datomic_compat/http_integration_test.clj` | HTTP-based EDN API tests (db lifecycle, tx reports, pull, time-travel, errors, d/with, d/filter, d/datoms) |
+| `test/datomic_compat/transit_test.clj` | Transit+JSON and Transit+MessagePack wire format tests (content negotiation, value fidelity) |
 | `test_queries.clj` | REPL-oriented manual test script |
-| `test_client.sh` | Shell-based protocol-level tests (including range query regression tests) |
+| `test_client.sh` | Shell-based EDN protocol tests (including range query regression tests) |
+| `test_transit.sh` | Shell-based Transit wire format tests (content-type negotiation, msgpack) |
 | `project.clj` | Leiningen project config with `datomic-free` dependency |
 
 ---
@@ -224,5 +223,9 @@ branches, and on PRs targeting `main` or `claude`.
 
 | Date       | Author | Change                                              |
 |------------|--------|-----------------------------------------------------|
+| 2026-04-24 | CI     | Task #7: Added d/with, d/filter, d/datoms, d/basis-t as fully supported |
+| 2026-04-24 | CI     | Updated report for Task #5 (tx report format) and Task #6 (Transit support) |
+| 2026-04-24 | CI     | Added transit_test.clj, http_integration_test.clj   |
 | 2026-04-24 | CI     | Added typed_values_test.clj (BYTEA fix validation)  |
+| 2026-04-24 | CI     | CI workflow: added timeouts, artifact upload, perf smoke test |
 | 2026-04-22 | CI     | Initial compatibility report with full API matrix    |

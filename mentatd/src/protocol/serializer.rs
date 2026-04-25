@@ -27,9 +27,32 @@ fn serialize_value(value: &ResponseValue, output: &mut String) {
         ResponseValue::Integer(i) => {
             write!(output, "{}", i).ok();
         }
+        ResponseValue::Float(f) => {
+            // EDN floats: if the value has no fractional part, append .0
+            if f.fract() == 0.0 && f.is_finite() {
+                write!(output, "{:.1}", f).ok();
+            } else {
+                write!(output, "{}", f).ok();
+            }
+        }
         ResponseValue::Keyword(k) => {
             output.push(':');
             output.push_str(k);
+        }
+        ResponseValue::Instant(micros) => {
+            // EDN instant: #inst "ISO-8601"
+            let secs = micros / 1_000_000;
+            let remainder_micros = (micros % 1_000_000).unsigned_abs() as u32;
+            let nanos = remainder_micros * 1000;
+            if let Some(dt) = chrono::DateTime::from_timestamp(secs, nanos) {
+                write!(output, "#inst \"{}\"", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ")).ok();
+            } else {
+                // Fallback: raw microseconds
+                write!(output, "#inst \"1970-01-01T00:00:00.000Z\"").ok();
+            }
+        }
+        ResponseValue::Uuid(u) => {
+            write!(output, "#uuid \"{}\"", u).ok();
         }
         ResponseValue::List(items) => {
             output.push('(');
@@ -459,5 +482,93 @@ mod tests {
     fn test_escape_string_no_special_chars() {
         let escaped = escape_string("hello world");
         assert_eq!(escaped, "hello world");
+    }
+
+    // ---- Datomic rich type serialization tests ----
+
+    #[test]
+    fn test_serialize_float() {
+        let response = Response::Success {
+            result: ResponseValue::Float(3.14),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result 3.14}");
+    }
+
+    #[test]
+    fn test_serialize_float_whole_number() {
+        // EDN floats with no fractional part should display as N.0
+        let response = Response::Success {
+            result: ResponseValue::Float(42.0),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(output, "{:result 42.0}");
+    }
+
+    #[test]
+    fn test_serialize_instant() {
+        // 2024-04-25T13:46:40.000Z in microseconds
+        let micros = 1714052800000000_i64;
+        let response = Response::Success {
+            result: ResponseValue::Instant(micros),
+        };
+        let output = serialize_response(&response);
+        assert!(output.starts_with("{:result #inst \""), "Output: {}", output);
+        assert!(output.contains("2024-"), "Expected 2024 year in: {}", output);
+        assert!(output.ends_with("\"}"), "Expected closing quote: {}", output);
+    }
+
+    #[test]
+    fn test_serialize_uuid() {
+        let response = Response::Success {
+            result: ResponseValue::Uuid("550e8400-e29b-41d4-a716-446655440000".to_string()),
+        };
+        let output = serialize_response(&response);
+        assert_eq!(
+            output,
+            "{:result #uuid \"550e8400-e29b-41d4-a716-446655440000\"}"
+        );
+    }
+
+    #[test]
+    fn test_serialize_tx_report_with_instant() {
+        // Simulate a transaction report with an instant value in tx-data
+        let response = Response::Success {
+            result: ResponseValue::Map(vec![
+                (
+                    ResponseValue::Keyword("db-before".to_string()),
+                    ResponseValue::Map(vec![(
+                        ResponseValue::Keyword("basis-t".to_string()),
+                        ResponseValue::Integer(100),
+                    )]),
+                ),
+                (
+                    ResponseValue::Keyword("db-after".to_string()),
+                    ResponseValue::Map(vec![(
+                        ResponseValue::Keyword("basis-t".to_string()),
+                        ResponseValue::Integer(101),
+                    )]),
+                ),
+                (
+                    ResponseValue::Keyword("tx-data".to_string()),
+                    ResponseValue::Vector(vec![ResponseValue::Vector(vec![
+                        ResponseValue::Integer(101),
+                        ResponseValue::Integer(10),
+                        ResponseValue::Instant(1714000000000000),
+                        ResponseValue::Integer(101),
+                        ResponseValue::Boolean(true),
+                    ])]),
+                ),
+                (
+                    ResponseValue::Keyword("tempids".to_string()),
+                    ResponseValue::Map(vec![]),
+                ),
+            ]),
+        };
+        let output = serialize_response(&response);
+        assert!(output.contains(":db-before {:basis-t 100}"), "EDN: {}", output);
+        assert!(output.contains(":db-after {:basis-t 101}"), "EDN: {}", output);
+        assert!(output.contains("#inst \""), "EDN missing #inst: {}", output);
+        assert!(output.contains(":tempids {}"), "EDN: {}", output);
     }
 }

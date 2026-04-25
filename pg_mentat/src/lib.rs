@@ -39,9 +39,20 @@ extension_sql!(
         v_uuid UUID,
         v_bytes BYTEA,
         tx BIGINT NOT NULL,
-        added BOOLEAN NOT NULL DEFAULT TRUE
-        -- NOTE: Removed CHECK constraint for performance (5-10% improvement)
-        -- The Rust TypedValue enum guarantees exactly one v_* column is populated
+        added BOOLEAN NOT NULL DEFAULT TRUE,
+
+        -- Ensure exactly one value column is populated per row
+        CONSTRAINT chk_datom_value CHECK (
+            (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
+           + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
+        )
     );
 
     CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -165,6 +176,10 @@ extension_sql!(
 mod cache;
 #[cfg(any(test, feature = "pg_test"))]
 mod cache_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod concurrency_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod typed_value_tests;
 pub mod error;
 mod functions;
 mod operators;
@@ -490,70 +505,73 @@ mod tests {
             ON CONFLICT (ident) DO NOTHING;
 
             -- Bootstrap datoms in the datoms table so queries can find them.
-            -- a=1 is :db/ident (keyword type_tag=8)
-            -- a=2 is :db/valueType (ref type_tag=0, value is entity ID as LE i64)
-            -- a=3 is :db/cardinality (ref type_tag=0, value is entity ID as LE i64)
+            -- a=1 is :db/ident (keyword type_tag=8, stored in v_keyword)
+            -- a=2 is :db/valueType (ref type_tag=0, stored in v_ref as entity ID)
+            -- a=3 is :db/cardinality (ref type_tag=0, stored in v_ref as entity ID)
             -- tx=1000000 is the bootstrap transaction.
-            INSERT INTO mentat.datoms (e, a, v, value_type_tag, tx, added) VALUES
-                -- :db/ident datoms (a=1, keyword)
-                (1,  1, 'db/ident'::bytea,            8, 1000000, true),
-                (2,  1, 'db/valueType'::bytea,        8, 1000000, true),
-                (3,  1, 'db/cardinality'::bytea,      8, 1000000, true),
-                (4,  1, 'db/unique'::bytea,            8, 1000000, true),
-                (5,  1, 'db/doc'::bytea,               8, 1000000, true),
-                (6,  1, 'db/isComponent'::bytea,       8, 1000000, true),
-                (7,  1, 'db/fulltext'::bytea,          8, 1000000, true),
-                (8,  1, 'db/index'::bytea,             8, 1000000, true),
-                (9,  1, 'db/noHistory'::bytea,         8, 1000000, true),
-                (10, 1, 'db/txInstant'::bytea,         8, 1000000, true),
-                (20, 1, 'db.type/ref'::bytea,          8, 1000000, true),
-                (21, 1, 'db.type/keyword'::bytea,      8, 1000000, true),
-                (22, 1, 'db.type/long'::bytea,         8, 1000000, true),
-                (23, 1, 'db.type/double'::bytea,       8, 1000000, true),
-                (24, 1, 'db.type/string'::bytea,       8, 1000000, true),
-                (25, 1, 'db.type/boolean'::bytea,      8, 1000000, true),
-                (26, 1, 'db.type/instant'::bytea,      8, 1000000, true),
-                (27, 1, 'db.type/uuid'::bytea,         8, 1000000, true),
-                (28, 1, 'db.type/bytes'::bytea,        8, 1000000, true),
-                (30, 1, 'db.cardinality/one'::bytea,   8, 1000000, true),
-                (31, 1, 'db.cardinality/many'::bytea,  8, 1000000, true),
-                (32, 1, 'db.unique/value'::bytea,      8, 1000000, true),
-                (33, 1, 'db.unique/identity'::bytea,   8, 1000000, true),
 
-                -- :db/valueType datoms (a=2, ref type_tag=0, value = entity ID as LE i64)
-                -- Entity 1 (:db/ident) -> :db.type/keyword (entity 21 = 0x15)
-                (1,  2, E'\\x1500000000000000'::bytea, 0, 1000000, true),
-                -- Entity 2 (:db/valueType) -> :db.type/ref (entity 20 = 0x14)
-                (2,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
+            -- :db/ident datoms (a=1, keyword stored in v_keyword)
+            INSERT INTO mentat.datoms (e, a, value_type_tag, v_keyword, tx, added) VALUES
+                (1,  1, 8, 'db/ident',            1000000, true),
+                (2,  1, 8, 'db/valueType',        1000000, true),
+                (3,  1, 8, 'db/cardinality',      1000000, true),
+                (4,  1, 8, 'db/unique',            1000000, true),
+                (5,  1, 8, 'db/doc',               1000000, true),
+                (6,  1, 8, 'db/isComponent',       1000000, true),
+                (7,  1, 8, 'db/fulltext',          1000000, true),
+                (8,  1, 8, 'db/index',             1000000, true),
+                (9,  1, 8, 'db/noHistory',         1000000, true),
+                (10, 1, 8, 'db/txInstant',         1000000, true),
+                (20, 1, 8, 'db.type/ref',          1000000, true),
+                (21, 1, 8, 'db.type/keyword',      1000000, true),
+                (22, 1, 8, 'db.type/long',         1000000, true),
+                (23, 1, 8, 'db.type/double',       1000000, true),
+                (24, 1, 8, 'db.type/string',       1000000, true),
+                (25, 1, 8, 'db.type/boolean',      1000000, true),
+                (26, 1, 8, 'db.type/instant',      1000000, true),
+                (27, 1, 8, 'db.type/uuid',         1000000, true),
+                (28, 1, 8, 'db.type/bytes',        1000000, true),
+                (30, 1, 8, 'db.cardinality/one',   1000000, true),
+                (31, 1, 8, 'db.cardinality/many',  1000000, true),
+                (32, 1, 8, 'db.unique/value',      1000000, true),
+                (33, 1, 8, 'db.unique/identity',   1000000, true);
+
+            -- :db/valueType datoms (a=2, ref stored in v_ref as entity ID)
+            INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+                -- Entity 1 (:db/ident) -> :db.type/keyword (entity 21)
+                (1,  2, 0, 21, 1000000, true),
+                -- Entity 2 (:db/valueType) -> :db.type/ref (entity 20)
+                (2,  2, 0, 20, 1000000, true),
                 -- Entity 3 (:db/cardinality) -> :db.type/ref (entity 20)
-                (3,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
+                (3,  2, 0, 20, 1000000, true),
                 -- Entity 4 (:db/unique) -> :db.type/ref (entity 20)
-                (4,  2, E'\\x1400000000000000'::bytea, 0, 1000000, true),
-                -- Entity 5 (:db/doc) -> :db.type/string (entity 24 = 0x18)
-                (5,  2, E'\\x1800000000000000'::bytea, 0, 1000000, true),
-                -- Entity 6 (:db/isComponent) -> :db.type/boolean (entity 25 = 0x19)
-                (6,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                (4,  2, 0, 20, 1000000, true),
+                -- Entity 5 (:db/doc) -> :db.type/string (entity 24)
+                (5,  2, 0, 24, 1000000, true),
+                -- Entity 6 (:db/isComponent) -> :db.type/boolean (entity 25)
+                (6,  2, 0, 25, 1000000, true),
                 -- Entity 7 (:db/fulltext) -> :db.type/boolean (entity 25)
-                (7,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                (7,  2, 0, 25, 1000000, true),
                 -- Entity 8 (:db/index) -> :db.type/boolean (entity 25)
-                (8,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
+                (8,  2, 0, 25, 1000000, true),
                 -- Entity 9 (:db/noHistory) -> :db.type/boolean (entity 25)
-                (9,  2, E'\\x1900000000000000'::bytea, 0, 1000000, true),
-                -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26 = 0x1a)
-                (10, 2, E'\\x1a00000000000000'::bytea, 0, 1000000, true),
+                (9,  2, 0, 25, 1000000, true),
+                -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26)
+                (10, 2, 0, 26, 1000000, true);
 
-                -- :db/cardinality datoms (a=3, ref type_tag=0, value = entity ID as LE i64)
-                -- All core attrs have cardinality :db.cardinality/one (entity 30 = 0x1e)
-                (1,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (2,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (3,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (4,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (5,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (6,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (7,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (8,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (9,  3, E'\\x1e00000000000000'::bytea, 0, 1000000, true),
-                (10, 3, E'\\x1e00000000000000'::bytea, 0, 1000000, true);
+            -- :db/cardinality datoms (a=3, ref stored in v_ref as entity ID)
+            -- All core attrs have cardinality :db.cardinality/one (entity 30)
+            INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+                (1,  3, 0, 30, 1000000, true),
+                (2,  3, 0, 30, 1000000, true),
+                (3,  3, 0, 30, 1000000, true),
+                (4,  3, 0, 30, 1000000, true),
+                (5,  3, 0, 30, 1000000, true),
+                (6,  3, 0, 30, 1000000, true),
+                (7,  3, 0, 30, 1000000, true),
+                (8,  3, 0, 30, 1000000, true),
+                (9,  3, 0, 30, 1000000, true),
+                (10, 3, 0, 30, 1000000, true);
             "#,
         )?;
         Ok(())
@@ -5346,6 +5364,180 @@ mod tests {
             desc_labels, vec!["Recent", "Middle", "Early", "Ancient"],
             "Descending order should be reverse chronological, got: {:?}",
             desc_labels
+        );
+    }
+
+    // ============================================================================
+    // Range Query Correctness Tests (BYTEA fix validation)
+    // ============================================================================
+    // These tests verify that numeric and string range queries return correct
+    // results using native PostgreSQL types instead of BYTEA encoding.
+    // The old BYTEA encoding would cause "2" > "10" (0x32 > 0x31), but with
+    // native BIGINT columns, 2 < 10 < 100 as expected.
+
+    #[pg_test]
+    fn test_range_queries_numeric_ordering() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Insert persons with ages that would sort incorrectly under BYTEA encoding
+        // BYTEA: "2" (0x32) > "10" (0x31 0x30) because 0x32 > 0x31
+        // Native BIGINT: 2 < 10 < 100 (correct)
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"Alice\"]
+                 [:db/add \"p1\" :person/age 2]
+                 [:db/add \"p2\" :person/name \"Bob\"]
+                 [:db/add \"p2\" :person/age 10]
+                 [:db/add \"p3\" :person/name \"Charlie\"]
+                 [:db/add \"p3\" :person/age 100]
+                 [:db/add \"p4\" :person/name \"Diana\"]
+                 [:db/add \"p4\" :person/age 5]]
+            '::TEXT)",
+        )
+        .expect("Failed to transact test data");
+
+        // Query: find persons with age < 10 (should return Alice=2 and Diana=5)
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?e :person/name ?name]
+                  [?e :person/age ?age]
+                  [(< ?age 10)]
+                  :order (asc ?age)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+
+        // With correct numeric ordering: ages 2 and 5 are < 10
+        assert_eq!(results.len(), 2, "Expected 2 results for age < 10, got {}", results.len());
+        assert_eq!(results[0][0].as_str().unwrap(), "Alice", "First should be Alice (age 2)");
+        assert_eq!(results[0][1].as_i64().unwrap(), 2);
+        assert_eq!(results[1][0].as_str().unwrap(), "Diana", "Second should be Diana (age 5)");
+        assert_eq!(results[1][1].as_i64().unwrap(), 5);
+
+        // Query: ascending order by age should be 2, 5, 10, 100
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?e :person/name ?name]
+                  [?e :person/age ?age]
+                  :order (asc ?age)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+        let ages: Vec<i64> = results.iter().map(|r| r[1].as_i64().unwrap()).collect();
+        assert_eq!(ages, vec![2, 5, 10, 100], "Ages should be in correct numeric order, got {:?}", ages);
+    }
+
+    #[pg_test]
+    fn test_range_queries_between() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        // Insert values that test boundary conditions
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"One\"]
+                 [:db/add \"p1\" :person/age 1]
+                 [:db/add \"p2\" :person/name \"Nine\"]
+                 [:db/add \"p2\" :person/age 9]
+                 [:db/add \"p3\" :person/name \"Ten\"]
+                 [:db/add \"p3\" :person/age 10]
+                 [:db/add \"p4\" :person/name \"Eleven\"]
+                 [:db/add \"p4\" :person/age 11]
+                 [:db/add \"p5\" :person/name \"Hundred\"]
+                 [:db/add \"p5\" :person/age 100]
+                 [:db/add \"p6\" :person/name \"Thousand\"]
+                 [:db/add \"p6\" :person/age 1000]]
+            '::TEXT)",
+        )
+        .expect("Failed to transact test data");
+
+        // Query: 5 <= age <= 50
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name ?age
+                  :where
+                  [?e :person/name ?name]
+                  [?e :person/age ?age]
+                  [(>= ?age 5)]
+                  [(<= ?age 50)]
+                  :order (asc ?age)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert_eq!(
+            names, vec!["Nine", "Ten", "Eleven"],
+            "Between 5 and 50 should return Nine(9), Ten(10), Eleven(11), got: {:?}",
+            names
+        );
+    }
+
+    #[pg_test]
+    fn test_string_ordering() {
+        setup_test_db().expect("Failed to setup test db");
+        bootstrap_schema().expect("Failed to bootstrap schema");
+        setup_person_schema();
+
+        Spi::run(
+            "SELECT mentat_transact('
+                [[:db/add \"p1\" :person/name \"banana\"]
+                 [:db/add \"p1\" :person/age 1]
+                 [:db/add \"p2\" :person/name \"apple\"]
+                 [:db/add \"p2\" :person/age 2]
+                 [:db/add \"p3\" :person/name \"cherry\"]
+                 [:db/add \"p3\" :person/age 3]
+                 [:db/add \"p4\" :person/name \"date\"]
+                 [:db/add \"p4\" :person/age 4]]
+            '::TEXT)",
+        )
+        .expect("Failed to transact test data");
+
+        // Query all names ordered ascending - should be alphabetical
+        let result = Spi::get_one::<String>(
+            "SELECT mentat_query(
+                '[:find ?name
+                  :where
+                  [?e :person/name ?name]
+                  :order (asc ?name)]'::TEXT,
+                '{}'::jsonb
+            )::TEXT",
+        )
+        .expect("Query failed")
+        .expect("Query returned NULL");
+
+        let json: serde_json::Value = serde_json::from_str(&result)
+            .expect("Failed to parse JSON");
+        let results = json["results"].as_array().expect("Expected array");
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert_eq!(
+            names, vec!["apple", "banana", "cherry", "date"],
+            "String ordering should be alphabetical, got: {:?}",
+            names
         );
     }
 }

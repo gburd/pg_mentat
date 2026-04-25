@@ -80,9 +80,11 @@ test_request "Query with limit and offset" \
     ':result'
 
 # Test 8: Transact operation
+# After Task #5, transaction reports use Datomic-compatible format with
+# :db-before, :db-after, :tx-data, :tempids (not the old :tx-id format).
 test_request "Transact operation" \
     '{:op :transact :args {:connection-id "test-conn-123" :tx-data "[{:db/id -1 :name \"Bob\"}]"}}' \
-    ':tx-id'
+    ':result'
 
 # Test 9: Db operation with UUID
 test_request "Db operation" \

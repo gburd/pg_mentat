@@ -22,6 +22,8 @@
 //! - `mentat.default_work_mem` (string, default "64MB"): The work_mem value to
 //!   SET LOCAL for complex Mentat queries (those with joins, aggregates, or CTEs).
 
+use std::ffi::CString;
+
 use pgrx::prelude::*;
 use pgrx::{GucContext, GucFlags, GucRegistry, GucSetting};
 
@@ -94,16 +96,25 @@ fn estimate_query_cost(
 /// ```
 #[pg_extern]
 fn analyze_query(query_text: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Phase 1: Basic pattern detection
+    // Phase 1: Basic pattern detection (typed columns: v_ref, v_long, v_text, etc.)
+    let has_value_filter = query_text.contains("v_ref")
+        || query_text.contains("v_long")
+        || query_text.contains("v_double")
+        || query_text.contains("v_text")
+        || query_text.contains("v_keyword")
+        || query_text.contains("v_bool")
+        || query_text.contains("v_instant")
+        || query_text.contains("v_uuid")
+        || query_text.contains("v_bytes");
     let pattern = if query_text.contains("WHERE e =") || query_text.contains("WHERE e=") {
         "Entity-first (use EAVT index)"
     } else if query_text.contains("WHERE a =") || query_text.contains("WHERE a=") {
-        if query_text.contains("AND v =") || query_text.contains("AND v=") {
+        if has_value_filter {
             "Attribute-Value (use AVET index)"
         } else {
             "Attribute-first (use AEVT index)"
         }
-    } else if query_text.contains("WHERE v =") || query_text.contains("WHERE v=") {
+    } else if has_value_filter {
         "Value-first (use VAET index)"
     } else {
         "No specific pattern detected (use AEVT index as default)"
@@ -169,8 +180,8 @@ pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(tr
 /// The work_mem value to SET LOCAL for complex Mentat queries.
 /// Only applied when `mentat.enable_optimizer_hints` is true and the query
 /// involves multiple joins, aggregates, or CTEs.
-pub static DEFAULT_WORK_MEM: GucSetting<Option<&'static str>> =
-    GucSetting::<Option<&'static str>>::new(Some("64MB"));
+pub static DEFAULT_WORK_MEM: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(Some(c"64MB"));
 
 /// Query timeout in milliseconds. Prevents runaway queries from blocking backends.
 /// 0 means no timeout (default). Set to positive value (e.g., 30000 for 30 seconds)
@@ -186,7 +197,7 @@ pub fn optimizer_hints_enabled() -> bool {
 pub fn default_work_mem() -> String {
     DEFAULT_WORK_MEM
         .get()
-        .map(|s| s.to_string())
+        .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "64MB".to_string())
 }
 
@@ -204,33 +215,27 @@ pub fn query_timeout_ms() -> i32 {
 #[allow(dead_code)]
 pub unsafe fn init_planner_hooks() {
     GucRegistry::define_bool_guc(
-        "mentat.enable_optimizer_hints",
-        "Enable automatic optimizer hints for Mentat queries.",
-        "When enabled, Mentat applies SET LOCAL enable_seqscan = off and \
-         SET LOCAL work_mem before executing generated SQL to encourage \
-         index usage on the datoms table.",
+        c"mentat.enable_optimizer_hints",
+        c"Enable automatic optimizer hints for Mentat queries.",
+        c"When enabled, Mentat applies SET LOCAL enable_seqscan = off and SET LOCAL work_mem before executing generated SQL to encourage index usage on the datoms table.",
         &ENABLE_OPTIMIZER_HINTS,
         GucContext::Userset,
         GucFlags::default(),
     );
 
     GucRegistry::define_string_guc(
-        "mentat.default_work_mem",
-        "Work memory for complex Mentat queries.",
-        "The value passed to SET LOCAL work_mem before executing Mentat \
-         queries that involve multiple pattern joins, aggregates, or CTEs. \
-         Only effective when mentat.enable_optimizer_hints is on.",
+        c"mentat.default_work_mem",
+        c"Work memory for complex Mentat queries.",
+        c"The value passed to SET LOCAL work_mem before executing Mentat queries that involve multiple pattern joins, aggregates, or CTEs. Only effective when mentat.enable_optimizer_hints is on.",
         &DEFAULT_WORK_MEM,
         GucContext::Userset,
         GucFlags::default(),
     );
 
     GucRegistry::define_int_guc(
-        "mentat.query_timeout_ms",
-        "Query timeout in milliseconds.",
-        "Maximum execution time for Mentat queries. Set to 0 (default) for no timeout. \
-         Set to positive value (e.g., 30000 for 30 seconds) to prevent runaway queries. \
-         Enforced via statement_timeout.",
+        c"mentat.query_timeout_ms",
+        c"Query timeout in milliseconds.",
+        c"Maximum execution time for Mentat queries. Set to 0 (default) for no timeout. Set to positive value (e.g., 30000 for 30 seconds) to prevent runaway queries. Enforced via statement_timeout.",
         &QUERY_TIMEOUT_MS,
         0,
         i32::MAX,

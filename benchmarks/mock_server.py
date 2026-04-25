@@ -8,7 +8,13 @@ import json
 import time
 import random
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from threading import Lock
+
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """Handle requests in separate threads for concurrent load testing."""
+    daemon_threads = True
 import argparse
 
 # Global metrics
@@ -113,7 +119,7 @@ class MockMentatdHandler(BaseHTTPRequestHandler):
 def run_server(host='127.0.0.1', port=8080):
     """Run the mock server"""
     server_address = (host, port)
-    httpd = HTTPServer(server_address, MockMentatdHandler)
+    httpd = ThreadingHTTPServer(server_address, MockMentatdHandler)
 
     print(f"Mock mentatd server running on http://{host}:{port}")
     print("Press Ctrl+C to stop")
