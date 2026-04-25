@@ -571,7 +571,11 @@ pub fn mentat_query(
             usize::MAX
         };
 
-        for row in execute_cached_query(client, &sql_query, &params)? {
+        for row in execute_cached_query(client, &sql_query, &params)
+            .map_err(|e| Box::new(crate::error::MentatError::InvalidQuery {
+                message: format!("SPI execution error: {}", e),
+                suggestion: None,
+            }) as Box<dyn std::error::Error + Send + Sync>)? {
             if rows_json.len() >= row_limit {
                 return Err(Box::new(crate::error::MentatError::ResultLimitExceeded {
                     limit: max_rows,
@@ -581,7 +585,7 @@ pub fn mentat_query(
                          or increase mentat.max_result_rows",
                         max_rows
                     ),
-                }));
+                }) as Box<dyn std::error::Error + Send + Sync>);
             }
 
             let mut row_values = Vec::new();
@@ -599,7 +603,7 @@ pub fn mentat_query(
             rows_json.push(json!(row_values));
         }
 
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(rows_json)
+        Ok(rows_json)
     })?;
 
     let response =

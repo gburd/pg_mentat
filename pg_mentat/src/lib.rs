@@ -291,7 +291,7 @@ mod query_join_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod error_handling_tests;
 pub mod error;
-mod functions;
+pub mod functions;
 mod operators;
 mod planner;
 mod types;
