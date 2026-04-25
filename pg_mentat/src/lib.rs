@@ -232,6 +232,42 @@ mod find_spec_tests;
 mod input_parameter_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod history_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod boundary_value_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod cross_entity_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod stress_scale_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod idempotency_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod multi_transaction_workflow_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_evolution_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod parameterized_value_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_pattern_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_report_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod data_integrity_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_introspection_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod cas_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod pull_api_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod regression_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod bootstrap_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod namespace_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod mixed_operation_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod edge_case_query_tests;
 pub mod error;
 mod functions;
 mod operators;
