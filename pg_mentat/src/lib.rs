@@ -268,6 +268,10 @@ mod namespace_tests;
 mod mixed_operation_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod edge_case_query_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod comprehensive_retract_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod comprehensive_upsert_tests;
 pub mod error;
 mod functions;
 mod operators;
