@@ -231,7 +231,7 @@ DROP FUNCTION IF EXISTS {func_name}();
 /// LISTEN mentat_all_people;
 /// ```
 #[pg_extern]
-pub fn mentat_subscribe(
+pub fn subscribe(
     store_name: &str,
     subscription_name: &str,
     query: &str,
@@ -306,7 +306,7 @@ pub fn mentat_subscribe(
 /// SELECT mentat_unsubscribe('default', 'all_people');
 /// ```
 #[pg_extern]
-pub fn mentat_unsubscribe(
+pub fn unsubscribe(
     store_name: &str,
     subscription_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -357,7 +357,7 @@ pub fn mentat_unsubscribe(
 /// SELECT mentat_list_subscriptions('default');
 /// ```
 #[pg_extern]
-pub fn mentat_list_subscriptions(
+pub fn list_subscriptions(
     store_name: default!(Option<&str>, "NULL"),
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let subscriptions = Spi::connect(|client| {

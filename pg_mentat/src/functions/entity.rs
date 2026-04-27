@@ -42,7 +42,7 @@ pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error 
 /// SELECT mentat_entity_in_store('my_store', 123);
 /// ```
 #[pg_extern]
-pub fn mentat_entity_in_store(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+pub fn entity(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let schema_name = get_schema_for_store(store);
     let mut entity_map = serde_json::Map::new();
 

@@ -655,7 +655,7 @@ pub fn mentat_query(
 /// SELECT mentat_q_store('my_store', '[:find ?e ?name :where [?e :person/name ?name]]', '{}'::jsonb);
 /// ```
 #[pg_extern]
-pub fn mentat_q_store(
+pub fn q(
     store_name: &str,
     query: &str,
     inputs: JsonB,

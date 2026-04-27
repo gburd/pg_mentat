@@ -210,7 +210,7 @@ fn drop_refresh_trigger(
 /// SELECT * FROM mentat.people_cache;
 /// ```
 #[pg_extern]
-pub fn mentat_materialize(
+pub fn materialize(
     store_name: &str,
     view_name: &str,
     datalog_query: &str,
@@ -388,7 +388,7 @@ pub fn mentat_materialize(
 /// SELECT mentat_refresh('default', 'people_cache', true);
 /// ```
 #[pg_extern]
-pub fn mentat_refresh(
+pub fn refresh(
     store_name: &str,
     view_name: &str,
     concurrently: default!(bool, "false"),
@@ -440,7 +440,7 @@ pub fn mentat_refresh(
 /// SELECT mentat_drop_matview('default', 'people_cache');
 /// ```
 #[pg_extern]
-pub fn mentat_drop_matview(
+pub fn drop_matview(
     store_name: &str,
     view_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -497,7 +497,7 @@ pub fn mentat_drop_matview(
 /// SELECT mentat_list_matviews('default');
 /// ```
 #[pg_extern]
-pub fn mentat_list_matviews(
+pub fn list_matviews(
     store_name: default!(Option<&str>, "NULL"),
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let views = Spi::connect(|client| {

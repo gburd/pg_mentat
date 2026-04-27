@@ -225,7 +225,7 @@ fn ensure_metadata_table() -> Result<(), pgrx::spi::SpiError> {
 /// );
 /// ```
 #[pg_extern]
-pub fn mentat_recursive(
+pub fn recursive(
     store_name: &str,
     view_name: &str,
     rule_name: &str,
@@ -366,7 +366,7 @@ pub fn mentat_recursive(
 /// SELECT mentat_drop_recursive('default', 'org_hierarchy');
 /// ```
 #[pg_extern]
-pub fn mentat_drop_recursive(
+pub fn drop_recursive(
     store_name: &str,
     view_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -412,7 +412,7 @@ pub fn mentat_drop_recursive(
 /// SELECT mentat_list_recursive('default');
 /// ```
 #[pg_extern]
-pub fn mentat_list_recursive(
+pub fn list_recursive(
     store_name: &str,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     validate_store_name(store_name)?;

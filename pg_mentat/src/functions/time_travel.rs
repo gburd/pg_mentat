@@ -146,7 +146,7 @@ fn compute_result_diff(
 /// );
 /// ```
 #[pg_extern]
-pub fn mentat_diff(
+pub fn diff(
     store_name: &str,
     from_tx: i64,
     to_tx: i64,
@@ -206,7 +206,7 @@ pub fn mentat_diff(
 /// );
 /// ```
 #[pg_extern]
-pub fn mentat_diff_default(
+pub fn diff_default(
     from_tx: i64,
     to_tx: i64,
     query: &str,
@@ -245,7 +245,7 @@ pub fn mentat_diff_default(
 /// SELECT mentat_log('default', 1000000, 1000010);
 /// ```
 #[pg_extern]
-pub fn mentat_log(
+pub fn log(
     store_name: &str,
     start_tx: i64,
     end_tx: i64,
@@ -347,7 +347,7 @@ pub fn mentat_log(
 /// SELECT mentat_log_default(1000000, 1000010);
 /// ```
 #[pg_extern]
-pub fn mentat_log_default(
+pub fn log_default(
     start_tx: i64,
     end_tx: i64,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {

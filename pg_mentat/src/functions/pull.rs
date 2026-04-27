@@ -166,7 +166,7 @@ pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
 /// SELECT mentat_pull_in_store('my_store', '[:person/name :person/age]', 123);
 /// ```
 #[pg_extern]
-pub fn mentat_pull_in_store(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
+pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
     let parsed = edn::parse::value(pattern)
         .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
@@ -226,7 +226,7 @@ pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, Pu
 /// SELECT mentat_pull_many_in_store('my_store', '[:person/name :person/age]', ARRAY[100, 101, 102]);
 /// ```
 #[pg_extern]
-pub fn mentat_pull_many_in_store(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
+pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
     let parsed = edn::parse::value(pattern)
         .map_err(|e| -> PullError { MentatError::InvalidPullPattern {

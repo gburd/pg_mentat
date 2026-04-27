@@ -303,7 +303,7 @@ pub fn create_virtual_tables_for_schema(
 /// SELECT mentat_create_virtual_tables('my_store');
 /// ```
 #[pg_extern]
-pub fn mentat_create_virtual_tables(
+pub fn create_virtual_tables(
     store_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     validate_store_name(store_name)?;

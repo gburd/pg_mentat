@@ -43,13 +43,13 @@ echo_step "Step 2: Create Multiple Stores"
 echo "Creating isolated stores for different domains..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 -- Create stores for different use cases
-SELECT mentat.mentat_create_store('analytics', 'Analytics and metrics data');
-SELECT mentat.mentat_create_store('users', 'User and profile data');
+SELECT mentat.create_store('analytics', 'Analytics and metrics data');
+SELECT mentat.create_store('users', 'User and profile data');
 
 -- List all stores
 \echo ''
 \echo 'All stores:'
-SELECT jsonb_pretty(mentat.mentat_list_stores()::jsonb);
+SELECT jsonb_pretty(mentat.list_stores()::jsonb);
 EOF
 pause 3
 
@@ -58,7 +58,7 @@ echo_step "Step 3: Define Schema and Load Data"
 echo "Adding schema and sample data to 'users' store..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 -- Define user schema in 'users' store
-SELECT mentat.mentat_transact_full('users', '[
+SELECT mentat.t('users', '[
   {:db/ident :user/name
    :db/valueType :db.type/string
    :db/cardinality :db.cardinality/one}
@@ -78,7 +78,7 @@ SELECT mentat.mentat_transact_full('users', '[
 ]');
 
 -- Add sample users
-SELECT mentat.mentat_transact_full('users', '[
+SELECT mentat.t('users', '[
   {:user/name "Alice Smith"
    :user/email "alice@example.com"
    :user/age 32
@@ -128,7 +128,7 @@ echo "Query the 'users' store using Datalog..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 \echo 'Find all engineers:'
 SELECT jsonb_pretty(
-  mentat.mentat_q_store('users',
+  mentat.q('users',
     '[:find ?name ?email
       :where
       [?u :user/name ?name]
@@ -141,7 +141,7 @@ SELECT jsonb_pretty(
 \echo ''
 \echo 'Find manager-report relationships:'
 SELECT jsonb_pretty(
-  mentat.mentat_q_store('users',
+  mentat.q('users',
     '[:find ?emp-name ?mgr-name
       :where
       [?emp :user/name ?emp-name]
@@ -158,7 +158,7 @@ echo_step "Step 6: Create Materialized View"
 echo "Cache expensive queries as materialized views..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 -- Create a materialized view of all engineers
-SELECT mentat.mentat_materialize(
+SELECT mentat.materialize(
   'users',
   'engineers_mv',
   '[:find ?name ?email ?age
@@ -176,7 +176,7 @@ SELECT * FROM mentat_users.engineers_mv;
 
 \echo ''
 \echo 'List all materialized views:'
-SELECT jsonb_pretty(mentat.mentat_list_matviews('users')::jsonb);
+SELECT jsonb_pretty(mentat.list_matviews('users')::jsonb);
 EOF
 pause 4
 
@@ -188,19 +188,19 @@ psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 \set curr_tx (SELECT MAX(tx) FROM mentat_users.transactions)
 
 -- Make a change
-SELECT mentat.mentat_transact_full('users', '[
+SELECT mentat.t('users', '[
   [:db/add [:user/email "bob@example.com"] :user/age 29]
 ]');
 
 \echo 'Transaction log showing the age change:'
-SELECT jsonb_pretty(mentat.mentat_log_default(
+SELECT jsonb_pretty(mentat.log(
   :curr_tx,
   (SELECT MAX(tx) FROM mentat_users.transactions)
 )::jsonb) AS log_entries;
 
 \echo ''
 \echo 'Compare before and after:'
-SELECT jsonb_pretty(mentat.mentat_diff_default(
+SELECT jsonb_pretty(mentat.diff(
   :curr_tx,
   (SELECT MAX(tx) FROM mentat_users.transactions),
   '[:find ?name ?age :where [?u :user/name ?name] [?u :user/age ?age]]',
@@ -214,7 +214,7 @@ echo_step "Step 8: Streaming Subscriptions"
 echo "Set up real-time notifications on data changes..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 -- Create subscription for engineer changes
-SELECT mentat.mentat_subscribe(
+SELECT mentat.subscribe(
   'users',
   'engineer_changes',
   '[:find ?name :where [?u :user/name ?name] [?u :user/role :role/engineer]]'
@@ -223,7 +223,7 @@ SELECT mentat.mentat_subscribe(
 \echo ''
 \echo 'Subscription created. Channel: mentat_engineer_changes'
 \echo 'Active subscriptions:'
-SELECT jsonb_pretty(mentat.mentat_list_subscriptions('users')::jsonb);
+SELECT jsonb_pretty(mentat.list_subscriptions('users')::jsonb);
 EOF
 pause 3
 
@@ -232,7 +232,7 @@ echo_step "Step 9: Recursive Queries"
 echo "Create organizational hierarchy view..."
 psql -X -h $PGHOST -p $PGPORT $DB << 'EOF'
 -- Create recursive view for management hierarchy
-SELECT mentat.mentat_recursive(
+SELECT mentat.recursive(
   'users',
   'reports_hierarchy',
   'reports',
@@ -333,14 +333,14 @@ echo "  ✓ Full-text search integration"
 echo "  ✓ Complete data isolation"
 echo
 echo -e "${YELLOW}New SQL Integration Capabilities:${NC}"
-echo "  • mentat.mentat_create_store() - Create isolated stores"
-echo "  • mentat.mentat_list_stores() - List all stores"
+echo "  • mentat.create_store() - Create isolated stores"
+echo "  • mentat.list_stores() - List all stores"
 echo "  • <schema>.entities/attributes/facts - Virtual table views"
-echo "  • mentat.mentat_q_store() - Store-aware queries"
-echo "  • mentat.mentat_materialize() - Materialized views"
+echo "  • mentat.q() - Store-aware queries"
+echo "  • mentat.materialize() - Materialized views"
 echo "  • mentat.mentat_diff() - Time-travel diffs"
-echo "  • mentat.mentat_subscribe() - Real-time notifications"
-echo "  • mentat.mentat_recursive() - Hierarchical queries"
+echo "  • mentat.subscribe() - Real-time notifications"
+echo "  • mentat.recursive() - Hierarchical queries"
 echo
 echo -e "${GREEN}pg_mentat now provides a true 'database within a database' experience!${NC}"
 echo "=========================================="

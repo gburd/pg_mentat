@@ -188,7 +188,7 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 ///   '[[:db/add "t" :person/name "Alice"]]');
 /// ```
 #[pg_extern]
-pub fn mentat_transact_full(
+pub fn t(
     store_name: &str,
     edn_tx: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {

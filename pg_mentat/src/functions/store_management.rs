@@ -137,7 +137,7 @@ fn get_store_schema(store_name: &str) -> Result<Option<String>, pgrx::spi::SpiEr
 /// SELECT mentat_create_store('my_store', 'A store for my project');
 /// ```
 #[pg_extern]
-pub fn mentat_create_store(
+pub fn create_store(
     store_name: &str,
     description: default!(Option<&str>, "NULL"),
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
@@ -279,7 +279,7 @@ pub fn mentat_create_store(
 /// SELECT mentat_drop_store('my_store');
 /// ```
 #[pg_extern]
-pub fn mentat_drop_store(
+pub fn drop_store(
     store_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     if store_name == "default" {
@@ -321,7 +321,7 @@ pub fn mentat_drop_store(
 /// SELECT mentat_list_stores();
 /// ```
 #[pg_extern]
-pub fn mentat_list_stores() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+pub fn list_stores() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let stores = Spi::connect(|client| {
         let mut result = Vec::new();
 
@@ -362,7 +362,7 @@ pub fn mentat_list_stores() -> Result<JsonB, Box<dyn std::error::Error + Send + 
 /// SELECT mentat_rename_store('old_store', 'new_store');
 /// ```
 #[pg_extern]
-pub fn mentat_rename_store(
+pub fn rename_store(
     old_name: &str,
     new_name: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
