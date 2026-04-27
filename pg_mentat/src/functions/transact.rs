@@ -1477,58 +1477,61 @@ fn is_duplicate_cardinality_many(
     v: &TypedValue,
     schema: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let v_col = typed_value_column(v);
-    let query = format!(
-        "SELECT EXISTS(SELECT 1 FROM {}.datoms \
-         WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true)",
-        schema, v_col,
-    );
-    let type_tag = v.type_tag();
+    // Get store_id from schema
+    let store_id = get_store_id_from_schema(schema)?;
+
+    // Query the appropriate type-specific table based on value type
+    // Much simpler than querying the wide row with value_type_tag discrimination
     let exists = match v {
         TypedValue::Ref(id) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(*id)]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_ref_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(*id)]),
         TypedValue::Boolean(b) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(*b)]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_boolean_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(*b)]),
         TypedValue::Long(n) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(*n)]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_long_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(*n)]),
         TypedValue::Double(f) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(*f)]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_double_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(*f)]),
         TypedValue::Text(s) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_text_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
         TypedValue::Keyword(s) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
-        TypedValue::Instant(micros) => {
-            let q = format!(
-                "SELECT EXISTS(SELECT 1 FROM {}.datoms \
-                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)",
-                schema
-            );
-            Spi::get_one_with_args::<bool>(
-                &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(*micros)])
-        }
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_keyword_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
+        TypedValue::Instant(micros) => Spi::get_one_with_args::<bool>(
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_instant_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 \
+             AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(*micros)]),
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
-            let q = format!(
-                "SELECT EXISTS(SELECT 1 FROM {}.datoms \
-                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_uuid = $4::UUID AND added = true)",
-                schema
-            );
             Spi::get_one_with_args::<bool>(
-                &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(uuid_str.as_str())])
+                "SELECT EXISTS(SELECT 1 FROM mentat.datoms_uuid_new \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID AND added = true)",
+                &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+                  DatumWithOid::from(attr_id), DatumWithOid::from(uuid_str.as_str())])
         }
         TypedValue::Bytes(b) => Spi::get_one_with_args::<bool>(
-            &query, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
-                       DatumWithOid::from(type_tag), DatumWithOid::from(b.clone())]),
+            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_bytes_new \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
+              DatumWithOid::from(attr_id), DatumWithOid::from(b.clone())]),
     }.ok().flatten().unwrap_or(false);
 
     Ok(exists)
@@ -1646,6 +1649,33 @@ fn format_typed_value(v: &TypedValue) -> String {
 /// Insert a single datom with typed value columns into the store's datoms table.
 ///
 /// The `schema` parameter is the quoted PostgreSQL schema name.
+/// Get store_id from store name via stores metadata table.
+/// Returns 0 for "default" store, or the assigned store_id for other stores.
+fn get_store_id_from_schema(schema: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    // Extract store name from schema (mentat -> default, mentat_foo -> foo)
+    let store_name = if schema == "mentat" {
+        "default"
+    } else if let Some(name) = schema.strip_prefix("mentat_") {
+        name
+    } else {
+        return Err(MentatError::InvalidStoreName {
+            store_name: schema.to_string(),
+            reason: "Schema must be 'mentat' or 'mentat_*'".to_string(),
+        }.into());
+    };
+
+    let store_id: Option<i32> = Spi::get_one_with_args(
+        "SELECT store_id FROM mentat.stores WHERE store_name = $1",
+        vec![DatumWithOid::from(store_name)],
+    )?;
+
+    store_id.ok_or_else(|| {
+        MentatError::StoreNotFound {
+            store_name: store_name.to_string(),
+        }.into()
+    })
+}
+
 fn insert_typed_datom(
     e: i64,
     a: i64,
@@ -1654,19 +1684,23 @@ fn insert_typed_datom(
     added: bool,
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let type_tag = v.type_tag();
+    // Get store_id for the new type-specific tables
+    let store_id = get_store_id_from_schema(schema)?;
+
+    // Write to type-specific tables (datoms_*_new)
+    // NOTE: Once Phase 4 cutover is complete, remove the "_new" suffix
     match v {
         TypedValue::Ref(ref_id) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_ref, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_ref_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(*ref_id),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1676,14 +1710,14 @@ fn insert_typed_datom(
         TypedValue::Boolean(b) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_bool, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_boolean_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(*b),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1693,14 +1727,14 @@ fn insert_typed_datom(
         TypedValue::Long(n) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_long, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_long_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(*n),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1710,14 +1744,14 @@ fn insert_typed_datom(
         TypedValue::Double(f) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_double, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_double_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(*f),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1727,14 +1761,14 @@ fn insert_typed_datom(
         TypedValue::Text(s) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_text, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_text_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(s.as_str()),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1744,14 +1778,14 @@ fn insert_typed_datom(
         TypedValue::Keyword(s) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_keyword, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_keyword_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(s.as_str()),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1762,14 +1796,14 @@ fn insert_typed_datom(
             // Insert as TIMESTAMPTZ via SQL CAST to avoid pgrx conversion issues
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_instant, tx, added) \
-                     VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_instant_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(*micros),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1781,14 +1815,14 @@ fn insert_typed_datom(
             let uuid_str = u.to_string();
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_uuid, tx, added) \
-                     VALUES ($1, $2, $3, $4::UUID, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_uuid_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4::UUID, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(uuid_str.as_str()),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
@@ -1798,14 +1832,14 @@ fn insert_typed_datom(
         TypedValue::Bytes(b) => {
             Spi::run_with_args(
                 &format!(
-                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_bytes, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6)",
-                    schema
+                    "INSERT INTO mentat.datoms_bytes_new (store_id, e, a, v, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6) \
+                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
                 ),
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(b.clone()),
                     DatumWithOid::from(tx),
                     DatumWithOid::from(added),
