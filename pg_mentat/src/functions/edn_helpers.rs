@@ -539,19 +539,19 @@ fn edn_to_json(
 ///
 /// Example:
 /// ```sql
-/// SELECT mentat.edn_pretty('{:person/name "Alice" :person/age 30}');
+/// SELECT edn_pretty('{:person/name "Alice" :person/age 30}');
 /// -- Returns:
 /// -- {:person/age 30
 /// --  :person/name "Alice"}
 ///
-/// SELECT mentat.edn_pretty('[:find ?e :where [?e :person/name]]', 40);
+/// SELECT edn_pretty('[:find ?e :where [?e :person/name]]', 40);
 /// -- Returns:
 /// -- [:find
 /// --  ?e
 /// --  :where
 /// --  [?e :person/name]]
 /// ```
-#[pg_extern(schema = "mentat")]
+#[pg_extern(immutable, parallel_safe)]
 fn edn_pretty(
     edn_input: &str,
     width: default!(Option<i32>, "NULL"),

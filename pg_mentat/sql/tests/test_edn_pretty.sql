@@ -1,10 +1,10 @@
--- Test suite: EDN pretty printing (mentat.edn_pretty)
+-- Test suite: EDN pretty printing (edn_pretty)
 --
 -- Tests the edn_pretty() function which formats EDN values with smart
 -- indentation. Verifies output for all EDN types and formatting options.
 --
 -- Function signature:
---   mentat.edn_pretty(edn_input TEXT, width INT DEFAULT NULL) -> TEXT
+--   edn_pretty(edn_input TEXT, width INT DEFAULT NULL) -> TEXT
 --   NULL width defaults to 80 columns.
 
 BEGIN;
@@ -18,7 +18,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('nil');
+    result := edn_pretty('nil');
     ASSERT result = 'nil', 'edn_pretty(nil) should be "nil", got: ' || COALESCE(result, 'NULL');
     RAISE NOTICE 'PASS: edn_pretty nil';
 END;
@@ -29,7 +29,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('true');
+    result := edn_pretty('true');
     ASSERT result = 'true', 'edn_pretty(true) should be "true"';
     RAISE NOTICE 'PASS: edn_pretty true';
 END;
@@ -40,7 +40,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('false');
+    result := edn_pretty('false');
     ASSERT result = 'false', 'edn_pretty(false) should be "false"';
     RAISE NOTICE 'PASS: edn_pretty false';
 END;
@@ -51,7 +51,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('42');
+    result := edn_pretty('42');
     ASSERT result = '42', 'edn_pretty(42) should be "42"';
     RAISE NOTICE 'PASS: edn_pretty integer';
 END;
@@ -62,7 +62,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('-123');
+    result := edn_pretty('-123');
     ASSERT result = '-123', 'edn_pretty(-123) should be "-123"';
     RAISE NOTICE 'PASS: edn_pretty negative integer';
 END;
@@ -73,7 +73,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('3.14');
+    result := edn_pretty('3.14');
     ASSERT result IS NOT NULL, 'edn_pretty(3.14) should return a result';
     RAISE NOTICE 'PASS: edn_pretty float';
 END;
@@ -84,7 +84,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('"hello world"');
+    result := edn_pretty('"hello world"');
     ASSERT result = '"hello world"', 'edn_pretty("hello world") should preserve string';
     RAISE NOTICE 'PASS: edn_pretty string';
 END;
@@ -95,7 +95,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty(':name');
+    result := edn_pretty(':name');
     ASSERT result = ':name', 'edn_pretty(:name) should be ":name"';
     RAISE NOTICE 'PASS: edn_pretty keyword';
 END;
@@ -106,7 +106,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty(':person/name');
+    result := edn_pretty(':person/name');
     ASSERT result = ':person/name', 'edn_pretty(:person/name) should be ":person/name"';
     RAISE NOTICE 'PASS: edn_pretty namespaced keyword';
 END;
@@ -117,7 +117,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('my-var');
+    result := edn_pretty('my-var');
     ASSERT result IS NOT NULL, 'edn_pretty(my-var) should return a result';
     RAISE NOTICE 'PASS: edn_pretty symbol';
 END;
@@ -128,7 +128,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('#uuid "550e8400-e29b-41d4-a716-446655440000"');
+    result := edn_pretty('#uuid "550e8400-e29b-41d4-a716-446655440000"');
     ASSERT result IS NOT NULL, 'edn_pretty(uuid) should return a result';
     ASSERT result LIKE '%550e8400%', 'edn_pretty(uuid) should contain the UUID';
     RAISE NOTICE 'PASS: edn_pretty UUID';
@@ -144,7 +144,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[1 2 3]');
+    result := edn_pretty('[1 2 3]');
     ASSERT result = '[1 2 3]', 'short vector should stay compact, got: ' || result;
     RAISE NOTICE 'PASS: edn_pretty short vector';
 END;
@@ -155,7 +155,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[]');
+    result := edn_pretty('[]');
     ASSERT result = '[]', 'empty vector should be "[]"';
     RAISE NOTICE 'PASS: edn_pretty empty vector';
 END;
@@ -166,7 +166,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('(1 2 3)');
+    result := edn_pretty('(1 2 3)');
     ASSERT result IS NOT NULL, 'list should format';
     ASSERT result LIKE '(%', 'list should start with (';
     ASSERT result LIKE '%)', 'list should end with )';
@@ -179,7 +179,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('#{1 2 3}');
+    result := edn_pretty('#{1 2 3}');
     ASSERT result IS NOT NULL, 'set should format';
     ASSERT result LIKE '#{%', 'set should start with #{';
     ASSERT result LIKE '%}', 'set should end with }';
@@ -192,7 +192,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('#{}');
+    result := edn_pretty('#{}');
     ASSERT result IS NOT NULL, 'empty set should format';
     RAISE NOTICE 'PASS: edn_pretty empty set';
 END;
@@ -203,7 +203,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('{:a 1 :b 2}');
+    result := edn_pretty('{:a 1 :b 2}');
     ASSERT result IS NOT NULL, 'short map should format';
     ASSERT result LIKE '{%', 'map should start with {';
     ASSERT result LIKE '%}', 'map should end with }';
@@ -216,7 +216,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('{}');
+    result := edn_pretty('{}');
     ASSERT result = '{}', 'empty map should be "{}"';
     RAISE NOTICE 'PASS: edn_pretty empty map';
 END;
@@ -231,7 +231,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[1 2 3 4 5 6 7 8 9 10]', 10);
+    result := edn_pretty('[1 2 3 4 5 6 7 8 9 10]', 10);
     ASSERT result LIKE '%' || chr(10) || '%',
         'narrow width should produce multi-line output';
     RAISE NOTICE 'PASS: edn_pretty narrow width produces multi-line';
@@ -243,7 +243,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[1 2 3 4 5]', 200);
+    result := edn_pretty('[1 2 3 4 5]', 200);
     ASSERT result NOT LIKE '%' || chr(10) || '%',
         'wide width should keep short vector on one line';
     RAISE NOTICE 'PASS: edn_pretty wide width keeps one line';
@@ -255,7 +255,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[1 2 3]', NULL);
+    result := edn_pretty('[1 2 3]', NULL);
     ASSERT result IS NOT NULL, 'NULL width should use default (80)';
     RAISE NOTICE 'PASS: edn_pretty default NULL width';
 END;
@@ -270,7 +270,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[{:name "Alice"} {:name "Bob"}]');
+    result := edn_pretty('[{:name "Alice"} {:name "Bob"}]');
     ASSERT result IS NOT NULL, 'nested map in vector should format';
     ASSERT result LIKE '%Alice%', 'should contain Alice';
     ASSERT result LIKE '%Bob%', 'should contain Bob';
@@ -283,7 +283,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('{:names ["Alice" "Bob"] :ages [30 25]}');
+    result := edn_pretty('{:names ["Alice" "Bob"] :ages [30 25]}');
     ASSERT result IS NOT NULL, 'nested vector in map should format';
     ASSERT result LIKE '%names%', 'should contain :names';
     ASSERT result LIKE '%ages%', 'should contain :ages';
@@ -296,7 +296,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('{:a {:b {:c [1 2 3]}}}');
+    result := edn_pretty('{:a {:b {:c [1 2 3]}}}');
     ASSERT result IS NOT NULL, 'deeply nested structure should format';
     ASSERT result LIKE '%:a%', 'should contain :a';
     ASSERT result LIKE '%:b%', 'should contain :b';
@@ -314,7 +314,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[:find ?e ?name :where [?e :person/name ?name]]');
+    result := edn_pretty('[:find ?e ?name :where [?e :person/name ?name]]');
     ASSERT result IS NOT NULL, 'Datalog query should format';
     ASSERT result LIKE '%:find%', 'should contain :find';
     ASSERT result LIKE '%:where%', 'should contain :where';
@@ -327,7 +327,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty(
+    result := edn_pretty(
         '[:find ?e ?name ?age :where [?e :person/name ?name] [?e :person/age ?age] [(> ?age 18)]]',
         40
     );
@@ -345,7 +345,7 @@ $$;
 -- Test 27: invalid EDN input
 DO $$
 BEGIN
-    PERFORM mentat.edn_pretty('{invalid edn');
+    PERFORM edn_pretty('{invalid edn');
     RAISE EXCEPTION 'should have raised an error for invalid EDN';
 EXCEPTION
     WHEN OTHERS THEN
@@ -356,7 +356,7 @@ $$;
 -- Test 28: negative width
 DO $$
 BEGIN
-    PERFORM mentat.edn_pretty('{:a 1}', -1);
+    PERFORM edn_pretty('{:a 1}', -1);
     RAISE EXCEPTION 'should have raised an error for negative width';
 EXCEPTION
     WHEN OTHERS THEN
@@ -367,7 +367,7 @@ $$;
 -- Test 29: zero width
 DO $$
 BEGIN
-    PERFORM mentat.edn_pretty('{:a 1}', 0);
+    PERFORM edn_pretty('{:a 1}', 0);
     RAISE EXCEPTION 'should have raised an error for zero width';
 EXCEPTION
     WHEN OTHERS THEN
@@ -385,8 +385,8 @@ DECLARE
     first_pass TEXT;
     second_pass TEXT;
 BEGIN
-    first_pass := mentat.edn_pretty('{:a [1 2 3] :b {:c 4}}');
-    second_pass := mentat.edn_pretty(first_pass);
+    first_pass := edn_pretty('{:a [1 2 3] :b {:c 4}}');
+    second_pass := edn_pretty(first_pass);
     ASSERT first_pass = second_pass,
         'pretty printing should be idempotent';
     RAISE NOTICE 'PASS: edn_pretty is idempotent';
@@ -411,7 +411,7 @@ BEGIN
     END LOOP;
     large_vec := large_vec || ']';
 
-    result := mentat.edn_pretty(large_vec, 40);
+    result := edn_pretty(large_vec, 40);
     ASSERT result IS NOT NULL, 'large vector should format';
     ASSERT result LIKE '%' || chr(10) || '%',
         'large vector at width 40 should be multi-line';
@@ -424,7 +424,7 @@ DO $$
 DECLARE
     result TEXT;
 BEGIN
-    result := mentat.edn_pretty('[{:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]', 60);
+    result := edn_pretty('[{:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]', 60);
     ASSERT result IS NOT NULL, 'transaction EDN should format';
     ASSERT result LIKE '%:db/ident%', 'should contain :db/ident';
     RAISE NOTICE 'PASS: edn_pretty transaction EDN';

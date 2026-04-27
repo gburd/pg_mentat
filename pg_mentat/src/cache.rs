@@ -1,3 +1,4 @@
+use crate::functions::store_management::get_schema_for_store;
 use pgrx::spi::Spi;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,13 +15,15 @@ pub struct AttributeInfo {
     pub component: bool,
 }
 
-/// Global caches for schema and ident lookups.
+/// Per-store schema and ident cache.
 ///
-/// On first access the cache bulk-loads every row from `mentat.schema` and
-/// `mentat.idents` in two queries, so subsequent attribute / ident lookups are
+/// On first access the cache bulk-loads every row from `<schema>.schema` and
+/// `<schema>.idents` in two queries, so subsequent attribute / ident lookups are
 /// pure in-memory HashMap reads (O(1)).  After `invalidate()` the next access
 /// triggers a fresh bulk load.
 pub struct SchemaCache {
+    /// The PostgreSQL schema name this cache loads from (e.g. "mentat", "mentat_my_store").
+    db_schema: String,
     /// True once the initial bulk load has completed.
     warmed: AtomicBool,
     /// Map from attribute entid to attribute metadata
@@ -32,8 +35,9 @@ pub struct SchemaCache {
 }
 
 impl SchemaCache {
-    pub fn new() -> Self {
+    pub fn new(db_schema: String) -> Self {
         Self {
+            db_schema,
             warmed: AtomicBool::new(false),
             attrs_by_id: RwLock::new(HashMap::new()),
             idents_to_entid: RwLock::new(HashMap::new()),
@@ -50,15 +54,17 @@ impl SchemaCache {
             return;
         }
 
-        // Load all attributes from mentat.schema in a single query
+        let schema = &self.db_schema;
+
+        // Load all attributes from <schema>.schema in a single query
         let _ = Spi::connect(|client| {
-            let rows = client.select(
+            let query = format!(
                 "SELECT entid, ident, value_type::TEXT, cardinality::TEXT, \
                  unique_constraint::TEXT, fulltext, indexed, component \
-                 FROM mentat.schema",
-                None,
-                &[],
-            )?;
+                 FROM {}.schema",
+                schema
+            );
+            let rows = client.select(&query, None, &[])?;
 
             let mut attrs = self
                 .attrs_by_id
@@ -114,10 +120,11 @@ impl SchemaCache {
             Ok::<_, pgrx::spi::SpiError>(())
         });
 
-        // Also load idents that are not in mentat.schema (e.g., bootstrap
-        // entries that only live in mentat.idents).
+        // Also load idents that are not in <schema>.schema (e.g., bootstrap
+        // entries that only live in <schema>.idents).
         let _ = Spi::connect(|client| {
-            let rows = client.select("SELECT ident, entid FROM mentat.idents", None, &[])?;
+            let query = format!("SELECT ident, entid FROM {}.idents", schema);
+            let rows = client.select(&query, None, &[])?;
 
             let mut idents = self
                 .idents_to_entid
@@ -241,11 +248,90 @@ impl SchemaCache {
     }
 }
 
-/// Global schema cache instance
-static SCHEMA_CACHE: once_cell::sync::Lazy<SchemaCache> =
-    once_cell::sync::Lazy::new(|| SchemaCache::new());
+/// Global store-aware schema cache map.
+///
+/// Maps store names (e.g. "default", "my_store") to their per-store SchemaCache.
+/// Thread-safe via RwLock; each individual SchemaCache is also internally locked.
+struct StoreCacheMap {
+    caches: RwLock<HashMap<String, &'static SchemaCache>>,
+}
 
-/// Get the global schema cache
+impl StoreCacheMap {
+    fn new() -> Self {
+        Self {
+            caches: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Get or create a SchemaCache for the given store name.
+    fn get_or_create(&self, store_name: &str) -> &'static SchemaCache {
+        // Fast path: read lock
+        {
+            let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+            if let Some(cache) = caches.get(store_name) {
+                return cache;
+            }
+        }
+
+        // Slow path: write lock, create new cache
+        let mut caches = self.caches.write().expect("StoreCacheMap RwLock poisoned");
+        // Double-check after acquiring write lock
+        if let Some(cache) = caches.get(store_name) {
+            return cache;
+        }
+
+        let db_schema = get_schema_for_store(store_name);
+        let cache = Box::leak(Box::new(SchemaCache::new(db_schema)));
+        caches.insert(store_name.to_string(), cache);
+        cache
+    }
+
+    /// Invalidate the cache for a specific store.
+    fn invalidate_store(&self, store_name: &str) {
+        let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+        if let Some(cache) = caches.get(store_name) {
+            cache.invalidate();
+        }
+    }
+
+    /// Invalidate all store caches.
+    fn invalidate_all(&self) {
+        let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+        for cache in caches.values() {
+            cache.invalidate();
+        }
+    }
+}
+
+/// Global store cache map instance
+static STORE_CACHES: once_cell::sync::Lazy<StoreCacheMap> =
+    once_cell::sync::Lazy::new(StoreCacheMap::new);
+
+/// Get the schema cache for the default store.
+///
+/// This is backwards-compatible with code that used the old single-cache API.
 pub fn get_cache() -> &'static SchemaCache {
-    &SCHEMA_CACHE
+    get_cache_for_store("default")
+}
+
+/// Get the schema cache for a named store.
+///
+/// Creates the cache on first access; subsequent calls return the same instance.
+/// The cache is lazily warmed on first attribute/ident lookup.
+pub fn get_cache_for_store(store_name: &str) -> &'static SchemaCache {
+    STORE_CACHES.get_or_create(store_name)
+}
+
+/// Invalidate the schema cache for a specific store.
+///
+/// Call this after schema changes in a store so the cache is refreshed on next access.
+pub fn invalidate_store_cache(store_name: &str) {
+    STORE_CACHES.invalidate_store(store_name);
+}
+
+/// Invalidate all store schema caches.
+///
+/// Call this when a global event requires all caches to be refreshed.
+pub fn invalidate_all_caches() {
+    STORE_CACHES.invalidate_all();
 }

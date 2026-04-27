@@ -20,6 +20,7 @@ This guide covers the complete SQL function API, EDN helper functions, batch ope
   - [mentat.import_edn](#mentatimport_edn)
   - [mentat.query_export_edn](#mentatquery_export_edn)
   - [mentat.export_all_edn](#mentatexport_all_edn)
+  - [edn_pretty](#edn_pretty)
 - [Entity Helper Functions](#entity-helper-functions)
   - [mentat.lookup_by_ident](#mentatloookup_by_ident)
   - [mentat.entity_attrs](#menatentity_attrs)
@@ -500,6 +501,28 @@ SELECT mentat.export_all_edn();
 
 ---
 
+### edn_pretty
+
+Pretty-print EDN text with smart indentation and configurable line width. This function lives in the `public` schema (a backwards-compatible alias exists as `mentat.edn_pretty`).
+
+```sql
+edn_pretty(edn_input TEXT, width INT DEFAULT NULL) -> TEXT
+```
+
+```sql
+SELECT edn_pretty('{:person/name "Alice" :person/age 30}');
+-- Returns:
+-- {:person/age 30
+--  :person/name "Alice"}
+
+SELECT edn_pretty('[:find ?e :where [?e :person/name]]', 40);
+-- Returns a multi-line formatted Datalog query
+```
+
+The `width` parameter controls the target line width (default 80 columns). Pass a narrower width to force multi-line output.
+
+---
+
 ## Entity Helper Functions
 
 These convenience functions live in the `mentat` schema.
@@ -909,3 +932,539 @@ The `datoms` table is partitioned by `value_type_tag` (LIST partitioning) for pa
 | 8 | keyword | `v_keyword` |
 | 10 | uuid | `v_uuid` |
 | 11 | bytes | `v_bytes` |
+
+---
+
+## Store Management
+
+pg_mentat supports multiple independent data stores (databases) within a single PostgreSQL instance. Each store has its own schema, datoms table, transaction log, and indexes, providing complete data isolation.
+
+### mentat_create_store
+
+Create a new named store with its own isolated schema and tables.
+
+```sql
+mentat_create_store(store_name TEXT, description TEXT DEFAULT NULL) -> TEXT
+```
+
+```sql
+SELECT mentat_create_store('analytics', 'Store for analytics data');
+-- Creates schema mentat_analytics with all core tables and virtual views
+```
+
+**Naming rules:**
+- Must start with a letter
+- Only lowercase letters, digits, and underscores allowed
+- Maximum 63 characters
+- Cannot use reserved names: `default`, `public`, `pg_*`
+
+### mentat_drop_store
+
+Drop a named store and all its data permanently.
+
+```sql
+mentat_drop_store(store_name TEXT) -> TEXT
+```
+
+```sql
+SELECT mentat_drop_store('analytics');
+-- WARNING: This permanently deletes all data in the store
+```
+
+The default store cannot be dropped.
+
+### mentat_list_stores
+
+List all stores with metadata.
+
+```sql
+mentat_list_stores() -> JSONB
+```
+
+```sql
+SELECT mentat_list_stores();
+-- Returns:
+-- [
+--   {"name": "default", "schema": "mentat", "description": "Default store", "created_at": "..."},
+--   {"name": "analytics", "schema": "mentat_analytics", "description": "Store for analytics data", "created_at": "..."}
+-- ]
+```
+
+### mentat_rename_store
+
+Rename an existing store.
+
+```sql
+mentat_rename_store(old_name TEXT, new_name TEXT) -> TEXT
+```
+
+```sql
+SELECT mentat_rename_store('analytics', 'metrics');
+```
+
+---
+
+## Store-Aware Functions
+
+Every core function has a `*_in_store` variant that targets a specific named store. The default (non-suffixed) functions operate on the `default` store.
+
+| Default Function | Store-Aware Variant |
+|-----------------|---------------------|
+| `mentat_transact(edn)` | `mentat_transact_in_store(store, edn)` |
+| `mentat_query(query, inputs)` | `mentat_query_in_store(store, query, inputs)` |
+| `mentat_pull(pattern, eid)` | `mentat_pull_in_store(store, pattern, eid)` |
+| `mentat_pull_many(pattern, eids)` | `mentat_pull_many_in_store(store, pattern, eids)` |
+| `mentat_entity(eid)` | `mentat_entity_in_store(store, eid)` |
+| `mentat_schema()` | `mentat_schema_in_store(store)` |
+
+### Example: Multi-tenant Architecture
+
+```sql
+-- Create per-tenant stores
+SELECT mentat_create_store('tenant_acme', 'ACME Corp data');
+SELECT mentat_create_store('tenant_globex', 'Globex Corp data');
+
+-- Transact into specific tenant
+SELECT mentat_transact_in_store('tenant_acme', '[
+    {:db/ident :user/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+]');
+SELECT mentat_transact_in_store('tenant_acme', '[
+    {:db/id "u1" :user/name "Alice"}
+]');
+
+-- Query a specific tenant
+SELECT mentat_query_in_store('tenant_acme',
+    '[:find ?name :where [?e :user/name ?name]]', '{}');
+
+-- Tenant data is completely isolated
+SELECT mentat_query_in_store('tenant_globex',
+    '[:find ?name :where [?e :user/name ?name]]', '{}');
+-- Returns empty: Globex has no user data
+```
+
+---
+
+## Virtual Table Views
+
+Each store automatically creates a set of virtual table views that expose Mentat data through a relational lens. These allow SQL-native querying without Datalog.
+
+### Available Views
+
+| View | Purpose | Key Columns |
+|------|---------|-------------|
+| `entities` | All entities with metadata | `entity_id`, `first_tx`, `last_tx`, `attribute_count` |
+| `attributes` | Schema attributes | `entid`, `ident`, `value_type`, `cardinality`, `indexed`, ... |
+| `facts` | Human-readable fact triples | `entity_id`, `attribute`, `value`, `value_type`, `tx`, `added` |
+| `text_values` | String-typed facts | `entity_id`, `attribute`, `value`, `tx` |
+| `numeric_values` | Long/integer-typed facts | `entity_id`, `attribute`, `value`, `tx` |
+| `double_values` | Double/float-typed facts | `entity_id`, `attribute`, `value`, `tx` |
+| `boolean_values` | Boolean-typed facts | `entity_id`, `attribute`, `value`, `tx` |
+| `keyword_values` | Keyword-typed facts | `entity_id`, `attribute`, `value`, `tx` |
+| `ref_values` | Reference-typed facts | `entity_id`, `attribute`, `target_entity`, `tx` |
+| `searchable_text` | Full-text search view | `entity_id`, `attribute`, `value`, `search_vector` |
+
+### Example: SQL-Native Queries
+
+```sql
+-- Find all entities with a :person/name attribute
+SELECT entity_id, value
+FROM mentat.text_values
+WHERE attribute = ':person/name';
+
+-- Get entity fact count
+SELECT entity_id, attribute_count
+FROM mentat.entities
+ORDER BY attribute_count DESC
+LIMIT 10;
+
+-- Full-text search
+SELECT entity_id, value
+FROM mentat.searchable_text
+WHERE search_vector @@ to_tsquery('english', 'database & systems');
+
+-- Standard SQL JOINs between views
+SELECT t.entity_id, t.value AS name, n.value AS age
+FROM mentat.text_values t
+JOIN mentat.numeric_values n ON t.entity_id = n.entity_id
+WHERE t.attribute = ':person/name'
+  AND n.attribute = ':person/age'
+  AND n.value > 25;
+```
+
+### Regenerating Virtual Tables
+
+Virtual tables are created automatically when a store is created. To regenerate them (e.g., after schema changes):
+
+```sql
+SELECT mentat_create_virtual_tables('default');
+SELECT mentat_create_virtual_tables('my_store');
+```
+
+---
+
+## Materialized Views
+
+Materialized views cache the results of Datalog queries as PostgreSQL materialized views, providing fast read access at the cost of staleness until refreshed.
+
+### mentat_create_matview
+
+```sql
+mentat_create_matview(name TEXT, query TEXT, inputs JSONB) -> TEXT
+```
+
+```sql
+SELECT mentat_create_matview('active_engineers',
+    '[:find ?name ?salary
+     :where
+     [?e :employee/name ?name]
+     [?e :employee/dept "Engineering"]
+     [?e :employee/salary ?salary]
+     [?e :employee/active true]]',
+    '{}');
+
+-- Query it like a regular table
+SELECT * FROM mentat.matview_active_engineers;
+```
+
+### mentat_refresh_matview
+
+Refresh a materialized view with current data.
+
+```sql
+mentat_refresh_matview(name TEXT, concurrently BOOLEAN DEFAULT FALSE) -> TEXT
+```
+
+```sql
+-- Standard refresh (blocks reads)
+SELECT mentat_refresh_matview('active_engineers');
+
+-- Concurrent refresh (requires unique index, does not block reads)
+SELECT mentat_refresh_matview('active_engineers', true);
+```
+
+### mentat_drop_matview
+
+```sql
+mentat_drop_matview(name TEXT) -> TEXT
+```
+
+```sql
+SELECT mentat_drop_matview('active_engineers');
+```
+
+### mentat_list_matviews
+
+```sql
+mentat_list_matviews() -> JSONB
+```
+
+```sql
+SELECT mentat_list_matviews();
+-- Returns:
+-- [
+--   {"name": "active_engineers", "query": "...", "created_at": "...", "last_refresh": "..."}
+-- ]
+```
+
+### Store-Aware Variants
+
+```sql
+mentat_create_matview_in_store(store TEXT, name TEXT, query TEXT, inputs JSONB) -> TEXT
+mentat_refresh_matview_in_store(store TEXT, name TEXT, concurrently BOOLEAN) -> TEXT
+mentat_drop_matview_in_store(store TEXT, name TEXT) -> TEXT
+mentat_list_matviews_in_store(store TEXT) -> JSONB
+```
+
+### Use Cases
+
+- **Dashboards:** Pre-compute aggregate statistics for fast display
+- **Reporting:** Cache complex join results
+- **Search indexes:** Materialize filtered entity sets for fast lookup
+- **API layers:** Serve pre-computed results without real-time query overhead
+
+---
+
+## Time-Travel Queries
+
+pg_mentat preserves the full history of all facts, enabling point-in-time queries, audit trails, and change detection.
+
+### mentat_as_of
+
+Query the database as it was at a specific transaction.
+
+```sql
+mentat_as_of(tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB
+```
+
+```sql
+-- What was the config at transaction 1000005?
+SELECT mentat_as_of(1000005,
+    '[:find ?key ?val
+     :where
+     [?e :config/key ?key]
+     [?e :config/value ?val]]',
+    '{}');
+```
+
+### mentat_since
+
+Query only facts that were asserted since a specific transaction.
+
+```sql
+mentat_since(tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB
+```
+
+```sql
+-- What changed since the last deployment?
+SELECT mentat_since(1000010,
+    '[:find ?attr ?val
+     :where
+     [?e ?attr ?val]]',
+    '{}');
+```
+
+### mentat_history
+
+Query the full assertion/retraction history including retractions.
+
+```sql
+mentat_history(query TEXT, inputs JSONB) -> JSONB
+```
+
+```sql
+-- Complete audit trail for a field
+SELECT mentat_history(
+    '[:find ?val ?tx ?added
+     :where
+     [?e :user/email "alice@example.com"]
+     [?e :user/role ?val ?tx ?added]]',
+    '{}');
+-- Returns: [["admin", 1000005, true], ["admin", 1000008, false], ["superadmin", 1000008, true]]
+```
+
+### Query Input Modifiers
+
+Time-travel can also be specified via the `inputs` JSON parameter:
+
+```sql
+-- As-of via inputs
+SELECT mentat_query('[:find ?name :where [?e :person/name ?name]]',
+    '{"asOf": 1000005}');
+
+-- Since via inputs
+SELECT mentat_query('[:find ?name :where [?e :person/name ?name]]',
+    '{"since": 1000005}');
+
+-- History via inputs (query must bind ?tx and ?added)
+SELECT mentat_query(
+    '[:find ?e ?name ?tx ?added :where [?e :person/name ?name ?tx ?added]]',
+    '{"history": true}');
+```
+
+### Store-Aware Variants
+
+```sql
+mentat_as_of_in_store(store TEXT, tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB
+mentat_since_in_store(store TEXT, tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB
+mentat_history_in_store(store TEXT, query TEXT, inputs JSONB) -> JSONB
+```
+
+---
+
+## Streaming Subscriptions
+
+Subscriptions monitor Datalog query results for changes and emit PostgreSQL NOTIFY events when results change after transactions.
+
+### mentat_subscribe
+
+Register a subscription that watches for query result changes.
+
+```sql
+mentat_subscribe(name TEXT, query TEXT, inputs JSONB, channel TEXT DEFAULT NULL) -> TEXT
+```
+
+```sql
+-- Watch for high-temperature readings
+SELECT mentat_subscribe('hot_sensors',
+    '[:find ?id ?temp
+     :where
+     [?e :sensor/id ?id]
+     [?e :sensor/temp ?temp]
+     [(> ?temp 30.0)]]',
+    '{}',
+    'sensor_alerts');
+-- Returns subscription ID
+```
+
+### mentat_unsubscribe
+
+Remove a subscription.
+
+```sql
+mentat_unsubscribe(name TEXT) -> TEXT
+```
+
+```sql
+SELECT mentat_unsubscribe('hot_sensors');
+```
+
+### mentat_list_subscriptions
+
+List all active subscriptions.
+
+```sql
+mentat_list_subscriptions() -> JSONB
+```
+
+```sql
+SELECT mentat_list_subscriptions();
+-- [{"name": "hot_sensors", "query": "...", "channel": "sensor_alerts", "created_at": "..."}]
+```
+
+### mentat_notify_subscribers
+
+Manually trigger subscription evaluation (also triggered automatically after transactions).
+
+```sql
+mentat_notify_subscribers() -> TEXT
+```
+
+```sql
+SELECT mentat_notify_subscribers();
+```
+
+### Listening for Notifications
+
+```sql
+-- In a PostgreSQL client:
+LISTEN sensor_alerts;
+
+-- After a transaction that matches the subscription query,
+-- the client will receive a NOTIFY with the new results as payload.
+```
+
+### Store-Aware Variants
+
+```sql
+mentat_subscribe_in_store(store TEXT, name TEXT, query TEXT, inputs JSONB, channel TEXT) -> TEXT
+mentat_unsubscribe_in_store(store TEXT, name TEXT) -> TEXT
+mentat_list_subscriptions_in_store(store TEXT) -> JSONB
+```
+
+---
+
+## Recursive Query Translation
+
+pg_mentat translates recursive Datalog rules into PostgreSQL recursive CTEs for efficient graph traversal.
+
+### mentat_recursive_query
+
+Execute a query with recursive rules.
+
+```sql
+mentat_recursive_query(query TEXT, inputs JSONB, rules TEXT) -> JSONB
+```
+
+```sql
+SELECT mentat_recursive_query(
+    '[:find ?name
+     :in $ ?root
+     :where
+     (ancestor ?child ?root)
+     [?child :org/name ?name]]',
+    '{"root": ["lookup", ":org/name", "Corp"]}',
+    '[[(ancestor ?x ?y) [?x :org/parent ?y]]
+      [(ancestor ?x ?y) [?x :org/parent ?z] (ancestor ?z ?y)]]');
+```
+
+### mentat_ancestors
+
+Find all ancestors by following a ref attribute upward.
+
+```sql
+mentat_ancestors(query TEXT, inputs JSONB, ref_attr TEXT, max_depth INT) -> JSONB
+```
+
+```sql
+-- Find all organizational parents up to the root
+SELECT mentat_ancestors(
+    '[:find ?name
+     :in $ ?start
+     :where [?start :org/parent ?ancestor] [?ancestor :org/name ?name]]',
+    '{"start": ["lookup", ":org/name", "Backend"]}',
+    ':org/parent',
+    10);
+-- Returns: [["Engineering"], ["Corp"]]
+```
+
+### mentat_descendants
+
+Find all descendants by following a ref attribute downward.
+
+```sql
+mentat_descendants(query TEXT, inputs JSONB, ref_attr TEXT, max_depth INT) -> JSONB
+```
+
+```sql
+-- Find all sub-organizations
+SELECT mentat_descendants(
+    '[:find ?name
+     :in $ ?start
+     :where [?child :org/parent ?start] [?child :org/name ?name]]',
+    '{"start": ["lookup", ":org/name", "Corp"]}',
+    ':org/parent',
+    10);
+-- Returns: [["Engineering"], ["Sales"], ["Backend"], ["Frontend"], ["East"], ["West"]]
+```
+
+### Store-Aware Variants
+
+```sql
+mentat_recursive_query_in_store(store TEXT, query TEXT, inputs JSONB, rules TEXT) -> JSONB
+mentat_ancestors_in_store(store TEXT, query TEXT, inputs JSONB, ref_attr TEXT, max_depth INT) -> JSONB
+mentat_descendants_in_store(store TEXT, query TEXT, inputs JSONB, ref_attr TEXT, max_depth INT) -> JSONB
+```
+
+### Use Cases
+
+- **Organization charts:** Traverse manager/report hierarchies
+- **Category trees:** Navigate product/content taxonomies
+- **Dependency graphs:** Find all transitive dependencies
+- **Access control:** Compute inherited permissions through group hierarchies
+
+---
+
+## Security Considerations
+
+### Input Validation
+
+All pg_mentat functions validate inputs before execution:
+
+- **Store names:** Restricted to `[a-z][a-z0-9_]*`, max 63 chars, no reserved names
+- **EDN transactions:** Parsed by a strict EDN parser; malformed input is rejected
+- **Query text:** Parsed by the Datalog parser; SQL cannot be injected through query strings
+- **Input parameters:** Bound via parameterized queries (`$1`, `$2`), never string-concatenated
+
+### SQL Injection Protection
+
+pg_mentat uses several layers of protection against SQL injection:
+
+1. **Schema-qualified identifiers:** All dynamic SQL uses `format()` with `%I` (identifier quoting)
+2. **Parameterized queries:** SPI queries use `$N` parameter binding
+3. **Name validation:** Store/matview/subscription names are validated against a strict regex before use in any SQL
+4. **EDN parser boundary:** The EDN parser converts text to a typed AST before any SQL generation
+
+### Privilege Model
+
+- Functions run with the caller's privileges (no `SECURITY DEFINER`)
+- Store schemas are created with standard PostgreSQL ownership rules
+- The `mentat` schema requires appropriate USAGE/SELECT/INSERT grants
+- Use PostgreSQL roles and `GRANT`/`REVOKE` to control access per store
+
+### Best Practices
+
+1. Use PostgreSQL roles for access control, not application-level checks
+2. Grant minimal privileges: `USAGE` on schema + `SELECT` for read-only users
+3. Audit store creation/deletion by monitoring the `mentat.stores` table
+4. Use `mentat.max_result_rows` to prevent unbounded queries from consuming memory
+5. Monitor subscription count to avoid excessive notification overhead

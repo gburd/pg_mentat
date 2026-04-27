@@ -1,4 +1,5 @@
 use crate::error::MentatError;
+use crate::functions::store_management::get_schema_for_store;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::JsonB;
@@ -29,23 +30,40 @@ mod type_tag {
 /// ```
 #[pg_extern]
 pub fn mentat_entity(entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_entity_in_store("default", entity_id)
+}
+
+/// Fetch all datoms for a specific entity from a named store and return as JSON
+///
+/// Returns entity data as a JSON map from the specified store.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_entity_in_store('my_store', 123);
+/// ```
+#[pg_extern]
+pub fn mentat_entity_in_store(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_name = get_schema_for_store(store);
     let mut entity_map = serde_json::Map::new();
 
     // Always include the entity ID
     entity_map.insert(":db/id".to_string(), json!(entity_id));
 
     Spi::connect(|client| {
-        let query = "SELECT s.ident, d.value_type_tag, \
-                            d.v_ref, d.v_bool, d.v_long, d.v_double, \
-                            d.v_text, d.v_keyword, \
-                            EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                            EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                            d.v_uuid::TEXT, d.v_bytes \
-                     FROM mentat.datoms d \
-                     JOIN mentat.schema s ON d.a = s.entid \
-                     WHERE d.e = $1 AND d.added = true";
+        let query = format!(
+            "SELECT s.ident, d.value_type_tag, \
+                    d.v_ref, d.v_bool, d.v_long, d.v_double, \
+                    d.v_text, d.v_keyword, \
+                    EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
+                    EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
+                    d.v_uuid::TEXT, d.v_bytes \
+             FROM {schema}.datoms d \
+             JOIN {schema}.schema s ON d.a = s.entid \
+             WHERE d.e = $1 AND d.added = true",
+            schema = schema_name
+        );
 
-        for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
+        for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
             let ident: String = row.get(1)?.ok_or_else(|| MentatError::DataIntegrity {
                 message: "Missing ident column in schema join for entity query".to_string(),
             })?;

@@ -161,6 +161,25 @@ pub enum MentatError {
         timeout_ms: i32,
     },
 
+    /// A store with the given name already exists.
+    StoreExists {
+        store_name: String,
+    },
+
+    /// A store with the given name was not found.
+    StoreNotFound {
+        store_name: String,
+    },
+
+    /// A store name is invalid (bad characters, too long, reserved, etc.).
+    InvalidStoreName {
+        store_name: String,
+        reason: String,
+    },
+
+    /// Attempted to drop the default store, which is not allowed.
+    CannotDropDefaultStore,
+
     /// Wraps an upstream error (SPI, EDN parse, etc.) with context.
     Internal {
         message: String,
@@ -440,6 +459,41 @@ impl fmt::Display for MentatError {
                 )
             }
 
+            Self::StoreExists { store_name } => {
+                write!(
+                    f,
+                    ":db.error/store-exists Store '{}' already exists.",
+                    store_name
+                )
+            }
+
+            Self::StoreNotFound { store_name } => {
+                write!(
+                    f,
+                    ":db.error/store-not-found Store '{}' not found.",
+                    store_name
+                )
+            }
+
+            Self::InvalidStoreName {
+                store_name,
+                reason,
+            } => {
+                write!(
+                    f,
+                    ":db.error/invalid-store-name Invalid store name '{}': {}",
+                    store_name, reason
+                )
+            }
+
+            Self::CannotDropDefaultStore => {
+                write!(
+                    f,
+                    ":db.error/cannot-drop-default-store Cannot drop the default store. \
+                     The default 'mentat' store is required for extension operation."
+                )
+            }
+
             Self::Internal { message, .. } => {
                 write!(f, ":db.error/internal {}", message)
             }
@@ -517,6 +571,10 @@ impl MentatError {
             Self::DataIntegrity { .. } => ":db.error/data-integrity",
             Self::ResultLimitExceeded { .. } => ":db.error/result-limit-exceeded",
             Self::QueryTimeout { .. } => ":db.error/query-timeout",
+            Self::StoreExists { .. } => ":db.error/store-exists",
+            Self::StoreNotFound { .. } => ":db.error/store-not-found",
+            Self::InvalidStoreName { .. } => ":db.error/invalid-store-name",
+            Self::CannotDropDefaultStore => ":db.error/cannot-drop-default-store",
             Self::Internal { .. } => ":db.error/internal",
         }
     }

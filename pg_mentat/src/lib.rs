@@ -802,6 +802,8 @@ mod mentat {
     #[allow(unused_imports)]
     pub use crate::functions::entity::*;
     #[allow(unused_imports)]
+    pub use crate::functions::materialized_views::*;
+    #[allow(unused_imports)]
     pub use crate::functions::pull::*;
     #[allow(unused_imports)]
     pub use crate::functions::query::*;
@@ -810,7 +812,13 @@ mod mentat {
     #[allow(unused_imports)]
     pub use crate::functions::stats::*;
     #[allow(unused_imports)]
+    pub use crate::functions::store_management::*;
+    #[allow(unused_imports)]
+    pub use crate::functions::subscriptions::*;
+    #[allow(unused_imports)]
     pub use crate::functions::transact::*;
+    #[allow(unused_imports)]
+    pub use crate::functions::virtual_tables::*;
 }
 
 // Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)

@@ -1,4 +1,5 @@
 use crate::error::MentatError;
+use crate::functions::store_management::{get_schema_for_store, quote_ident};
 use edn::parse;
 use edn::query::{
     Binding, Direction, Element, FindSpec, FnArg, Limit, NonIntegerConstant, OrWhereClause, Order,
@@ -345,6 +346,7 @@ fn bind_input_value(
     alias: &str,
     value: &serde_json::Value,
     builder: &mut SqlBuilder<'_>,
+    schema_prefix: &str,
 ) -> Option<String> {
     match value {
         serde_json::Value::String(s) => {
@@ -389,7 +391,7 @@ fn bind_input_value(
         }
         serde_json::Value::Array(arr) => {
             // Lookup ref in value position: [":person/email", "alice@example.com"]
-            let eid = resolve_lookup_ref_to_eid(arr)?;
+            let eid = resolve_lookup_ref_to_eid(arr, schema_prefix)?;
             let param = builder.bind_bigint(eid);
             Some(format!(
                 "({alias}.v_ref = {param} AND {alias}.value_type_tag = {tag})",
@@ -404,18 +406,19 @@ fn bind_input_value(
 ///
 /// For entity-position variables, the bound value must be an integer entity ID
 /// or a lookup ref array like `[":person/email", "alice@example.com"]`.
-/// Lookup refs are resolved eagerly against mentat.datoms.
+/// Lookup refs are resolved eagerly against the store's datoms table.
 fn bind_input_entity(
     alias: &str,
     value: &serde_json::Value,
     builder: &mut SqlBuilder<'_>,
+    schema_prefix: &str,
 ) -> Option<String> {
     if let Some(i) = value.as_i64() {
         let param = builder.bind_bigint(i);
         Some(format!("{alias}.e = {param}"))
     } else if let Some(arr) = value.as_array() {
         // Lookup ref: [":person/email", "alice@example.com"]
-        let eid = resolve_lookup_ref_to_eid(arr)?;
+        let eid = resolve_lookup_ref_to_eid(arr, schema_prefix)?;
         let param = builder.bind_bigint(eid);
         Some(format!("{alias}.e = {param}"))
     } else {
@@ -430,7 +433,7 @@ fn bind_input_entity(
 ///
 /// Returns the resolved entity ID, or None if the lookup ref is malformed
 /// or cannot be resolved.
-fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value]) -> Option<i64> {
+fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value], schema_prefix: &str) -> Option<i64> {
     if arr.len() != 2 {
         return None;
     }
@@ -445,23 +448,27 @@ fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value]) -> Option<i64> {
     let attr_entid = crate::cache::get_cache().resolve_ident(attr_str)?;
 
     // Query for the entity with this unique attribute value using typed columns
-    lookup_ref_query(attr_entid, &arr[1])
+    lookup_ref_query(attr_entid, &arr[1], schema_prefix)
 }
 
 /// Perform a lookup ref query against the typed value columns.
-fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value) -> Option<i64> {
+fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &str) -> Option<i64> {
     match value {
         serde_json::Value::String(s) => {
             if let Some(stripped) = s.strip_prefix(':') {
                 Spi::get_one_with_args::<i64>(
-                    "SELECT e FROM mentat.datoms \
-                     WHERE a = $1 AND v_keyword = $2 AND value_type_tag = 8 AND added = true LIMIT 1",
+                    &format!(
+                        "SELECT e FROM {schema_prefix}datoms \
+                         WHERE a = $1 AND v_keyword = $2 AND value_type_tag = 8 AND added = true LIMIT 1"
+                    ),
                     &[DatumWithOid::from(attr_entid), DatumWithOid::from(stripped)],
                 ).ok().flatten()
             } else {
                 Spi::get_one_with_args::<i64>(
-                    "SELECT e FROM mentat.datoms \
-                     WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
+                    &format!(
+                        "SELECT e FROM {schema_prefix}datoms \
+                         WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1"
+                    ),
                     &[DatumWithOid::from(attr_entid), DatumWithOid::from(s.as_str())],
                 ).ok().flatten()
             }
@@ -469,14 +476,18 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value) -> Option<i64> {
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Spi::get_one_with_args::<i64>(
-                    "SELECT e FROM mentat.datoms \
-                     WHERE a = $1 AND v_long = $2 AND value_type_tag = 2 AND added = true LIMIT 1",
+                    &format!(
+                        "SELECT e FROM {schema_prefix}datoms \
+                         WHERE a = $1 AND v_long = $2 AND value_type_tag = 2 AND added = true LIMIT 1"
+                    ),
                     &[DatumWithOid::from(attr_entid), DatumWithOid::from(i)],
                 ).ok().flatten()
             } else if let Some(f) = n.as_f64() {
                 Spi::get_one_with_args::<i64>(
-                    "SELECT e FROM mentat.datoms \
-                     WHERE a = $1 AND v_double = $2 AND value_type_tag = 3 AND added = true LIMIT 1",
+                    &format!(
+                        "SELECT e FROM {schema_prefix}datoms \
+                         WHERE a = $1 AND v_double = $2 AND value_type_tag = 3 AND added = true LIMIT 1"
+                    ),
                     &[DatumWithOid::from(attr_entid), DatumWithOid::from(f)],
                 ).ok().flatten()
             } else {
@@ -485,8 +496,10 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value) -> Option<i64> {
         }
         serde_json::Value::Bool(b) => {
             Spi::get_one_with_args::<i64>(
-                "SELECT e FROM mentat.datoms \
-                 WHERE a = $1 AND v_bool = $2 AND value_type_tag = 1 AND added = true LIMIT 1",
+                &format!(
+                    "SELECT e FROM {schema_prefix}datoms \
+                     WHERE a = $1 AND v_bool = $2 AND value_type_tag = 1 AND added = true LIMIT 1"
+                ),
                 &[DatumWithOid::from(attr_entid), DatumWithOid::from(*b)],
             ).ok().flatten()
         }
@@ -494,24 +507,21 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value) -> Option<i64> {
     }
 }
 
-/// Execute a Datalog query and return results as JSON
+/// Resolve a store name to a qualified schema prefix (e.g., "mentat." or "mentat_my_store.").
 ///
-/// Supports temporal options via the inputs JSON parameter:
-/// - `{"asOf": <tx_id>}` - return datoms as of transaction tx_id
-/// - `{"since": <tx_id>}` - return datoms since transaction tx_id
-/// - `{"history": true}` - return all datom versions including retractions
+/// The prefix includes the trailing dot, ready to be prepended to table names.
+fn resolve_schema_prefix(store_name: &str) -> String {
+    let schema = get_schema_for_store(store_name);
+    format!("{}.", quote_ident(&schema))
+}
+
+/// Internal implementation of the Datalog query executor, parameterized by schema prefix.
 ///
-/// Supports pagination via the inputs JSON parameter:
-/// - `{"limit": 1000}` - return at most 1000 results
-/// - `{"offset": 100}` - skip the first 100 results
-/// - `{"limit": 1000, "offset": 100}` - return results 101-1100
-///
-/// When both a Datalog `:limit` clause and an inputs `limit` are specified,
-/// the inputs `limit` takes precedence (it wraps the generated SQL).
-#[pg_extern]
-pub fn mentat_query(
+/// All public query entry points delegate to this function.
+pub(crate) fn mentat_query_internal(
     query: &str,
     inputs: JsonB,
+    schema_prefix: &str,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let _parsed_value = parse::value(query)?;
     let parsed_query = mentat_core::parse_query(query)?;
@@ -529,6 +539,7 @@ pub fn mentat_query(
         &mut builder,
         &temporal,
         &input_bindings,
+        schema_prefix,
     )?;
 
     // Apply pagination from inputs JSON. This appends LIMIT/OFFSET to the
@@ -612,22 +623,96 @@ pub fn mentat_query(
     Ok(JsonB(response))
 }
 
-/// Get PostgreSQL query plan for a Datalog query (for debugging slow queries)
+/// Execute a Datalog query and return results as JSON (default store)
 ///
-/// Returns EXPLAIN output showing how PostgreSQL will execute the generated SQL.
-/// Useful for understanding index usage, join strategies, and query costs.
+/// Supports temporal options via the inputs JSON parameter:
+/// - `{"asOf": <tx_id>}` - return datoms as of transaction tx_id
+/// - `{"since": <tx_id>}` - return datoms since transaction tx_id
+/// - `{"history": true}` - return all datom versions including retractions
 ///
-/// Example usage:
-/// ```sql
-/// SELECT mentat.mentat_explain(
-///     '[:find ?e ?name :where [?e :person/name ?name]]',
-///     '{}'::jsonb
-/// );
-/// ```
+/// Supports pagination via the inputs JSON parameter:
+/// - `{"limit": 1000}` - return at most 1000 results
+/// - `{"offset": 100}` - skip the first 100 results
+/// - `{"limit": 1000, "offset": 100}` - return results 101-1100
+///
+/// When both a Datalog `:limit` clause and an inputs `limit` are specified,
+/// the inputs `limit` takes precedence (it wraps the generated SQL).
 #[pg_extern]
-pub fn mentat_explain(
+pub fn mentat_query(
     query: &str,
     inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_query_internal(query, inputs, "mentat.")
+}
+
+/// Execute a Datalog query against a named store and return results as JSON.
+///
+/// This is the 3-parameter version that allows specifying which store to query.
+/// Use 'default' to query the default store.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_q_store('my_store', '[:find ?e ?name :where [?e :person/name ?name]]', '{}'::jsonb);
+/// ```
+#[pg_extern]
+pub fn mentat_q_store(
+    store_name: &str,
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_prefix = resolve_schema_prefix(store_name);
+    mentat_query_internal(query, inputs, &schema_prefix)
+}
+
+/// Execute a Datalog query against a named store with explicit temporal control.
+///
+/// This is the full 4-parameter version. The `as_of_tx` parameter sets the
+/// as-of transaction ID, overriding any `asOf` key in the inputs JSON.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_q_full('my_store', '[:find ?e ?name :where [?e :person/name ?name]]', '{}'::jsonb, 1000042);
+/// ```
+#[pg_extern]
+pub fn mentat_q_full(
+    store_name: &str,
+    query: &str,
+    inputs: JsonB,
+    as_of_tx: i64,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    // Merge as_of_tx into the inputs JSON
+    let mut inputs_obj = match inputs.0 {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    inputs_obj.insert("asOf".to_string(), json!(as_of_tx));
+    let merged_inputs = JsonB(serde_json::Value::Object(inputs_obj));
+
+    let schema_prefix = resolve_schema_prefix(store_name);
+    mentat_query_internal(query, merged_inputs, &schema_prefix)
+}
+
+/// Execute a Datalog query against the default store (backwards-compatible alias).
+///
+/// Equivalent to `mentat_query(query, inputs)`.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_q_default('[:find ?e ?name :where [?e :person/name ?name]]', '{}'::jsonb);
+/// ```
+#[pg_extern]
+pub fn mentat_q_default(
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_query_internal(query, inputs, "mentat.")
+}
+
+/// Internal implementation of EXPLAIN for a Datalog query, parameterized by schema prefix.
+fn mentat_explain_internal(
+    query: &str,
+    inputs: JsonB,
+    schema_prefix: &str,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     let _parsed_value = parse::value(query)?;
     let parsed_query = mentat_core::parse_query(query)?;
@@ -644,6 +729,7 @@ pub fn mentat_explain(
         &mut builder,
         &temporal,
         &input_bindings,
+        schema_prefix,
     )?;
 
     // Apply pagination (same logic as mentat_query)
@@ -682,6 +768,45 @@ pub fn mentat_explain(
     })?;
 
     Ok(JsonB(plan_json))
+}
+
+/// Get PostgreSQL query plan for a Datalog query (for debugging slow queries)
+///
+/// Returns EXPLAIN output showing how PostgreSQL will execute the generated SQL.
+/// Useful for understanding index usage, join strategies, and query costs.
+///
+/// Example usage:
+/// ```sql
+/// SELECT mentat.mentat_explain(
+///     '[:find ?e ?name :where [?e :person/name ?name]]',
+///     '{}'::jsonb
+/// );
+/// ```
+#[pg_extern]
+pub fn mentat_explain(
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_explain_internal(query, inputs, "mentat.")
+}
+
+/// Get PostgreSQL query plan for a Datalog query against a named store.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat.mentat_explain_store('my_store',
+///     '[:find ?e ?name :where [?e :person/name ?name]]',
+///     '{}'::jsonb
+/// );
+/// ```
+#[pg_extern]
+pub fn mentat_explain_store(
+    store_name: &str,
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_prefix = resolve_schema_prefix(store_name);
+    mentat_explain_internal(query, inputs, &schema_prefix)
 }
 
 /// Return prepared statement cache statistics as JSON.
@@ -731,6 +856,49 @@ pub fn mentat_stmt_cache_clear() -> &'static str {
     "ok"
 }
 
+/// Internal implementation of query SQL generation, parameterized by schema prefix.
+fn mentat_query_sql_internal(
+    query: &str,
+    inputs: JsonB,
+    schema_prefix: &str,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let _parsed_value = parse::value(query)?;
+    let parsed_query = mentat_core::parse_query(query)?;
+
+    let temporal = parse_temporal_options(&inputs.0);
+    let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
+    let find_vars = extract_find_variables(&parsed_query.find_spec);
+
+    let mut builder = SqlBuilder::new();
+    let (sql_query, _complexity) = build_sql_from_datalog(
+        &parsed_query,
+        &find_vars,
+        &mut builder,
+        &temporal,
+        &input_bindings,
+        schema_prefix,
+    )?;
+
+    // Build clean column names from the :find variables
+    let columns: Vec<String> = find_vars
+        .iter()
+        .map(|v| {
+            // Strip the leading '?' and any aggregate wrapper for SQL column names
+            let name = v.trim_start_matches('?');
+            // Replace special chars with underscore for valid SQL identifiers
+            name.replace('/', "_")
+                .replace('-', "_")
+                .replace('.', "_")
+        })
+        .collect();
+
+    Ok(JsonB(json!({
+        "sql": sql_query,
+        "columns": columns,
+        "datalog": query,
+    })))
+}
+
 /// Return the generated SQL for a Datalog query without executing it.
 ///
 /// This is useful for creating SQL VIEWs backed by Datalog queries.
@@ -752,40 +920,124 @@ pub fn mentat_query_sql(
     query: &str,
     inputs: JsonB,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_query_sql_internal(query, inputs, "mentat.")
+}
+
+/// Return the generated SQL for a Datalog query against a named store.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat.mentat_query_sql_store('my_store',
+///     '[:find ?e ?name :where [?e :person/name ?name]]',
+///     '{}'::jsonb
+/// );
+/// ```
+#[pg_extern]
+pub fn mentat_query_sql_store(
+    store_name: &str,
+    query: &str,
+    inputs: JsonB,
+) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_prefix = resolve_schema_prefix(store_name);
+    mentat_query_sql_internal(query, inputs, &schema_prefix)
+}
+
+/// Row type for query_view results (row_num, col1..col8).
+type QueryViewRow = (
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// Internal query view implementation parameterized by schema prefix.
+fn mentat_query_view_internal(
+    query: &str,
+    inputs: JsonB,
+    schema_prefix: &str,
+) -> Result<Vec<QueryViewRow>, Box<dyn std::error::Error + Send + Sync>> {
     let _parsed_value = parse::value(query)?;
     let parsed_query = mentat_core::parse_query(query)?;
 
     let temporal = parse_temporal_options(&inputs.0);
     let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
     let find_vars = extract_find_variables(&parsed_query.find_spec);
+    let pagination = parse_pagination_options(&inputs.0);
+
+    let num_cols = find_vars.len();
+    if num_cols > 8 {
+        return Err(Box::new(MentatError::InvalidQuery {
+            message: format!(
+                "query_view supports up to 8 columns, but this query has {}",
+                num_cols
+            ),
+            suggestion: Some(
+                "Use mentat_query() for queries with more than 8 columns".to_string(),
+            ),
+        }));
+    }
 
     let mut builder = SqlBuilder::new();
-    let (sql_query, _complexity) = build_sql_from_datalog(
+    let (mut sql_query, complexity) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
         &temporal,
         &input_bindings,
+        schema_prefix,
     )?;
 
-    // Build clean column names from the :find variables
-    let columns: Vec<String> = find_vars
-        .iter()
-        .map(|v| {
-            // Strip the leading '?' and any aggregate wrapper for SQL column names
-            let name = v.trim_start_matches('?');
-            // Replace special chars with underscore for valid SQL identifiers
-            name.replace('/', "_")
-                .replace('-', "_")
-                .replace('.', "_")
-        })
-        .collect();
+    // Apply pagination
+    if let Some(limit) = pagination.limit {
+        if let Some(pos) = sql_query.rfind(" LIMIT ") {
+            sql_query.truncate(pos);
+        }
+        sql_query.push_str(&format!(" LIMIT {}", limit));
+    }
+    if let Some(offset) = pagination.offset {
+        sql_query.push_str(&format!(" OFFSET {}", offset));
+    }
 
-    Ok(JsonB(json!({
-        "sql": sql_query,
-        "columns": columns,
-        "datalog": query,
-    })))
+    let params = builder.params;
+    let rows = Spi::connect_mut(|client| {
+        apply_optimizer_hints(client, &complexity);
+
+        let mut result_rows: Vec<QueryViewRow> = Vec::new();
+
+        let mut row_num: i64 = 1;
+        for row in execute_cached_query(client, &sql_query, &params)
+            .map_err(|e| {
+                Box::new(MentatError::InvalidQuery {
+                    message: format!("SPI execution error: {}", e),
+                    suggestion: None,
+                }) as Box<dyn std::error::Error + Send + Sync>
+            })?
+        {
+            let mut cols: [Option<String>; 8] = Default::default();
+            for idx in 0..num_cols {
+                let col_idx = (idx + 1) as usize;
+                if let Ok(Some(val)) = row.get::<String>(col_idx) {
+                    let decoded = decode_text_result(&val);
+                    cols[idx] = Some(match &decoded {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    });
+                }
+            }
+            let [c1, c2, c3, c4, c5, c6, c7, c8] = cols;
+            result_rows.push((row_num, c1, c2, c3, c4, c5, c6, c7, c8));
+            row_num += 1;
+        }
+
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(result_rows)
+    })?;
+
+    Ok(rows)
 }
 
 /// Execute a Datalog query and return results as a set of rows.
@@ -822,91 +1074,43 @@ pub fn mentat_query_view(
     >,
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    let _parsed_value = parse::value(query)?;
-    let parsed_query = mentat_core::parse_query(query)?;
+    let rows = mentat_query_view_internal(query, inputs, "mentat.")?;
+    Ok(TableIterator::new(rows))
+}
 
-    let temporal = parse_temporal_options(&inputs.0);
-    let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
-    let find_vars = extract_find_variables(&parsed_query.find_spec);
-    let pagination = parse_pagination_options(&inputs.0);
-
-    let num_cols = find_vars.len();
-    if num_cols > 8 {
-        return Err(Box::new(MentatError::InvalidQuery {
-            message: format!(
-                "query_view supports up to 8 columns, but this query has {}",
-                num_cols
-            ),
-            suggestion: Some(
-                "Use mentat_query() for queries with more than 8 columns".to_string(),
-            ),
-        }));
-    }
-
-    let mut builder = SqlBuilder::new();
-    let (mut sql_query, complexity) = build_sql_from_datalog(
-        &parsed_query,
-        &find_vars,
-        &mut builder,
-        &temporal,
-        &input_bindings,
-    )?;
-
-    // Apply pagination
-    if let Some(limit) = pagination.limit {
-        if let Some(pos) = sql_query.rfind(" LIMIT ") {
-            sql_query.truncate(pos);
-        }
-        sql_query.push_str(&format!(" LIMIT {}", limit));
-    }
-    if let Some(offset) = pagination.offset {
-        sql_query.push_str(&format!(" OFFSET {}", offset));
-    }
-
-    let params = builder.params;
-    let rows = Spi::connect_mut(|client| {
-        apply_optimizer_hints(client, &complexity);
-
-        let mut result_rows: Vec<(
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = Vec::new();
-
-        let mut row_num: i64 = 1;
-        for row in execute_cached_query(client, &sql_query, &params)
-            .map_err(|e| {
-                Box::new(MentatError::InvalidQuery {
-                    message: format!("SPI execution error: {}", e),
-                    suggestion: None,
-                }) as Box<dyn std::error::Error + Send + Sync>
-            })?
-        {
-            let mut cols: [Option<String>; 8] = Default::default();
-            for idx in 0..num_cols {
-                let col_idx = (idx + 1) as usize;
-                if let Ok(Some(val)) = row.get::<String>(col_idx) {
-                    let decoded = decode_text_result(&val);
-                    cols[idx] = Some(match &decoded {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    });
-                }
-            }
-            let [c1, c2, c3, c4, c5, c6, c7, c8] = cols;
-            result_rows.push((row_num, c1, c2, c3, c4, c5, c6, c7, c8));
-            row_num += 1;
-        }
-
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(result_rows)
-    })?;
-
+/// Execute a Datalog query against a named store and return results as a set of rows.
+///
+/// # Example
+/// ```sql
+/// SELECT * FROM mentat.mentat_query_view_store('my_store',
+///     '[:find ?e ?name :where [?e :person/name ?name]]',
+///     '{}'::jsonb
+/// );
+/// ```
+#[pg_extern]
+pub fn mentat_query_view_store(
+    store_name: &str,
+    query: &str,
+    inputs: JsonB,
+) -> Result<
+    TableIterator<
+        'static,
+        (
+            name!(row_num, i64),
+            name!(col1, Option<String>),
+            name!(col2, Option<String>),
+            name!(col3, Option<String>),
+            name!(col4, Option<String>),
+            name!(col5, Option<String>),
+            name!(col6, Option<String>),
+            name!(col7, Option<String>),
+            name!(col8, Option<String>),
+        ),
+    >,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let schema_prefix = resolve_schema_prefix(store_name);
+    let rows = mentat_query_view_internal(query, inputs, &schema_prefix)?;
     Ok(TableIterator::new(rows))
 }
 
@@ -1167,6 +1371,7 @@ fn build_sql_from_datalog(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     input_bindings: &HashMap<String, serde_json::Value>,
+    schema_prefix: &str,
 ) -> Result<(String, QueryComplexity), Box<dyn std::error::Error + Send + Sync>> {
     // Separate clause types
     let mut pattern_clauses = Vec::new();
@@ -1196,7 +1401,7 @@ fn build_sql_from_datalog(
     for (fts_idx, wf) in where_fns.iter().enumerate() {
         let op_name = wf.operator.0.as_str();
         if op_name == "fulltext" {
-            let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings)?;
+            let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix)?;
             fts_joins.push(fj);
         } else {
             // Arithmetic binding functions: [(* ?age 2) ?double-age]
@@ -1218,7 +1423,7 @@ fn build_sql_from_datalog(
     let mut rule_cte_info: Option<RuleCteInfo> = None;
     if !rule_invocations.is_empty() && !parsed.rules.is_empty() {
         let (cte_sql, cte_info) =
-            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal)?;
+            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal, schema_prefix)?;
         cte_prefix = cte_sql;
         rule_cte_info = Some(cte_info);
     }
@@ -1240,6 +1445,7 @@ fn build_sql_from_datalog(
             temporal,
             &rule_cte_info,
             input_bindings,
+            schema_prefix,
         )?
     };
 
@@ -1345,7 +1551,7 @@ fn build_sql_from_datalog(
             for (idx, wf) in arm_where_fns.iter().enumerate() {
                 if wf.operator.0.as_str() == "fulltext" {
                     let fts_idx = fts_joins.len() + idx;
-                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings)?;
+                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix)?;
                     arm_fts_joins.push(fts_join);
                 } else {
                     return Err(format!(
@@ -1368,6 +1574,7 @@ fn build_sql_from_datalog(
                 temporal,
                 &rule_cte_info,
                 input_bindings,
+                schema_prefix,
             )?;
 
             // Remap $N parameter placeholders so they don't collide
@@ -1433,6 +1640,7 @@ fn build_fulltext_join(
     fts_idx: usize,
     builder: &mut SqlBuilder<'_>,
     var_bindings: &mut HashMap<String, String>,
+    schema_prefix: &str,
 ) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
     if wf.args.len() < 3 {
         return Err(":db.error/fulltext-args fulltext requires at least 3 arguments: \
@@ -1460,7 +1668,7 @@ fn build_fulltext_join(
 
     let mut where_parts = Vec::new();
     where_parts.push(format!(
-        "{datoms_alias}.a = (SELECT entid FROM mentat.schema WHERE ident = {attr_param})"
+        "{datoms_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
     where_parts.push(format!(
         "{datoms_alias}.value_type_tag = {}",
@@ -1536,7 +1744,7 @@ fn build_fulltext_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms {datoms_alias}, mentat.fulltext {fts_alias}");
+    let from_fragment = format!("{schema_prefix}datoms {datoms_alias}, {schema_prefix}fulltext {fts_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -1749,6 +1957,7 @@ fn build_extended_pattern_query(
     temporal: &TemporalOption,
     rule_cte_info: &Option<RuleCteInfo>,
     input_bindings: &HashMap<String, serde_json::Value>,
+    schema_prefix: &str,
 ) -> Result<
     (String, HashMap<String, (String, &'static str)>),
     Box<dyn std::error::Error + Send + Sync>,
@@ -1799,7 +2008,7 @@ fn build_extended_pattern_query(
                 let ident_str = keyword_to_ident(kw);
                 let param = builder.bind_text(ident_str);
                 where_clauses.push(format!(
-                    "{alias}.e = (SELECT entid FROM mentat.idents WHERE ident = {param})"
+                    "{alias}.e = (SELECT entid FROM {schema_prefix}idents WHERE ident = {param})"
                 ));
             }
             PatternNonValuePlace::Placeholder => {}
@@ -1811,7 +2020,7 @@ fn build_extended_pattern_query(
                 let ident_str = keyword_to_ident(kw);
                 let param = builder.bind_text(ident_str);
                 where_clauses.push(format!(
-                    "{alias}.a = (SELECT entid FROM mentat.schema WHERE ident = {param})"
+                    "{alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {param})"
                 ));
             }
             PatternNonValuePlace::Entid(id) => {
@@ -1924,7 +2133,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             if !is_cardinality_many {
                 let param2 = builder.bind_bigint(as_of_tx);
                 where_clauses.push(format!(
-                    "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                    "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
                      WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                      AND newer.added = true \
                      AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
@@ -1949,7 +2158,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
         }
 
-        joins.push(format!("mentat.datoms {alias}"));
+        joins.push(format!("{schema_prefix}datoms {alias}"));
     }
 
     // Add FTS joins
@@ -1962,8 +2171,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
     for (var_name, value) in input_bindings {
         if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
             let constraint = match *col {
-                "v" => bind_input_value(alias, value, builder),
-                "e" => bind_input_entity(alias, value, builder),
+                "v" => bind_input_value(alias, value, builder, schema_prefix),
+                "e" => bind_input_entity(alias, value, builder, schema_prefix),
                 "a" => {
                     // Attribute column: bind as bigint
                     if let Some(i) = value.as_i64() {
@@ -1992,7 +2201,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle NOT clauses as NOT EXISTS subqueries
     for not_join in not_joins {
-        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal)?;
+        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal, schema_prefix)?;
         where_clauses.push(not_sql);
     }
 
@@ -2242,6 +2451,7 @@ fn build_not_exists_subquery(
     outer_var_to_alias: &HashMap<String, (String, &'static str)>,
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
+    schema_prefix: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Groundedness validation: collect all variables mentioned in the NOT
     // clause and verify each one is bound in the outer scope.
@@ -2307,7 +2517,7 @@ fn build_not_exists_subquery(
                         let ident_str = keyword_to_ident(kw);
                         let param = builder.bind_text(ident_str);
                         sub_where.push(format!(
-                            "{alias}.e = (SELECT entid FROM mentat.idents WHERE ident = {param})"
+                            "{alias}.e = (SELECT entid FROM {schema_prefix}idents WHERE ident = {param})"
                         ));
                     }
                     PatternNonValuePlace::Placeholder => {}
@@ -2319,7 +2529,7 @@ fn build_not_exists_subquery(
                         let ident_str = keyword_to_ident(kw);
                         let param = builder.bind_text(ident_str);
                         sub_where.push(format!(
-                            "{alias}.a = (SELECT entid FROM mentat.schema WHERE ident = {param})"
+                            "{alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {param})"
                         ));
                     }
                     PatternNonValuePlace::Entid(id) => {
@@ -2394,7 +2604,7 @@ fn build_not_exists_subquery(
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of_tx);
                         sub_where.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                            "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
                              WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                              AND newer.added = true \
                              AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
@@ -2406,7 +2616,7 @@ fn build_not_exists_subquery(
                     sub_where.push(format!("{alias}.tx > {param}"));
                 }
 
-                sub_joins.push(format!("mentat.datoms {alias}"));
+                sub_joins.push(format!("{schema_prefix}datoms {alias}"));
             }
             _ => {
                 return Err(":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
@@ -2541,6 +2751,7 @@ fn build_rule_ctes(
     invocations: &[&RuleInvocation],
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
+    schema_prefix: &str,
 ) -> Result<(String, RuleCteInfo), Box<dyn std::error::Error + Send + Sync>> {
     let mut cte_parts = Vec::new();
     let mut var_to_col: HashMap<String, (String, &'static str)> = HashMap::new();
@@ -2585,7 +2796,7 @@ fn build_rule_ctes(
         let mut union_parts = Vec::new();
         for clause in &rule.clauses {
             let clause_sql =
-                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name)?;
+                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name, schema_prefix)?;
             union_parts.push(clause_sql);
         }
 
@@ -2800,6 +3011,7 @@ fn build_rule_clause_sql(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     rule_name: &str,
+    schema_prefix: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Map head argument variables to CTE column positions
     let mut head_var_to_col: HashMap<String, usize> = HashMap::new();
@@ -2841,7 +3053,7 @@ fn build_rule_clause_sql(
                         let ident_str = keyword_to_ident(kw);
                         let param = builder.bind_text(ident_str);
                         where_parts.push(format!(
-                            "{alias}.e = (SELECT entid FROM mentat.idents WHERE ident = {param})"
+                            "{alias}.e = (SELECT entid FROM {schema_prefix}idents WHERE ident = {param})"
                         ));
                     }
                     PatternNonValuePlace::Placeholder => {}
@@ -2853,7 +3065,7 @@ fn build_rule_clause_sql(
                         let ident_str = keyword_to_ident(kw);
                         let param = builder.bind_text(ident_str);
                         where_parts.push(format!(
-                            "{alias}.a = (SELECT entid FROM mentat.schema WHERE ident = {param})"
+                            "{alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {param})"
                         ));
                     }
                     PatternNonValuePlace::Entid(id) => {
@@ -2932,7 +3144,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of);
                         where_parts.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM mentat.datoms newer \
+                            "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
                              WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                              AND newer.added = true \
                              AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
@@ -2944,7 +3156,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     where_parts.push(format!("{alias}.tx > {param}"));
                 }
 
-                pattern_joins.push(format!("mentat.datoms {alias}"));
+                pattern_joins.push(format!("{schema_prefix}datoms {alias}"));
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {
                 // Recursive self-reference: JOIN against the CTE itself

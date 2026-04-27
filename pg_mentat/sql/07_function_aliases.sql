@@ -79,3 +79,9 @@ CREATE OR REPLACE FUNCTION mentat.cache_clear()
 RETURNS TEXT
 LANGUAGE SQL VOLATILE
 AS $$ SELECT mentat.mentat_stmt_cache_clear(); $$;
+
+-- edn_pretty: backwards compatibility alias (moved to public schema)
+CREATE OR REPLACE FUNCTION mentat.edn_pretty(edn_input TEXT, width INT DEFAULT NULL)
+RETURNS TEXT
+LANGUAGE SQL IMMUTABLE PARALLEL SAFE
+AS $$ SELECT public.edn_pretty(edn_input, width); $$;

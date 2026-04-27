@@ -1,4 +1,5 @@
 use crate::error::{self, MentatError};
+use crate::functions::store_management;
 use edn::entities::OpType;
 use edn::parse;
 use pgrx::datum::DatumWithOid;
@@ -168,12 +169,55 @@ fn get_available_attributes_hint() -> String {
 /// reads and writes see a consistent snapshot. If any error occurs, SPI
 /// automatically rolls back the subtransaction, preventing partial schema or
 /// datom writes from persisting.
+///
+/// This is the backwards-compatible version that operates on the default store.
 #[pg_extern]
 pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    execute_transaction_body(edn_tx)
+    execute_transaction_body("mentat", edn_tx)
+}
+
+/// Process an EDN transaction against a named store.
+///
+/// Like `mentat_transact` but targets a specific store created with
+/// `mentat_create_store`. The `store_name` parameter selects which
+/// PostgreSQL schema to operate on.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_transact_full('my_store',
+///   '[[:db/add "t" :person/name "Alice"]]');
+/// ```
+#[pg_extern]
+pub fn mentat_transact_full(
+    store_name: &str,
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_name = resolve_store_schema(store_name)?;
+    execute_transaction_body(&schema_name, edn_tx)
+}
+
+/// Resolve a store name to its PostgreSQL schema name.
+///
+/// For "default", returns "mentat". For other names, validates the store
+/// name and returns the corresponding schema (e.g., "mentat_<name>").
+/// Does NOT check whether the store actually exists in the metadata table;
+/// the first SQL statement that references the schema will fail if it's
+/// missing, which is acceptable for the transact path.
+fn resolve_store_schema(
+    store_name: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    if store_name == "default" {
+        return Ok("mentat".to_string());
+    }
+    store_management::validate_store_name(store_name)?;
+    Ok(store_management::get_schema_for_store(store_name))
 }
 
 /// Internal function containing the actual transaction logic.
+///
+/// The `schema` parameter is the PostgreSQL schema name (e.g., "mentat" for
+/// the default store, or "mentat_<name>" for a named store). All SQL
+/// queries are parameterized with this schema.
 ///
 /// Runs within the caller's PostgreSQL transaction. Uses savepoints to ensure
 /// that schema installation and datom insertion are atomic: if Pass 2 (datom
@@ -186,6 +230,7 @@ pub fn mentat_transact(edn_tx: &str) -> Result<String, Box<dyn std::error::Error
 /// (serialization_failure). The mentatd server-side retry logic handles
 /// retrying these failures with exponential backoff.
 fn execute_transaction_body(
+    schema: &str,
     edn_tx: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // NOTE: Transaction isolation level cannot be set here because SPI
@@ -194,6 +239,9 @@ fn execute_transaction_body(
     // or have the client (mentatd) wrap calls in explicit transactions.
     // For now, rely on PostgreSQL's default READ COMMITTED isolation.
     // Spi::run("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")?;
+
+    // Quote the schema name for safe SQL interpolation
+    let qs = store_management::quote_ident(schema);
 
     // Parse EDN transaction
     let value_and_span = parse::value(edn_tx)?;
@@ -214,38 +262,49 @@ fn execute_transaction_body(
     // Get basis-t before transaction (max tx id currently in the database).
     // In Datomic, basis-t represents the latest transaction point.
     let basis_t_before = Spi::get_one::<i64>(
-        "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+        &format!("SELECT COALESCE(MAX(tx), 0) FROM {}.transactions", qs),
     )
     .ok()
     .flatten()
     .unwrap_or(0);
 
     // Allocate transaction ID
-    let tx_id = Spi::get_one::<i64>("SELECT nextval('mentat.partition_tx_seq')")
-        .ok()
-        .flatten()
-        .ok_or_else(|| MentatError::AllocationFailed {
-            partition: "db.part/tx".to_string(),
-        })?;
+    let tx_id = Spi::get_one::<i64>(
+        &format!("SELECT nextval('{}.partition_tx_seq')", qs),
+    )
+    .ok()
+    .flatten()
+    .ok_or_else(|| MentatError::AllocationFailed {
+        partition: "db.part/tx".to_string(),
+    })?;
 
     // Create transaction record and get the timestamp as microseconds since epoch
     let tx_instant_micros = Spi::get_one_with_args::<i64>(
-        "INSERT INTO mentat.transactions (tx, tx_instant) VALUES ($1, CURRENT_TIMESTAMP) \
-         RETURNING (EXTRACT(EPOCH FROM tx_instant) * 1000000)::BIGINT",
+        &format!(
+            "INSERT INTO {}.transactions (tx, tx_instant) VALUES ($1, CURRENT_TIMESTAMP) \
+             RETURNING (EXTRACT(EPOCH FROM tx_instant) * 1000000)::BIGINT",
+            qs
+        ),
         &[DatumWithOid::from(tx_id)],
     )
     .ok()
     .flatten()
     .ok_or_else(|| MentatError::TransactionFailed {
-        message: "Failed to create transaction record. \
-                  The mentat.transactions table may be missing or the insert failed.".to_string(),
+        message: format!(
+            "Failed to create transaction record. \
+             The {}.transactions table may be missing or the insert failed.",
+            qs
+        ),
     })?;
 
     // Insert :db/txInstant datom for this transaction using typed column
     // Use to_timestamp() in SQL to convert microseconds to TIMESTAMPTZ
     Spi::run_with_args(
-        "INSERT INTO mentat.datoms (e, a, value_type_tag, v_instant, tx, added) \
-         VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
+        &format!(
+            "INSERT INTO {}.datoms (e, a, value_type_tag, v_instant, tx, added) \
+             VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
+            qs
+        ),
         &[
             DatumWithOid::from(tx_id),
             DatumWithOid::from(bootstrap_entids::DB_TX_INSTANT),
@@ -282,7 +341,7 @@ fn execute_transaction_body(
                 };
 
                 // Allocate/resolve the entity tempid so it's stable
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
 
                 // Try to resolve the attribute -- but only if it's a known
                 // bootstrap schema attribute. We use try_resolve here because
@@ -300,14 +359,16 @@ fn execute_transaction_body(
                 let e = if let Some(id_val) =
                     map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
                 {
-                    resolve_entity_place(id_val, &mut tempid_map)?
+                    resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else {
-                    let id = Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
-                        .ok()
-                        .flatten()
-                        .ok_or_else(|| MentatError::AllocationFailed {
-                            partition: "db.part/user".to_string(),
-                        })?;
+                    let id = Spi::get_one::<i64>(
+                        &format!("SELECT nextval('{}.partition_user_seq')", qs),
+                    )
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| MentatError::AllocationFailed {
+                        partition: "db.part/user".to_string(),
+                    })?;
                     map_entity_ids.insert(entity_idx, id);
                     id
                 };
@@ -342,7 +403,7 @@ fn execute_transaction_body(
     // Install schema attributes (if any). In pgrx tests, we rely on the
     // outer transaction for atomicity. In production, the extension function
     // call is already wrapped in a transaction by PostgreSQL.
-    install_schema_attributes(&schema_builders)?;
+    install_schema_attributes(&schema_builders, &qs)?;
 
     // --- Pass 2: Parse ALL assertions and insert datoms ---
     // Now all idents (both bootstrap and newly-defined) are resolvable.
@@ -355,14 +416,18 @@ fn execute_transaction_body(
                 if entity_vec.len() == 2
                     && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "retractEntity") =>
             {
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
 
                 // Query all current datoms for this entity
+                let retract_query = format!(
+                    "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
+                            v_text, v_keyword, v_instant, v_uuid, v_bytes \
+                     FROM {}.datoms WHERE e = $1 AND added = true",
+                    qs
+                );
                 Spi::connect(|client| {
                     let rows = client.select(
-                        "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
-                                v_text, v_keyword, v_instant, v_uuid, v_bytes \
-                         FROM mentat.datoms WHERE e = $1 AND added = true",
+                        &retract_query,
                         None,
                         &[DatumWithOid::from(e)],
                     )?;
@@ -388,7 +453,7 @@ fn execute_transaction_body(
                 if entity_vec.len() == 5
                     && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "cas" && kw.namespace() == Some("db.fn")) =>
             {
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
                 let a = resolve_attribute(&entity_vec[2])?;
                 let old_edn = &entity_vec[3];
                 let new_edn = &entity_vec[4];
@@ -396,11 +461,15 @@ fn execute_transaction_body(
                 let is_ref = lookup_value_type(a).as_deref() == Some("ref");
 
                 // Get current value(s) for this (e, a) pair
+                let cas_query = format!(
+                    "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
+                            v_text, v_keyword, v_instant, v_uuid, v_bytes \
+                     FROM {}.datoms WHERE e = $1 AND a = $2 AND added = true",
+                    qs
+                );
                 let current_values: Vec<TypedValue> = Spi::connect(|client| {
                     let rows = client.select(
-                        "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
-                                v_text, v_keyword, v_instant, v_uuid, v_bytes \
-                         FROM mentat.datoms WHERE e = $1 AND a = $2 AND added = true",
+                        &cas_query,
                         None,
                         &[DatumWithOid::from(e), DatumWithOid::from(a)],
                     )?;
@@ -439,7 +508,7 @@ fn execute_transaction_body(
                 let old_encoded: Option<TypedValue> = if old_is_nil {
                     None
                 } else if is_ref {
-                    Some(encode_ref_value(old_edn, &mut tempid_map)?)
+                    Some(encode_ref_value(old_edn, &mut tempid_map, &qs)?)
                 } else {
                     Some(encode_value(old_edn)?)
                 };
@@ -490,7 +559,7 @@ fn execute_transaction_body(
                 }
 
                 let new_val = if is_ref {
-                    encode_ref_value(new_edn, &mut tempid_map)?
+                    encode_ref_value(new_edn, &mut tempid_map, &qs)?
                 } else {
                     encode_value(new_edn)?
                 };
@@ -509,11 +578,11 @@ fn execute_transaction_body(
                     _ => continue,
                 };
 
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map)?;
+                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
                 let a = resolve_attribute(&entity_vec[2])?;
                 // Check if attribute is ref-type; if so, resolve value as entity reference
                 let v = if lookup_value_type(a).as_deref() == Some("ref") {
-                    encode_ref_value(&entity_vec[3], &mut tempid_map)?
+                    encode_ref_value(&entity_vec[3], &mut tempid_map, &qs)?
                 } else {
                     encode_value(&entity_vec[3])?
                 };
@@ -532,16 +601,18 @@ fn execute_transaction_body(
                 let e = if let Some(id_val) =
                     map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
                 {
-                    resolve_entity_place(id_val, &mut tempid_map)?
+                    resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else if let Some(&pre_allocated) = map_entity_ids.get(&entity_idx) {
                     pre_allocated
                 } else {
-                    Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
-                        .ok()
-                        .flatten()
-                        .ok_or_else(|| MentatError::AllocationFailed {
-                            partition: "db.part/user".to_string(),
-                        })?
+                    Spi::get_one::<i64>(
+                        &format!("SELECT nextval('{}.partition_user_seq')", qs),
+                    )
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| MentatError::AllocationFailed {
+                        partition: "db.part/user".to_string(),
+                    })?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -554,7 +625,7 @@ fn execute_transaction_body(
                     let a = resolve_attribute(attr_key)?;
                     // Check if attribute is ref-type; if so, resolve value as entity reference
                     let v = if lookup_value_type(a).as_deref() == Some("ref") {
-                        encode_ref_value(attr_value, &mut tempid_map)?
+                        encode_ref_value(attr_value, &mut tempid_map, &qs)?
                     } else {
                         encode_value(attr_value)?
                     };
@@ -574,7 +645,7 @@ fn execute_transaction_body(
     // Validate and insert all datoms.
     // If schema was installed (savepoint active), catch errors to rollback
     // the savepoint before propagating.
-    let datom_result = insert_datoms(&pending_datoms, tx_id);
+    let datom_result = insert_datoms(&pending_datoms, tx_id, &qs);
 
     match datom_result {
         Ok(_datom_count) => {
@@ -646,15 +717,18 @@ fn execute_transaction_body(
 
 /// Insert all pending datoms, validating constraints and handling cardinality
 /// semantics. Returns the number of datoms processed.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn insert_datoms(
     pending_datoms: &[PendingDatom],
     tx_id: i64,
+    schema: &str,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let datom_count = pending_datoms.len();
     for datom in pending_datoms {
         // Only validate assertions (added=true), not retractions
         if datom.added {
-            validate_datom_constraints(datom, pending_datoms)?;
+            validate_datom_constraints(datom, pending_datoms, schema)?;
 
             // For cardinality-one attributes, automatically retract any existing
             // value before asserting the new one (Datomic upsert semantics).
@@ -668,6 +742,7 @@ fn insert_datoms(
                             datom.a,
                             tx_id,
                             &datom.v,
+                            schema,
                         )?;
                     }
                     "many" => {
@@ -675,6 +750,7 @@ fn insert_datoms(
                             datom.e,
                             datom.a,
                             &datom.v,
+                            schema,
                         )? {
                             continue;
                         }
@@ -693,16 +769,16 @@ fn insert_datoms(
             // added=true to added=false, so queries filtering by added=true will
             // no longer see this value. Without this, the original added=true row
             // would remain visible and the retraction would have no effect.
-            mark_existing_datom_retracted(datom.e, datom.a, &datom.v)?;
+            mark_existing_datom_retracted(datom.e, datom.a, &datom.v, schema)?;
         }
 
-        insert_typed_datom(datom.e, datom.a, &datom.v, tx_id, datom.added)?;
+        insert_typed_datom(datom.e, datom.a, &datom.v, tx_id, datom.added, schema)?;
 
-        // Populate mentat.fulltext for fulltext-enabled string attributes.
+        // Populate fulltext for fulltext-enabled string attributes.
         if datom.added && is_fulltext_attribute(datom.a) {
             if let TypedValue::Text(ref text_value) = datom.v {
                 Spi::run_with_args(
-                    "INSERT INTO mentat.fulltext (text_value) VALUES ($1)",
+                    &format!("INSERT INTO {}.fulltext (text_value) VALUES ($1)", schema),
                     &[DatumWithOid::from(text_value.clone())],
                 )?;
             }
@@ -775,13 +851,16 @@ fn collect_schema_assertion(
     }
 }
 
-/// Install new schema attributes into mentat.schema and mentat.idents.
+/// Install new schema attributes into the store's schema and idents tables.
 ///
 /// For each entity that has at least :db/ident and :db/valueType, insert a row
-/// into mentat.schema and mentat.idents. This must happen before datoms are
+/// into <schema>.schema and <schema>.idents. This must happen before datoms are
 /// inserted so that foreign key constraints on datoms.a are satisfied.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn install_schema_attributes(
     builders: &BTreeMap<i64, SchemaBuilder>,
+    schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for (&entid, builder) in builders {
         let ident = match &builder.ident {
@@ -800,10 +879,13 @@ fn install_schema_attributes(
         let component = builder.component.unwrap_or(false);
         let no_history = builder.no_history.unwrap_or(false);
 
-        // Insert into mentat.idents (keyword -> entid mapping)
+        // Insert into idents (keyword -> entid mapping)
         Spi::run_with_args(
-            "INSERT INTO mentat.idents (ident, entid) VALUES ($1, $2) \
-             ON CONFLICT (ident) DO UPDATE SET entid = EXCLUDED.entid",
+            &format!(
+                "INSERT INTO {}.idents (ident, entid) VALUES ($1, $2) \
+                 ON CONFLICT (ident) DO UPDATE SET entid = EXCLUDED.entid",
+                schema
+            ),
             &[
                 DatumWithOid::from(ident.as_str()),
                 DatumWithOid::from(entid),
@@ -816,23 +898,28 @@ fn install_schema_attributes(
             None => DatumWithOid::null::<String>(),
         };
 
-        // Insert into mentat.schema with all attribute properties.
+        // Insert into schema with all attribute properties.
         // Cast text parameters to the correct PostgreSQL enum types.
+        // Note: enum types (mentat.value_type etc.) live in the mentat schema
+        // and are shared across all stores.
         Spi::run_with_args(
-            "INSERT INTO mentat.schema \
-                (entid, ident, value_type, cardinality, unique_constraint, \
-                 indexed, fulltext, component, no_history) \
-             VALUES ($1, $2, $3::mentat.value_type, $4::mentat.cardinality_type, \
-                     $5::mentat.unique_type, $6, $7, $8, $9) \
-             ON CONFLICT (entid) DO UPDATE SET \
-                ident = EXCLUDED.ident, \
-                value_type = EXCLUDED.value_type, \
-                cardinality = EXCLUDED.cardinality, \
-                unique_constraint = EXCLUDED.unique_constraint, \
-                indexed = EXCLUDED.indexed, \
-                fulltext = EXCLUDED.fulltext, \
-                component = EXCLUDED.component, \
-                no_history = EXCLUDED.no_history",
+            &format!(
+                "INSERT INTO {schema}.schema \
+                    (entid, ident, value_type, cardinality, unique_constraint, \
+                     indexed, fulltext, component, no_history) \
+                 VALUES ($1, $2, $3::mentat.value_type, $4::mentat.cardinality_type, \
+                         $5::mentat.unique_type, $6, $7, $8, $9) \
+                 ON CONFLICT (entid) DO UPDATE SET \
+                    ident = EXCLUDED.ident, \
+                    value_type = EXCLUDED.value_type, \
+                    cardinality = EXCLUDED.cardinality, \
+                    unique_constraint = EXCLUDED.unique_constraint, \
+                    indexed = EXCLUDED.indexed, \
+                    fulltext = EXCLUDED.fulltext, \
+                    component = EXCLUDED.component, \
+                    no_history = EXCLUDED.no_history",
+                schema = schema
+            ),
             &[
                 DatumWithOid::from(entid),
                 DatumWithOid::from(ident.as_str()),
@@ -865,9 +952,12 @@ fn install_schema_attributes(
 ///   - Keyword: resolve ident to entity ID
 ///   - Vector (2 elements): lookup ref like `[:person/email "alice@example.com"]`
 ///     The attribute must have a unique constraint (:db.unique/identity or :db.unique/value).
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn resolve_entity_place(
     value: &edn::Value,
     tempid_map: &mut std::collections::BTreeMap<String, i64>,
+    schema: &str,
 ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     match value {
         edn::Value::Integer(i) => Ok(*i),
@@ -876,29 +966,38 @@ fn resolve_entity_place(
             if let Some(&existing) = tempid_map.get::<str>(s.as_ref()) {
                 Ok(existing)
             } else {
-                let entid = Spi::get_one::<i64>("SELECT nextval('mentat.partition_user_seq')")
-                    .ok()
-                    .flatten()
-                    .ok_or_else(|| MentatError::AllocationFailed {
-                            partition: "db.part/user".to_string(),
-                        })?;
+                let entid = Spi::get_one::<i64>(
+                    &format!("SELECT nextval('{}.partition_user_seq')", schema),
+                )
+                .ok()
+                .flatten()
+                .ok_or_else(|| MentatError::AllocationFailed {
+                        partition: "db.part/user".to_string(),
+                    })?;
                 tempid_map.insert(s.to_string(), entid);
                 Ok(entid)
             }
         }
         edn::Value::Keyword(kw) => {
-            // Resolve keyword ident using Display format (:namespace/name)
+            // Resolve keyword ident using cache (works for all stores since the
+            // cache is populated from the store's schema/idents tables).
             let ident_str = format!("{}", kw);
-            let entid = Spi::get_one_with_args::<i64>(
-                "SELECT mentat.resolve_ident($1)",
-                &[DatumWithOid::from(ident_str.as_str())],
-            )
-            .ok()
-            .flatten()
-            .ok_or_else(|| MentatError::EntityNotFound {
-                ident: ident_str.clone(),
-                message: "Ensure this ident was previously defined via mentat_transact with :db/ident.".to_string(),
-            })?;
+            // Try the cache first, then fall back to direct DB lookup in the
+            // store's idents table.
+            let entid = crate::cache::get_cache()
+                .resolve_ident(&ident_str)
+                .or_else(|| {
+                    Spi::get_one_with_args::<i64>(
+                        &format!("SELECT entid FROM {}.idents WHERE ident = $1", schema),
+                        &[DatumWithOid::from(ident_str.as_str())],
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .ok_or_else(|| MentatError::EntityNotFound {
+                    ident: ident_str.clone(),
+                    message: "Ensure this ident was previously defined via mentat_transact with :db/ident.".to_string(),
+                })?;
             Ok(entid)
         }
         edn::Value::Vector(ref vec) if vec.len() == 2 => {
@@ -931,7 +1030,7 @@ fn resolve_entity_place(
             let typed_val = encode_value(&vec[1])?;
 
             // Query for entity with this unique attribute value using typed columns
-            let eid = check_unique_typed_value(a, &typed_val)?
+            let eid = check_unique_typed_value(a, &typed_val, schema)?
                 .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
                     let attr_ident_display = crate::cache::get_cache()
                         .get_ident(a)
@@ -1024,11 +1123,14 @@ fn encode_value(
 
 /// Encode a value for a ref-type attribute. The value should be a tempid (string),
 /// integer entity ID, or keyword ident. Returns TypedValue::Ref with the entity ID.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn encode_ref_value(
     value: &edn::Value,
     tempid_map: &mut BTreeMap<String, i64>,
+    schema: &str,
 ) -> Result<TypedValue, Box<dyn std::error::Error + Send + Sync>> {
-    let entity_id = resolve_entity_place(value, tempid_map)?;
+    let entity_id = resolve_entity_place(value, tempid_map, schema)?;
     Ok(TypedValue::Ref(entity_id))
 }
 
@@ -1053,10 +1155,13 @@ fn lookup_attribute_info(attr_id: i64) -> Option<crate::cache::AttributeInfo> {
     crate::cache::get_cache().get_attribute(attr_id)
 }
 
-/// Validate all constraints for a datom before insertion
+/// Validate all constraints for a datom before insertion.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn validate_datom_constraints(
     datom: &PendingDatom,
     all_pending: &[PendingDatom],
+    schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let attr_info = lookup_attribute_info(datom.a)
         .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
@@ -1147,7 +1252,7 @@ fn validate_datom_constraints(
             &[DatumWithOid::from(lock_key)],
         )?;
 
-        let existing_entity = check_unique_typed_value(datom.a, &datom.v)?;
+        let existing_entity = check_unique_typed_value(datom.a, &datom.v, schema)?;
 
         if let Some(existing_e) = existing_entity {
             if existing_e != datom.e {
@@ -1170,20 +1275,27 @@ fn validate_datom_constraints(
 /// For cardinality-one attributes, retract any existing value for this (entity, attribute)
 /// pair before asserting a new value. This implements Datomic's upsert semantics.
 /// If the new value is identical to the existing value, no retraction is needed (idempotent).
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
     tx_id: i64,
     new_v: &TypedValue,
+    schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Find the current value (if any)
+    let card_one_query = format!(
+        "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
+                v_text, v_keyword, v_instant, v_uuid, v_bytes \
+         FROM {}.datoms \
+         WHERE e = $1 AND a = $2 AND added = true \
+         ORDER BY tx DESC LIMIT 1",
+        schema
+    );
     let existing: Option<TypedValue> = Spi::connect(|client| {
         let rows = client.select(
-            "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
-                    v_text, v_keyword, v_instant, v_uuid, v_bytes \
-             FROM mentat.datoms \
-             WHERE e = $1 AND a = $2 AND added = true \
-             ORDER BY tx DESC LIMIT 1",
+            &card_one_query,
             None,
             &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id)],
         )?;
@@ -1209,10 +1321,10 @@ fn retract_existing_cardinality_one(
 
         // Mark the existing assertion row as retracted so queries filtering
         // by added=true will no longer return the old value.
-        mark_existing_datom_retracted(entity_id, attr_id, &old_v)?;
+        mark_existing_datom_retracted(entity_id, attr_id, &old_v, schema)?;
 
         // Insert a retraction datom for the old value (for history/audit)
-        insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false)?;
+        insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false, schema)?;
     }
 
     Ok(())
@@ -1226,10 +1338,13 @@ fn retract_existing_cardinality_one(
 /// This is the core fix for the cardinality-many retraction bug: without this,
 /// inserting a retraction row (added=false) would have no effect because the
 /// original assertion row (added=true) would still be returned by queries.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn mark_existing_datom_retracted(
     entity_id: i64,
     attr_id: i64,
     v: &TypedValue,
+    schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let v_col = typed_value_column(v);
     let type_tag = v.type_tag();
@@ -1240,9 +1355,10 @@ fn mark_existing_datom_retracted(
     match v {
         TypedValue::Instant(micros) => {
             let query = format!(
-                "UPDATE mentat.datoms SET added = false \
+                "UPDATE {}.datoms SET added = false \
                  WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true"
+                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true",
+                schema
             );
             Spi::run_with_args(
                 &query,
@@ -1257,9 +1373,10 @@ fn mark_existing_datom_retracted(
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
             let query = format!(
-                "UPDATE mentat.datoms SET added = false \
+                "UPDATE {}.datoms SET added = false \
                  WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_uuid = $4::UUID AND added = true"
+                 AND v_uuid = $4::UUID AND added = true",
+                schema
             );
             Spi::run_with_args(
                 &query,
@@ -1273,9 +1390,9 @@ fn mark_existing_datom_retracted(
         }
         _ => {
             let query = format!(
-                "UPDATE mentat.datoms SET added = false \
+                "UPDATE {}.datoms SET added = false \
                  WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true",
-                v_col,
+                schema, v_col,
             );
             match v {
                 TypedValue::Ref(id) => Spi::run_with_args(
@@ -1352,16 +1469,19 @@ fn mark_existing_datom_retracted(
 /// For cardinality-many attributes, check if the exact (e, a, v) triple already
 /// exists with added=true. If so, the assertion is idempotent and should be
 /// skipped to avoid duplicate datoms (matching Datomic semantics).
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn is_duplicate_cardinality_many(
     entity_id: i64,
     attr_id: i64,
     v: &TypedValue,
+    schema: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let v_col = typed_value_column(v);
     let query = format!(
-        "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+        "SELECT EXISTS(SELECT 1 FROM {}.datoms \
          WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true)",
-        v_col,
+        schema, v_col,
     );
     let type_tag = v.type_tag();
     let exists = match v {
@@ -1385,9 +1505,10 @@ fn is_duplicate_cardinality_many(
                        DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
         TypedValue::Instant(micros) => {
             let q = format!(
-                "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+                "SELECT EXISTS(SELECT 1 FROM {}.datoms \
                  WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)"
+                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)",
+                schema
             );
             Spi::get_one_with_args::<bool>(
                 &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
@@ -1396,9 +1517,10 @@ fn is_duplicate_cardinality_many(
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
             let q = format!(
-                "SELECT EXISTS(SELECT 1 FROM mentat.datoms \
+                "SELECT EXISTS(SELECT 1 FROM {}.datoms \
                  WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_uuid = $4::UUID AND added = true)"
+                 AND v_uuid = $4::UUID AND added = true)",
+                schema
             );
             Spi::get_one_with_args::<bool>(
                 &q, &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id),
@@ -1521,20 +1643,26 @@ fn format_typed_value(v: &TypedValue) -> String {
     }
 }
 
-/// Insert a single datom with typed value columns into mentat.datoms.
+/// Insert a single datom with typed value columns into the store's datoms table.
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn insert_typed_datom(
     e: i64,
     a: i64,
     v: &TypedValue,
     tx: i64,
     added: bool,
+    schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let type_tag = v.type_tag();
     match v {
         TypedValue::Ref(ref_id) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_ref, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1547,8 +1675,11 @@ fn insert_typed_datom(
         }
         TypedValue::Boolean(b) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_bool, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_bool, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1561,8 +1692,11 @@ fn insert_typed_datom(
         }
         TypedValue::Long(n) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_long, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1575,8 +1709,11 @@ fn insert_typed_datom(
         }
         TypedValue::Double(f) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_double, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_double, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1589,8 +1726,11 @@ fn insert_typed_datom(
         }
         TypedValue::Text(s) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_text, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1603,8 +1743,11 @@ fn insert_typed_datom(
         }
         TypedValue::Keyword(s) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_keyword, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_keyword, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1618,8 +1761,11 @@ fn insert_typed_datom(
         TypedValue::Instant(micros) => {
             // Insert as TIMESTAMPTZ via SQL CAST to avoid pgrx conversion issues
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_instant, tx, added) \
-                 VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_instant, tx, added) \
+                     VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1634,8 +1780,11 @@ fn insert_typed_datom(
             // Insert UUID as text and let PostgreSQL cast it
             let uuid_str = u.to_string();
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_uuid, tx, added) \
-                 VALUES ($1, $2, $3, $4::UUID, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_uuid, tx, added) \
+                     VALUES ($1, $2, $3, $4::UUID, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1648,8 +1797,11 @@ fn insert_typed_datom(
         }
         TypedValue::Bytes(b) => {
             Spi::run_with_args(
-                "INSERT INTO mentat.datoms (e, a, value_type_tag, v_bytes, tx, added) \
-                 VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.datoms (e, a, value_type_tag, v_bytes, tx, added) \
+                     VALUES ($1, $2, $3, $4, $5, $6)",
+                    schema
+                ),
                 &[
                     DatumWithOid::from(e),
                     DatumWithOid::from(a),
@@ -1680,15 +1832,18 @@ fn typed_value_column(v: &TypedValue) -> &'static str {
 }
 
 /// Check for unique constraint violation by looking up existing datom with same (a, v).
+///
+/// The `schema` parameter is the quoted PostgreSQL schema name.
 fn check_unique_typed_value(
     attr_id: i64,
     v: &TypedValue,
+    schema: &str,
 ) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
     let v_col = typed_value_column(v);
     let query = format!(
-        "SELECT e FROM mentat.datoms \
+        "SELECT e FROM {}.datoms \
          WHERE a = $1 AND value_type_tag = $2 AND {} = $3 AND added = true LIMIT 1",
-        v_col,
+        schema, v_col,
     );
     let type_tag = v.type_tag();
     let result = match v {
@@ -1706,9 +1861,10 @@ fn check_unique_typed_value(
             &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
         TypedValue::Instant(micros) => {
             let q = format!(
-                "SELECT e FROM mentat.datoms \
+                "SELECT e FROM {}.datoms \
                  WHERE a = $1 AND value_type_tag = $2 \
-                 AND v_instant = to_timestamp($3::DOUBLE PRECISION / 1000000.0) AND added = true LIMIT 1"
+                 AND v_instant = to_timestamp($3::DOUBLE PRECISION / 1000000.0) AND added = true LIMIT 1",
+                schema
             );
             Spi::get_one_with_args::<i64>(
                 &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*micros)])
@@ -1716,8 +1872,9 @@ fn check_unique_typed_value(
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
             let q = format!(
-                "SELECT e FROM mentat.datoms \
-                 WHERE a = $1 AND value_type_tag = $2 AND v_uuid = $3::UUID AND added = true LIMIT 1"
+                "SELECT e FROM {}.datoms \
+                 WHERE a = $1 AND value_type_tag = $2 AND v_uuid = $3::UUID AND added = true LIMIT 1",
+                schema
             );
             Spi::get_one_with_args::<i64>(
                 &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(uuid_str.as_str())])

@@ -1,4 +1,5 @@
 use crate::error::MentatError;
+use crate::functions::store_management::get_schema_for_store;
 use pgrx::prelude::*;
 use pgrx::JsonB;
 use serde_json::json;
@@ -23,15 +24,32 @@ use serde_json::json;
 /// ```
 #[pg_extern]
 pub fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    mentat_schema_in_store("default")
+}
+
+/// Return complete schema information as JSON from a named store
+///
+/// Returns all attributes with their properties from the specified store.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat_schema_in_store('my_store');
+/// ```
+#[pg_extern]
+pub fn mentat_schema_in_store(store: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_name = get_schema_for_store(store);
     let mut schema_map = serde_json::Map::new();
 
     Spi::connect(|client| {
-        let query = "SELECT entid, ident, value_type::TEXT, cardinality::TEXT, \
-                           unique_constraint::TEXT, indexed, fulltext, component, no_history \
-                    FROM mentat.schema \
-                    ORDER BY entid";
+        let query = format!(
+            "SELECT entid, ident, value_type::TEXT, cardinality::TEXT, \
+                   unique_constraint::TEXT, indexed, fulltext, component, no_history \
+            FROM {schema}.schema \
+            ORDER BY entid",
+            schema = schema_name
+        );
 
-        for row in client.select(query, None, &[])? {
+        for row in client.select(&query, None, &[])? {
             // Column indices are 1-based in pgrx
             let entid: i64 = row.get(1)?.ok_or_else(|| MentatError::DataIntegrity {
                 message: "Missing entid in mentat.schema row".to_string(),
