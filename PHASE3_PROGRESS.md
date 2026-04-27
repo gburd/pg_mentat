@@ -33,7 +33,7 @@ Started: 2026-04-27
 
 **Note**: Table names still use `_new` suffix. After Phase 4 cutover, these will be renamed to remove the suffix.
 
-### 2. transact.rs - Read Path Partially Updated
+### 2. transact.rs - Read Path FULLY UPDATED ✅
 
 **Changes Made**:
 - ✅ Modified `is_duplicate_cardinality_many()` function
@@ -42,10 +42,28 @@ Started: 2026-04-27
   - Includes store_id in WHERE clause for partition pruning
   - Each TypedValue variant queries its specific table
 
+- ✅ Modified `mark_existing_datom_retracted()` function
+  - UPDATEs type-specific tables instead of wide row
+  - No more value_type_tag needed in WHERE clause
+  - Simpler, more efficient SQL
+  - Each TypedValue variant updates its specific table
+
+- ✅ Modified `check_unique_typed_value()` function
+  - Queries type-specific tables for unique constraint checking
+  - Simpler query structure
+  - Better index utilization (VAET indexes where needed)
+
+- ✅ Modified `retract_existing_cardinality_one()` function
+  - Created helper `find_current_value_for_ea()` that queries all tables with UNION ALL
+  - Finds most recent value across all types (ORDER BY tx DESC)
+  - More complex query but necessary since we don't know the type beforehand
+  - Converts results back to TypedValue for processing
+
 **Benefits**:
 - Simpler SQL (single table instead of complex WHERE on value_type_tag)
 - Better query performance (smaller tables, better indexes)
 - Partition pruning by store_id
+- UNION ALL query only used where necessary (cardinality-one retraction)
 
 ## TODO - Remaining Work 📋
 

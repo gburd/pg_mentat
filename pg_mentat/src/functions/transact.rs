@@ -1277,6 +1277,85 @@ fn validate_datom_constraints(
 /// If the new value is identical to the existing value, no retraction is needed (idempotent).
 ///
 /// The `schema` parameter is the quoted PostgreSQL schema name.
+/// Helper function to query all type-specific tables for an (e, a) pair.
+/// Returns the most recent value (by tx) if found.
+fn find_current_value_for_ea(
+    store_id: i32,
+    entity_id: i64,
+    attr_id: i64,
+) -> Result<Option<TypedValue>, Box<dyn std::error::Error + Send + Sync>> {
+    // Query all type-specific tables with UNION ALL, ordered by tx DESC
+    // This finds the most recent value across all types
+    let query = "
+        SELECT 0 AS type_tag, v::text AS value, tx FROM mentat.datoms_ref_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 1, v::text, tx FROM mentat.datoms_boolean_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 2, v::text, tx FROM mentat.datoms_long_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 3, v::text, tx FROM mentat.datoms_double_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 4, EXTRACT(EPOCH FROM v)::bigint * 1000000 AS value, tx FROM mentat.datoms_instant_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 7, v, tx FROM mentat.datoms_text_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 8, v, tx FROM mentat.datoms_keyword_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 10, v::text, tx FROM mentat.datoms_uuid_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        UNION ALL
+        SELECT 11, encode(v, 'hex'), tx FROM mentat.datoms_bytes_new
+        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
+        ORDER BY tx DESC LIMIT 1
+    ";
+
+    Spi::connect(|client| {
+        let mut rows = client.select(
+            query,
+            None,
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+            ],
+        )?;
+
+        if let Some(row) = rows.next() {
+            let type_tag: i16 = row.get(1)?.ok_or("Missing type_tag")?;
+            let value_str: String = row.get(2)?.ok_or("Missing value")?;
+
+            // Parse value back to TypedValue based on type_tag
+            let typed_value = match type_tag {
+                0 => TypedValue::Ref(value_str.parse().map_err(|_| "Invalid ref")?),
+                1 => TypedValue::Boolean(value_str.parse().map_err(|_| "Invalid boolean")?),
+                2 => TypedValue::Long(value_str.parse().map_err(|_| "Invalid long")?),
+                3 => TypedValue::Double(value_str.parse().map_err(|_| "Invalid double")?),
+                4 => TypedValue::Instant(value_str.parse().map_err(|_| "Invalid instant")?),
+                7 => TypedValue::Text(value_str),
+                8 => TypedValue::Keyword(value_str),
+                10 => TypedValue::Uuid(value_str.parse().map_err(|_| "Invalid UUID")?),
+                11 => {
+                    // Decode hex back to bytes
+                    let decoded = hex::decode(&value_str).map_err(|_| "Invalid hex")?;
+                    TypedValue::Bytes(decoded)
+                }
+                _ => return Err(format!("Unknown type_tag: {}", type_tag).into()),
+            };
+
+            Ok(Some(typed_value))
+        } else {
+            Ok(None)
+        }
+    })
+}
+
 fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
@@ -1284,34 +1363,11 @@ fn retract_existing_cardinality_one(
     new_v: &TypedValue,
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Find the current value (if any)
-    let card_one_query = format!(
-        "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
-                v_text, v_keyword, v_instant, v_uuid, v_bytes \
-         FROM {}.datoms \
-         WHERE e = $1 AND a = $2 AND added = true \
-         ORDER BY tx DESC LIMIT 1",
-        schema
-    );
-    let existing: Option<TypedValue> = Spi::connect(|client| {
-        let rows = client.select(
-            &card_one_query,
-            None,
-            &[DatumWithOid::from(entity_id), DatumWithOid::from(attr_id)],
-        )?;
+    // Get store_id from schema
+    let store_id = get_store_id_from_schema(schema)?;
 
-        for row in rows {
-            let type_tag: i16 = match row.get(1) {
-                Ok(Some(t)) => t,
-                _ => continue,
-            };
-            match read_typed_value_from_row(&row, type_tag, 2) {
-                Ok(tv) => return Ok::<_, pgrx::spi::SpiError>(Some(tv)),
-                Err(_) => continue,
-            }
-        }
-        Ok(None)
-    })?;
+    // Find the current value (if any) by querying all type-specific tables
+    let existing = find_current_value_for_ea(store_id, entity_id, attr_id)?;
 
     if let Some(old_v) = existing {
         // If the value is identical, no retraction needed (idempotent assertion)
@@ -1346,121 +1402,121 @@ fn mark_existing_datom_retracted(
     v: &TypedValue,
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let v_col = typed_value_column(v);
-    let type_tag = v.type_tag();
+    // Get store_id from schema
+    let store_id = get_store_id_from_schema(schema)?;
 
-    // For most types, we can compare directly using the typed column.
-    // Special handling is needed for instant (TIMESTAMPTZ) and UUID types
-    // which require SQL casts.
+    // Update the appropriate type-specific table
+    // Much simpler than updating wide row with value_type_tag discrimination
     match v {
-        TypedValue::Instant(micros) => {
-            let query = format!(
-                "UPDATE {}.datoms SET added = false \
-                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_instant = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true",
-                schema
-            );
+        TypedValue::Ref(id) => {
             Spi::run_with_args(
-                &query,
+                "UPDATE mentat.datoms_ref_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(entity_id),
                     DatumWithOid::from(attr_id),
-                    DatumWithOid::from(type_tag),
+                    DatumWithOid::from(*id),
+                ],
+            )?;
+        }
+        TypedValue::Boolean(b) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_boolean_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(*b),
+                ],
+            )?;
+        }
+        TypedValue::Long(n) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_long_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(*n),
+                ],
+            )?;
+        }
+        TypedValue::Double(f) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_double_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(*f),
+                ],
+            )?;
+        }
+        TypedValue::Text(s) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_text_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(s.as_str()),
+                ],
+            )?;
+        }
+        TypedValue::Keyword(s) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_keyword_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(s.as_str()),
+                ],
+            )?;
+        }
+        TypedValue::Instant(micros) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_instant_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 \
+                 AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
                     DatumWithOid::from(*micros),
                 ],
             )?;
         }
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
-            let query = format!(
-                "UPDATE {}.datoms SET added = false \
-                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 \
-                 AND v_uuid = $4::UUID AND added = true",
-                schema
-            );
             Spi::run_with_args(
-                &query,
+                "UPDATE mentat.datoms_uuid_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID AND added = true",
                 &[
+                    DatumWithOid::from(store_id),
                     DatumWithOid::from(entity_id),
                     DatumWithOid::from(attr_id),
-                    DatumWithOid::from(type_tag),
                     DatumWithOid::from(uuid_str.as_str()),
                 ],
             )?;
         }
-        _ => {
-            let query = format!(
-                "UPDATE {}.datoms SET added = false \
-                 WHERE e = $1 AND a = $2 AND value_type_tag = $3 AND {} = $4 AND added = true",
-                schema, v_col,
-            );
-            match v {
-                TypedValue::Ref(id) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(*id),
-                    ],
-                )?,
-                TypedValue::Boolean(b) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(*b),
-                    ],
-                )?,
-                TypedValue::Long(n) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(*n),
-                    ],
-                )?,
-                TypedValue::Double(f) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(*f),
-                    ],
-                )?,
-                TypedValue::Text(s) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(s.as_str()),
-                    ],
-                )?,
-                TypedValue::Keyword(s) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(s.as_str()),
-                    ],
-                )?,
-                TypedValue::Bytes(b) => Spi::run_with_args(
-                    &query,
-                    &[
-                        DatumWithOid::from(entity_id),
-                        DatumWithOid::from(attr_id),
-                        DatumWithOid::from(type_tag),
-                        DatumWithOid::from(b.clone()),
-                    ],
-                )?,
-                // Instant and Uuid handled above
-                _ => unreachable!(),
-            }
+        TypedValue::Bytes(b) => {
+            Spi::run_with_args(
+                "UPDATE mentat.datoms_bytes_new SET added = false \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(b.clone()),
+                ],
+            )?;
         }
     }
     Ok(())
@@ -1873,48 +1929,50 @@ fn check_unique_typed_value(
     v: &TypedValue,
     schema: &str,
 ) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
-    let v_col = typed_value_column(v);
-    let query = format!(
-        "SELECT e FROM {}.datoms \
-         WHERE a = $1 AND value_type_tag = $2 AND {} = $3 AND added = true LIMIT 1",
-        schema, v_col,
-    );
-    let type_tag = v.type_tag();
+    // Get store_id from schema
+    let store_id = get_store_id_from_schema(schema)?;
+
+    // Query the appropriate type-specific table based on value type
     let result = match v {
         TypedValue::Ref(id) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*id)]),
+            "SELECT e FROM mentat.datoms_ref_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(*id)]),
         TypedValue::Boolean(b) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*b)]),
+            "SELECT e FROM mentat.datoms_boolean_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(*b)]),
         TypedValue::Long(n) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*n)]),
+            "SELECT e FROM mentat.datoms_long_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(*n)]),
         TypedValue::Double(f) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*f)]),
+            "SELECT e FROM mentat.datoms_double_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(*f)]),
         TypedValue::Text(s) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
+            "SELECT e FROM mentat.datoms_text_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
         TypedValue::Keyword(s) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(s.as_str())]),
-        TypedValue::Instant(micros) => {
-            let q = format!(
-                "SELECT e FROM {}.datoms \
-                 WHERE a = $1 AND value_type_tag = $2 \
-                 AND v_instant = to_timestamp($3::DOUBLE PRECISION / 1000000.0) AND added = true LIMIT 1",
-                schema
-            );
-            Spi::get_one_with_args::<i64>(
-                &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(*micros)])
-        }
+            "SELECT e FROM mentat.datoms_keyword_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
+        TypedValue::Instant(micros) => Spi::get_one_with_args::<i64>(
+            "SELECT e FROM mentat.datoms_instant_new \
+             WHERE store_id = $1 AND a = $2 AND v = to_timestamp($3::DOUBLE PRECISION / 1000000.0) AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(*micros)]),
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
-            let q = format!(
-                "SELECT e FROM {}.datoms \
-                 WHERE a = $1 AND value_type_tag = $2 AND v_uuid = $3::UUID AND added = true LIMIT 1",
-                schema
-            );
             Spi::get_one_with_args::<i64>(
-                &q, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(uuid_str.as_str())])
+                "SELECT e FROM mentat.datoms_uuid_new \
+                 WHERE store_id = $1 AND a = $2 AND v = $3::UUID AND added = true LIMIT 1",
+                &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(uuid_str.as_str())])
         }
         TypedValue::Bytes(b) => Spi::get_one_with_args::<i64>(
-            &query, &[DatumWithOid::from(attr_id), DatumWithOid::from(type_tag), DatumWithOid::from(b.clone())]),
+            "SELECT e FROM mentat.datoms_bytes_new \
+             WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+            &[DatumWithOid::from(store_id), DatumWithOid::from(attr_id), DatumWithOid::from(b.clone())]),
     }.ok().flatten();
 
     Ok(result)
