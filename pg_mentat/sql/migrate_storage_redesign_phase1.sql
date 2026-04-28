@@ -397,6 +397,103 @@ CREATE TRIGGER dual_write_datoms_trigger
 ALTER TABLE mentat.datoms DISABLE TRIGGER dual_write_datoms_trigger;
 
 -- --------------------------------------------------------------------------
+-- Row-Level Security (RLS) for multi-store isolation
+-- --------------------------------------------------------------------------
+-- RLS policies ensure that each database session can only access data
+-- belonging to the store it is authorized for. The session variable
+-- mentat.current_store_id must be set before accessing data.
+--
+-- Usage:
+--   SET mentat.current_store_id = '0';  -- access default store
+--   SET mentat.current_store_id = '1';  -- access store with id 1
+--
+-- When RLS is enabled, queries automatically filter rows by store_id.
+-- Superusers and the table owner bypass RLS by default; use
+--   SET row_security = on; ALTER ROLE ... SET row_security = on;
+-- to enforce RLS even for superusers if desired.
+
+-- Helper function to get the current store_id from session variable
+CREATE OR REPLACE FUNCTION mentat.current_store_id()
+RETURNS INT AS $$
+BEGIN
+    RETURN current_setting('mentat.current_store_id', true)::INT;
+EXCEPTION
+    WHEN OTHERS THEN
+        -- Default to store_id 0 (default store) if not set
+        RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION mentat.current_store_id() IS
+  'Returns the current session store_id from the mentat.current_store_id setting. '
+  'Defaults to 0 (the default store) if not set.';
+
+-- Enable RLS on all 9 type-specific tables and create policies
+
+-- 1. datoms_ref_new
+ALTER TABLE mentat.datoms_ref_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_ref ON mentat.datoms_ref_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 2. datoms_long_new
+ALTER TABLE mentat.datoms_long_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_long ON mentat.datoms_long_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 3. datoms_text_new
+ALTER TABLE mentat.datoms_text_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_text ON mentat.datoms_text_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 4. datoms_double_new
+ALTER TABLE mentat.datoms_double_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_double ON mentat.datoms_double_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 5. datoms_instant_new
+ALTER TABLE mentat.datoms_instant_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_instant ON mentat.datoms_instant_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 6. datoms_keyword_new
+ALTER TABLE mentat.datoms_keyword_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_keyword ON mentat.datoms_keyword_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 7. datoms_uuid_new
+ALTER TABLE mentat.datoms_uuid_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_uuid ON mentat.datoms_uuid_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 8. datoms_bytes_new
+ALTER TABLE mentat.datoms_bytes_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_bytes ON mentat.datoms_bytes_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- 9. datoms_boolean_new
+ALTER TABLE mentat.datoms_boolean_new ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY store_isolation_boolean ON mentat.datoms_boolean_new
+    USING (store_id = mentat.current_store_id())
+    WITH CHECK (store_id = mentat.current_store_id());
+
+-- --------------------------------------------------------------------------
 -- Migration tracking
 -- --------------------------------------------------------------------------
 

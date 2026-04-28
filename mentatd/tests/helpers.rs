@@ -21,7 +21,15 @@ impl TestServer {
         });
 
         let state = mentatd::server::AppState::new(pool, config.clone());
-        let app = mentatd::server::create_router(state);
+        let session_store = mentatd::session::default_session_store();
+
+        let ws_state = mentatd::websocket::WsState {
+            app_state: state.clone(),
+            session_store,
+        };
+
+        let app = mentatd::server::create_router(state)
+            .merge(mentatd::websocket::create_ws_router(ws_state));
 
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -55,6 +63,7 @@ impl TestServer {
 #[derive(Clone)]
 pub struct TestClient {
     base_url: String,
+    ws_url: String,
     client: reqwest::Client,
 }
 
@@ -68,11 +77,17 @@ impl TestClient {
     fn new(addr: SocketAddr) -> Self {
         Self {
             base_url: format!("http://{}", addr),
+            ws_url: format!("ws://{}", addr),
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
                 .expect("Failed to create HTTP client"),
         }
+    }
+
+    /// Get the WebSocket URL for the given path.
+    pub fn ws_url(&self, path: &str) -> String {
+        format!("{}{}", self.ws_url, path)
     }
 
     pub async fn get(&self, path: &str) -> TestResponse {

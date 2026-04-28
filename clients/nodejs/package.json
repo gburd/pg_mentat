@@ -1,0 +1,35 @@
+{
+  "name": "@pg-mentat/client",
+  "version": "0.1.0",
+  "description": "Datomic-compatible TypeScript/JavaScript client for pg_mentat",
+  "main": "dist/client.js",
+  "types": "dist/client.d.ts",
+  "files": ["dist/", "src/"],
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["datomic", "datalog", "pg_mentat", "postgresql", "database", "client"],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://codeberg.org/gregburd/pg_mentat"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.10",
+    "@types/uuid": "^9.0.7",
+    "@types/node": "^20.10.0",
+    "typescript": "^5.3.0",
+    "jest": "^29.7.0",
+    "@types/jest": "^29.5.11",
+    "ts-jest": "^29.1.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

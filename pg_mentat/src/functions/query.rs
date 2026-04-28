@@ -72,10 +72,12 @@ fn execute_cached_query<'a>(
         });
 
     if let Some(result) = cached_result {
+        crate::monitoring::record_stmt_cache_hit();
         return result;
     }
 
     // Cache miss: prepare, execute, then cache the plan.
+    crate::monitoring::record_stmt_cache_miss();
     let arg_types: Vec<PgOid> = params.iter().map(|p| PgOid::from_untagged(p.oid())).collect();
     let prepared = client.prepare(sql, &arg_types)?;
 
@@ -274,6 +276,173 @@ fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
         "{} AS {}",
         build_datoms_union_subquery(store_id_param),
         alias
+    )
+}
+
+// ============================================================================
+// Schema-Aware Single-Table Query Helpers
+// ============================================================================
+
+/// Metadata for a single type-specific datoms table, used by the schema-aware
+/// query optimizer to replace the 9-way UNION ALL with a direct table scan.
+struct TypedTableInfo {
+    /// The table name (e.g., "mentat.datoms_text_new").
+    table: &'static str,
+    /// The SQL type of the native `v` column (e.g., "TEXT", "BIGINT").
+    _sql_type: &'static str,
+    /// The type tag constant for this value type.
+    type_tag: i16,
+    /// The virtual column name in the UNION ALL projection that this type populates
+    /// (e.g., "v_text", "v_long"). Used to build the projection.
+    value_column: &'static str,
+}
+
+/// Map a value_type enum label (as stored in the schema table) to its typed table metadata.
+///
+/// Returns `None` for unrecognized type names, which causes the caller to fall
+/// back to the UNION ALL strategy.
+fn value_type_to_table_info(value_type: &str) -> Option<TypedTableInfo> {
+    match value_type {
+        "ref" => Some(TypedTableInfo {
+            table: "mentat.datoms_ref_new",
+            _sql_type: "BIGINT",
+            type_tag: type_tag::REF,
+            value_column: "v_ref",
+        }),
+        "boolean" => Some(TypedTableInfo {
+            table: "mentat.datoms_boolean_new",
+            _sql_type: "BOOLEAN",
+            type_tag: type_tag::BOOLEAN,
+            value_column: "v_bool",
+        }),
+        "long" => Some(TypedTableInfo {
+            table: "mentat.datoms_long_new",
+            _sql_type: "BIGINT",
+            type_tag: type_tag::LONG,
+            value_column: "v_long",
+        }),
+        "double" => Some(TypedTableInfo {
+            table: "mentat.datoms_double_new",
+            _sql_type: "DOUBLE PRECISION",
+            type_tag: type_tag::DOUBLE,
+            value_column: "v_double",
+        }),
+        "instant" => Some(TypedTableInfo {
+            table: "mentat.datoms_instant_new",
+            _sql_type: "TIMESTAMPTZ",
+            type_tag: type_tag::INSTANT,
+            value_column: "v_instant",
+        }),
+        "string" => Some(TypedTableInfo {
+            table: "mentat.datoms_text_new",
+            _sql_type: "TEXT",
+            type_tag: type_tag::STRING,
+            value_column: "v_text",
+        }),
+        "keyword" => Some(TypedTableInfo {
+            table: "mentat.datoms_keyword_new",
+            _sql_type: "TEXT",
+            type_tag: type_tag::KEYWORD,
+            value_column: "v_keyword",
+        }),
+        "uuid" => Some(TypedTableInfo {
+            table: "mentat.datoms_uuid_new",
+            _sql_type: "UUID",
+            type_tag: type_tag::UUID,
+            value_column: "v_uuid",
+        }),
+        "bytes" => Some(TypedTableInfo {
+            table: "mentat.datoms_bytes_new",
+            _sql_type: "BYTEA",
+            type_tag: type_tag::BYTES,
+            value_column: "v_bytes",
+        }),
+        _ => None,
+    }
+}
+
+/// Extract a store name from a schema_prefix for use with the schema cache.
+///
+/// `"mentat."` -> `"default"`, `"\"mentat_foo\"."` -> `"foo"`.
+fn store_name_from_prefix(schema_prefix: &str) -> &str {
+    let schema = schema_prefix.trim_end_matches('.');
+    let schema = schema.trim_matches('"');
+    if schema == "mentat" {
+        "default"
+    } else {
+        schema.strip_prefix("mentat_").unwrap_or("default")
+    }
+}
+
+/// Attempt to resolve the value type for a pattern's attribute using the schema cache.
+///
+/// Returns `Some(value_type_string)` (e.g., `"string"`, `"long"`) when the attribute
+/// is a known constant (keyword ident or entid). Returns `None` for variable or
+/// placeholder attributes, which must fall back to the UNION ALL strategy.
+fn resolve_pattern_value_type(
+    attribute: &PatternNonValuePlace,
+    schema_prefix: &str,
+) -> Option<String> {
+    let store_name = store_name_from_prefix(schema_prefix);
+    let cache = crate::cache::get_cache_for_store(store_name);
+
+    match attribute {
+        PatternNonValuePlace::Ident(kw) => {
+            let ident_str = keyword_to_ident(kw);
+            cache.get_attribute_by_ident(&ident_str)
+                .map(|info| info.value_type)
+        }
+        PatternNonValuePlace::Entid(id) => {
+            cache.get_attribute(*id)
+                .map(|info| info.value_type)
+        }
+        // Variable or placeholder: type is unknown at compile time
+        PatternNonValuePlace::Variable(_) | PatternNonValuePlace::Placeholder => None,
+    }
+}
+
+/// Build a FROM-clause fragment that reads from a single type-specific table
+/// while projecting the same column interface as the UNION ALL subquery.
+///
+/// The generated subquery looks like:
+/// ```sql
+/// (SELECT e, a, <type_tag> AS value_type_tag,
+///         NULL::BIGINT AS v_ref, ..., v AS v_text, ...,
+///         tx, added
+///  FROM mentat.datoms_text_new
+///  WHERE store_id = $N) AS datoms0
+/// ```
+///
+/// This produces identical output columns to `build_datoms_union_subquery` so
+/// the rest of the query generation (WHERE, SELECT, etc.) is unchanged, but
+/// reads from exactly one table instead of nine.
+fn build_typed_datoms_from_fragment(
+    alias: &str,
+    store_id_param: &str,
+    info: &TypedTableInfo,
+) -> String {
+    // Build the SELECT list with the native column in its correct position
+    // and NULLs for all other typed columns.
+    let v_ref = if info.value_column == "v_ref" { "v" } else { "NULL::BIGINT" };
+    let v_bool = if info.value_column == "v_bool" { "v" } else { "NULL::BOOLEAN" };
+    let v_long = if info.value_column == "v_long" { "v" } else { "NULL::BIGINT" };
+    let v_double = if info.value_column == "v_double" { "v" } else { "NULL::DOUBLE PRECISION" };
+    let v_text = if info.value_column == "v_text" { "v" } else { "NULL::TEXT" };
+    let v_keyword = if info.value_column == "v_keyword" { "v" } else { "NULL::TEXT" };
+    let v_instant = if info.value_column == "v_instant" { "v" } else { "NULL::TIMESTAMPTZ" };
+    let v_uuid = if info.value_column == "v_uuid" { "v" } else { "NULL::UUID" };
+    let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
+
+    format!(
+        "(SELECT e, a, {tag} AS value_type_tag, \
+                {v_ref} AS v_ref, {v_bool} AS v_bool, {v_long} AS v_long, \
+                {v_double} AS v_double, {v_text} AS v_text, \
+                {v_keyword} AS v_keyword, {v_instant} AS v_instant, \
+                {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, added \
+         FROM {table} WHERE store_id = {sid}) AS {alias}",
+        tag = info.type_tag,
+        table = info.table,
+        sid = store_id_param,
     )
 }
 
@@ -655,6 +824,8 @@ pub(crate) fn mentat_query_internal(
     inputs: JsonB,
     schema_prefix: &str,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+    let mut timer = crate::monitoring::QueryTimer::start(query);
+
     let _parsed_value = parse::value(query)?;
     let parsed_query = mentat_core::parse_query(query)?;
 
@@ -699,6 +870,9 @@ pub(crate) fn mentat_query_internal(
         // Request one extra row to detect truncation
         sql_query.push_str(&format!(" LIMIT {}", i64::from(max_rows) + 1));
     }
+
+    // Record the generated SQL for monitoring (slow query logging)
+    timer.set_sql(&sql_query);
 
     let params = builder.params;
     let results = Spi::connect_mut(|client| {
@@ -751,6 +925,8 @@ pub(crate) fn mentat_query_internal(
 
     let response =
         format_find_response(&parsed_query.find_spec, &find_vars, results, has_aggregates);
+
+    let _elapsed_ms = timer.finish();
 
     Ok(JsonB(response))
 }
@@ -1751,6 +1927,26 @@ fn build_sql_from_datalog(
     };
     let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref);
 
+    // If no explicit ORDER BY was specified and we have fulltext joins with score
+    // bindings, automatically order by relevance score descending. This ensures
+    // fulltext queries return the most relevant results first by default.
+    let query_sql = if parsed.order.is_none() || parsed.order.as_ref().map_or(true, |o| o.is_empty()) {
+        if let Some(score) = fts_joins.iter().find_map(|fj| fj.score_expr.as_ref()) {
+            // Find the column position of the score expression in the SELECT list
+            if let Some(score_col_pos) = find_vars.iter().position(|v| {
+                extra_var_bindings.get(v).map_or(false, |expr| expr == score)
+            }) {
+                format!("{} ORDER BY {} DESC", query_sql, score_col_pos + 1)
+            } else {
+                query_sql
+            }
+        } else {
+            query_sql
+        }
+    } else {
+        query_sql
+    };
+
     // Append LIMIT
     let query_sql = append_limit(query_sql, &parsed.limit, &parsed.find_spec);
 
@@ -1773,9 +1969,97 @@ fn build_sql_from_datalog(
 struct FtsJoin {
     from_fragment: String,
     where_parts: Vec<String>,
+    /// SQL expression for the relevance score column, if the score variable is bound.
+    /// Used to add `ORDER BY score DESC` for relevance-ranked results.
+    score_expr: Option<String>,
+}
+
+/// Resolve the PostgreSQL text search configuration (regconfig) for a fulltext attribute.
+///
+/// Checks the attribute's `:db/doc` string for a `[fts:lang=<language>]` tag. If found
+/// and the language is a valid PostgreSQL text search configuration, that language is
+/// returned. Otherwise defaults to `'english'`.
+///
+/// Supported configurations include: `simple`, `english`, `spanish`, `french`, `german`,
+/// `italian`, `portuguese`, `dutch`, `finnish`, `swedish`, `russian`, `danish`, `hungarian`,
+/// `norwegian`, `romanian`, `turkish`, and others installed on the server.
+///
+/// Example schema definition:
+/// ```edn
+/// {:db/ident :article/body
+///  :db/valueType :db.type/string
+///  :db/cardinality :db.cardinality/one
+///  :db/fulltext true
+///  :db/doc "Article body text [fts:lang=german]"}
+/// ```
+fn resolve_fts_language(attr_ident: &str, schema_prefix: &str) -> String {
+    // Look up the attribute's entid, then find its :db/doc datom.
+    // The attr_ident comes from keyword_to_ident which strips the leading colon,
+    // e.g. "person/bio". The schema table stores idents without the colon prefix.
+    let lang = pgrx::spi::Spi::connect(|client| {
+        // Two-step query: find the entid for :db/doc (entid 8 in bootstrap), then
+        // look up the doc string for our attribute entity.
+        let query = format!(
+            "SELECT dt.v_text \
+             FROM {schema_prefix}schema s \
+             JOIN {schema_prefix}datoms_text_new dt \
+               ON dt.e = s.entid AND dt.added = true \
+             WHERE s.ident = '{ident}' \
+               AND dt.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = 'db/doc') \
+             LIMIT 1",
+            ident = attr_ident.replace('\'', "''"),
+        );
+        let result = client.select(&query, None, &[]);
+        match result {
+            Ok(rows) => {
+                for row in rows {
+                    if let Ok(Some(doc)) = row.get::<String>(1) {
+                        if let Some(lang) = parse_fts_lang_tag(&doc) {
+                            return Ok::<_, pgrx::spi::SpiError>(Some(lang));
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            Err(_) => Ok(None),
+        }
+    });
+    match lang {
+        Ok(Some(l)) => l,
+        _ => "english".to_string(),
+    }
+}
+
+/// Parse a `[fts:lang=<language>]` tag from a doc string.
+/// Returns the language name if valid, None otherwise.
+fn parse_fts_lang_tag(doc: &str) -> Option<String> {
+    let start = doc.find("[fts:lang=")?;
+    let rest = &doc[start + 10..];
+    let end = rest.find(']')?;
+    let lang = rest[..end].trim().to_lowercase();
+
+    // Validate against known PostgreSQL text search configurations
+    const VALID_CONFIGS: &[&str] = &[
+        "simple", "english", "spanish", "french", "german",
+        "italian", "portuguese", "dutch", "finnish", "swedish",
+        "russian", "danish", "hungarian", "norwegian", "romanian",
+        "turkish", "arabic", "armenian", "basque", "catalan",
+        "greek", "hindi", "indonesian", "irish", "lithuanian",
+        "nepali", "serbian", "tamil", "yiddish",
+    ];
+
+    if VALID_CONFIGS.contains(&lang.as_str()) {
+        Some(lang)
+    } else {
+        None
+    }
 }
 
 /// Build a fulltext search join from a `(fulltext $ :attr "term")` where-function.
+///
+/// Uses `ts_rank_cd` (cover density ranking) for BM25-like relevance scoring and
+/// resolves the stemming language from per-attribute schema metadata (`:db/doc`
+/// `[fts:lang=<language>]` tag), falling back to `'english'`.
 fn build_fulltext_join(
     wf: &WhereFn,
     fts_idx: usize,
@@ -1803,22 +2087,27 @@ fn build_fulltext_join(
                         search term. Format: (fulltext $ :attr \"search words\")".into()),
     };
 
-    let fts_alias = format!("fts{}", fts_idx);
-    let datoms_alias = format!("fts_d{}", fts_idx);
+    // Resolve stemming language from attribute schema metadata.
+    // Looks for [fts:lang=<language>] in :db/doc, defaults to 'english'.
+    let fts_lang = resolve_fts_language(&attr_ident, schema_prefix);
+
+    // Use a single alias for the datoms_text_new table.
+    // Optimization: since fulltext attributes are always text type, we query
+    // datoms_text_new directly instead of joining the 9-way UNION ALL subquery
+    // with the separate fulltext table. This leverages the GIN index on
+    // to_tsvector('english', v) for efficient matching.
+    let dt_alias = format!("fts_d{}", fts_idx);
 
     let attr_param = builder.bind_text(attr_ident);
 
     let mut where_parts = Vec::new();
     where_parts.push(format!(
-        "{datoms_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
+        "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!(
-        "{datoms_alias}.value_type_tag = {}",
-        type_tag::STRING
-    ));
-    where_parts.push(format!(
-        "{fts_alias}.text_value = {datoms_alias}.v_text"
-    ));
+    where_parts.push(format!("{dt_alias}.added = true"));
+    where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
+
+    let mut score_expr: Option<String> = None;
 
     if !search_term.is_empty() {
         // Detect phrase search: if the search term is wrapped in quotes, use phraseto_tsquery
@@ -1835,14 +2124,22 @@ fn build_fulltext_join(
         } else {
             "plainto_tsquery"
         };
+        // Match against the GIN index on datoms_text_new.v directly
         where_parts.push(format!(
-            "{fts_alias}.search_vector @@ {tsquery_fn}('english', {search_param})"
+            "to_tsvector('{fts_lang}', {dt_alias}.v) @@ {tsquery_fn}('{fts_lang}', {search_param})"
+        ));
+
+        // Pre-build the score expression for reuse in binding and ordering.
+        // Uses ts_rank_cd (cover density) with normalization flag 32 which
+        // divides the rank by 1 + log(document length), approximating BM25's
+        // document length normalization to avoid bias toward longer texts.
+        score_expr = Some(format!(
+            "ts_rank_cd(to_tsvector('{fts_lang}', {dt_alias}.v), \
+             {tsquery_fn}('{fts_lang}', {search_param}), 32)"
         ));
     } else {
         where_parts.push("false".to_string());
     }
-
-    where_parts.push(format!("{datoms_alias}.added = true"));
 
     // Bind result variables from the binding pattern [[?e ?name _ ?score]]
     if let Binding::BindRel(ref vars) = wf.binding {
@@ -1851,34 +2148,20 @@ fn build_fulltext_join(
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
-                        var_bindings.insert(var_name, format!("{datoms_alias}.e::TEXT"));
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
                     }
                     1 => {
-                        var_bindings.insert(var_name, format!("{fts_alias}.text_value"));
+                        var_bindings.insert(var_name, format!("{dt_alias}.v"));
                     }
                     2 => {
-                        var_bindings.insert(var_name, format!("{datoms_alias}.tx::TEXT"));
+                        var_bindings.insert(var_name, format!("{dt_alias}.tx::TEXT"));
                     }
                     3 => {
-                        let is_phrase_score =
-                            search_term.starts_with('"') && search_term.ends_with('"');
-                        let clean_score_term = if is_phrase_score {
-                            search_term[1..search_term.len() - 1].to_string()
-                        } else {
-                            search_term.clone()
-                        };
-                        let score_param = builder.bind_text(clean_score_term);
-                        let score_fn = if is_phrase_score {
-                            "phraseto_tsquery"
-                        } else {
-                            "plainto_tsquery"
-                        };
-                        var_bindings.insert(
-                            var_name,
-                            format!(
-                                "ts_rank({fts_alias}.search_vector, {score_fn}('english', {score_param}))::TEXT"
-                            ),
-                        );
+                        // Relevance score using ts_rank_cd for BM25-like ranking
+                        if let Some(ref expr) = score_expr {
+                            let score_text = format!("{}::TEXT", expr);
+                            var_bindings.insert(var_name, score_text);
+                        }
                     }
                     _ => {}
                 }
@@ -1886,14 +2169,13 @@ fn build_fulltext_join(
         }
     }
 
-    let from_fragment = format!(
-        "{} AS {datoms_alias}, {schema_prefix}fulltext {fts_alias}",
-        build_datoms_union_subquery(store_id_param)
-    );
+    // Query datoms_text_new directly -- no fulltext table join needed.
+    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
         where_parts,
+        score_expr,
     })
 }
 
@@ -2240,6 +2522,11 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             where_clauses.push(format!("{alias}.tx = {param}"));
         }
 
+        // Schema-aware optimization: resolve the attribute's value type early so
+        // we can use it for both the FROM fragment and the NOT EXISTS subquery.
+        let typed_info = resolve_pattern_value_type(&pattern.attribute, schema_prefix)
+            .and_then(|vt| value_type_to_table_info(&vt));
+
         // Temporal filtering per datom table
         if temporal.history {
             // History mode: include both added=true and added=false (no filter)
@@ -2278,13 +2565,27 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
             if !is_cardinality_many {
                 let param2 = builder.bind_bigint(as_of_tx);
-                where_clauses.push(format!(
-                    "NOT EXISTS (SELECT 1 FROM {} AS newer \
-                     WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                     AND newer.added = true \
-                     AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
-                    build_datoms_union_subquery(store_id_param)
-                ));
+                // Use single typed table for NOT EXISTS when attribute type is known.
+                // This avoids the 9-way UNION ALL in the correlated subquery.
+                if let Some(info) = &typed_info {
+                    where_clauses.push(format!(
+                        "NOT EXISTS (SELECT 1 FROM {table} AS newer \
+                         WHERE newer.store_id = {sid} \
+                         AND newer.e = {alias}.e AND newer.a = {alias}.a \
+                         AND newer.added = true \
+                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                        table = info.table,
+                        sid = store_id_param,
+                    ));
+                } else {
+                    where_clauses.push(format!(
+                        "NOT EXISTS (SELECT 1 FROM {} AS newer \
+                         WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                         AND newer.added = true \
+                         AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                        build_datoms_union_subquery(store_id_param)
+                    ));
+                }
             }
         }
 
@@ -2305,7 +2606,14 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
         }
 
-        joins.push(build_datoms_from_fragment(&alias, store_id_param));
+        // Use the typed single-table FROM fragment or fall back to UNION ALL
+        if let Some(info) = &typed_info {
+            joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+            crate::monitoring::record_schema_aware_hit();
+        } else {
+            joins.push(build_datoms_from_fragment(&alias, store_id_param));
+            crate::monitoring::record_union_all_fallback();
+        }
     }
 
     // Add FTS joins
@@ -2724,6 +3032,10 @@ fn build_not_exists_subquery(
                     }
                 }
 
+                // Schema-aware: resolve type early for both FROM and NOT EXISTS
+                let typed_info = resolve_pattern_value_type(&p.attribute, schema_prefix)
+                    .and_then(|vt| value_type_to_table_info(&vt));
+
                 // Temporal filtering in subquery too
                 if !temporal.history {
                     sub_where.push(format!("{alias}.added = true"));
@@ -2751,13 +3063,25 @@ fn build_not_exists_subquery(
 
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of_tx);
-                        sub_where.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM {} AS newer \
-                             WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                             AND newer.added = true \
-                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
-                            build_datoms_union_subquery(store_id_param)
-                        ));
+                        if let Some(info) = &typed_info {
+                            sub_where.push(format!(
+                                "NOT EXISTS (SELECT 1 FROM {table} AS newer \
+                                 WHERE newer.store_id = {sid} \
+                                 AND newer.e = {alias}.e AND newer.a = {alias}.a \
+                                 AND newer.added = true \
+                                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                                table = info.table,
+                                sid = store_id_param,
+                            ));
+                        } else {
+                            sub_where.push(format!(
+                                "NOT EXISTS (SELECT 1 FROM {} AS newer \
+                                 WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                                 AND newer.added = true \
+                                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                                build_datoms_union_subquery(store_id_param)
+                            ));
+                        }
                     }
                 }
                 if let Some(since_tx) = temporal.since {
@@ -2765,7 +3089,12 @@ fn build_not_exists_subquery(
                     sub_where.push(format!("{alias}.tx > {param}"));
                 }
 
-                sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                // Use typed single-table FROM or fall back to UNION ALL
+                if let Some(info) = &typed_info {
+                    sub_joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+                } else {
+                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                }
             }
             _ => {
                 return Err(":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
@@ -3267,6 +3596,10 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     }
                 }
 
+                // Schema-aware: resolve type early for both FROM and NOT EXISTS
+                let typed_info = resolve_pattern_value_type(&p.attribute, schema_prefix)
+                    .and_then(|vt| value_type_to_table_info(&vt));
+
                 // Temporal filtering
                 if !temporal.history {
                     where_parts.push(format!("{alias}.added = true"));
@@ -3294,13 +3627,25 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
 
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of);
-                        where_parts.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM {} AS newer \
-                             WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
-                             AND newer.added = true \
-                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
-                            build_datoms_union_subquery(store_id_param)
-                        ));
+                        if let Some(info) = &typed_info {
+                            where_parts.push(format!(
+                                "NOT EXISTS (SELECT 1 FROM {table} AS newer \
+                                 WHERE newer.store_id = {sid} \
+                                 AND newer.e = {alias}.e AND newer.a = {alias}.a \
+                                 AND newer.added = true \
+                                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                                table = info.table,
+                                sid = store_id_param,
+                            ));
+                        } else {
+                            where_parts.push(format!(
+                                "NOT EXISTS (SELECT 1 FROM {} AS newer \
+                                 WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
+                                 AND newer.added = true \
+                                 AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                                build_datoms_union_subquery(store_id_param)
+                            ));
+                        }
                     }
                 }
                 if let Some(since) = temporal.since {
@@ -3308,7 +3653,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     where_parts.push(format!("{alias}.tx > {param}"));
                 }
 
-                pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                // Use typed single-table FROM or fall back to UNION ALL
+                if let Some(info) = &typed_info {
+                    pattern_joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+                } else {
+                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                }
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {
                 // Recursive self-reference: JOIN against the CTE itself

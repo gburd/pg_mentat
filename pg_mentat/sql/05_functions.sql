@@ -125,7 +125,7 @@ BEGIN
     SELECT
         f.rowid,
         f.text_value,
-        ts_rank(f.search_vector, websearch_to_tsquery('english', query))::REAL as rank
+        ts_rank_cd(f.search_vector, websearch_to_tsquery('english', query))::REAL as rank
     FROM mentat.fulltext f
     WHERE f.search_vector @@ websearch_to_tsquery('english', query)
     ORDER BY rank DESC;

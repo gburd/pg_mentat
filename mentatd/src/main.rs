@@ -5,11 +5,15 @@ pub mod metrics;
 pub mod pool;
 pub mod protocol;
 pub mod server;
+pub mod session;
 pub mod stream;
+pub mod websocket;
 
 use crate::config::Config;
 use crate::pool::create_pool;
 use crate::server::{create_router, AppState};
+use crate::session::default_session_store;
+use crate::websocket::WsState;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::{error, info};
@@ -80,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let state = AppState::new(pool.clone(), config.clone());
+    let session_store = default_session_store();
 
     // Spawn background task to clean up expired db snapshots
     let cleanup_state = state.clone();
@@ -89,6 +94,19 @@ async fn main() -> anyhow::Result<()> {
             interval.tick().await;
             cleanup_state.db_cache().cleanup_expired();
             tracing::debug!("Cleaned up expired db snapshots");
+        }
+    });
+
+    // Spawn background task to clean up expired WebSocket sessions
+    let session_cleanup = session_store.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let removed = session_cleanup.cleanup_expired().await;
+            if removed > 0 {
+                tracing::debug!("Cleaned up {} expired WebSocket sessions", removed);
+            }
         }
     });
 
@@ -102,13 +120,20 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let app = create_router(state);
+    // Create WebSocket state
+    let ws_state = WsState {
+        app_state: state.clone(),
+        session_store,
+    };
+
+    let app = create_router(state).merge(crate::websocket::create_ws_router(ws_state));
 
     let addr: SocketAddr = format!("{}:{}", config.server.host, config.server.port)
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid server address: {}", e))?;
 
     info!("Server listening on http://{}", addr);
+    info!("WebSocket endpoint: ws://{}/ws", addr);
     info!("Health check: http://{}/health", addr);
     info!("Metrics: http://{}/metrics", addr);
     info!("Ready to accept Datomic client connections");

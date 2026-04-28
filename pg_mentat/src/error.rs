@@ -180,6 +180,13 @@ pub enum MentatError {
     /// Attempted to drop the default store, which is not allowed.
     CannotDropDefaultStore,
 
+    /// A PostgreSQL serialization failure (SQLSTATE 40001) occurred.
+    /// The caller should retry the transaction with backoff.
+    SerializationFailure {
+        message: String,
+        attempt: u32,
+    },
+
     /// Wraps an upstream error (SPI, EDN parse, etc.) with context.
     Internal {
         message: String,
@@ -494,6 +501,14 @@ impl fmt::Display for MentatError {
                 )
             }
 
+            Self::SerializationFailure { message, attempt } => {
+                write!(
+                    f,
+                    ":db.error/serialization-failure Serialization failure on attempt {}: {}",
+                    attempt, message
+                )
+            }
+
             Self::Internal { message, .. } => {
                 write!(f, ":db.error/internal {}", message)
             }
@@ -575,6 +590,7 @@ impl MentatError {
             Self::StoreNotFound { .. } => ":db.error/store-not-found",
             Self::InvalidStoreName { .. } => ":db.error/invalid-store-name",
             Self::CannotDropDefaultStore => ":db.error/cannot-drop-default-store",
+            Self::SerializationFailure { .. } => ":db.error/serialization-failure",
             Self::Internal { .. } => ":db.error/internal",
         }
     }

@@ -493,6 +493,18 @@ async fn handle_request(
     response_result
 }
 
+/// Public entry point for executing operations from WebSocket handlers.
+///
+/// This wraps the internal `execute_operation` so that other modules
+/// (e.g., `websocket`) can dispatch operations through the same pipeline
+/// including circuit breaker, metrics, and caching.
+pub async fn execute_operation_public(
+    op: Operation,
+    state: &AppState,
+) -> Result<ResponseValue, ServerError> {
+    execute_operation(op, state).await
+}
+
 async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseValue, ServerError> {
     // Circuit breaker: reject requests when error rate is too high.
     // Health checks bypass the circuit breaker so monitoring can still probe.
@@ -1006,29 +1018,18 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let client = state.pool.get().await?;
 
-            // Use a savepoint to execute the transaction speculatively.
-            // BEGIN a transaction, run the transact, capture the report, then ROLLBACK.
-            // This gives us the what-if results without committing.
-            client.execute("BEGIN", &[]).await?;
+            // Call mentat_with() which uses SAVEPOINT internally to apply
+            // the transaction speculatively and roll back without persisting.
+            // This avoids the advisory lock overhead of mentat_transact and
+            // correctly reports tempids, tx-data, db-before/db-after.
+            let row = client
+                .query_one("SELECT mentat.mentat_with($1)", &[&tx_data])
+                .await?;
 
-            let result = async {
-                let row = client
-                    .query_one("SELECT mentat_transact($1)", &[&tx_data])
-                    .await?;
+            let report_str: String = row.get(0);
+            let result = parse_tx_report(&report_str)?;
 
-                let report_str: String = row.get(0);
-                let result = parse_tx_report(&report_str)?;
-                Ok::<_, ServerError>(result)
-            }
-            .await;
-
-            // Always rollback -- this is speculative
-            client.execute("ROLLBACK", &[]).await?;
-
-            match result {
-                Ok(report) => ("with", Ok(report)),
-                Err(e) => return Err(e),
-            }
+            ("with", Ok(result))
         }
 
         Operation::Filter {
@@ -1265,6 +1266,343 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .collect();
 
             ("tx_range", Ok(ResponseValue::Vector(transactions)))
+        }
+
+        Operation::Qseq {
+            query,
+            args,
+            chunk_size,
+            db_id,
+        } => {
+            info!(
+                "Executing qseq: {} with args: {:?}, chunk_size: {:?}",
+                query, args, chunk_size
+            );
+            metrics::QUERY_COUNT.inc();
+
+            let client = state.pool.get().await?;
+
+            // Build query inputs
+            let args_json = serde_json::to_value(&args)
+                .map_err(|e| ServerError::Internal(format!("Failed to serialize args: {}", e)))?;
+
+            // If db_id is provided, use snapshot-based query
+            let inputs_json = if let Some(ref id) = db_id {
+                match state.db_cache.get_basis_t(id) {
+                    Some(t) => {
+                        let mut inputs = serde_json::Map::new();
+                        inputs.insert("inputs".to_string(), args_json);
+                        inputs.insert("asOf".to_string(), serde_json::Value::Number(t.into()));
+                        serde_json::Value::Object(inputs)
+                    }
+                    None => {
+                        return Err(ServerError::Internal(format!(
+                            "Invalid or expired db-id: {}",
+                            id
+                        )));
+                    }
+                }
+            } else {
+                args_json
+            };
+
+            let row = client
+                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .await?;
+
+            let result_json: serde_json::Value = row.get(0);
+            let result = parse_query_results(&result_json)?;
+
+            // qseq returns results as a lazy sequence; we chunk them for the client
+            let _chunk = chunk_size.unwrap_or(1000);
+
+            // Return the full result set as a vector of chunks
+            // Each chunk is a vector of result rows
+            let chunks: Vec<ResponseValue> = result
+                .chunks(_chunk)
+                .map(|chunk| ResponseValue::Vector(chunk.to_vec()))
+                .collect();
+
+            ("qseq", Ok(ResponseValue::Map(vec![
+                (
+                    ResponseValue::Keyword("chunks".to_string()),
+                    ResponseValue::Vector(chunks),
+                ),
+                (
+                    ResponseValue::Keyword("total-count".to_string()),
+                    ResponseValue::Integer(result.len() as i64),
+                ),
+                (
+                    ResponseValue::Keyword("chunk-size".to_string()),
+                    ResponseValue::Integer(_chunk as i64),
+                ),
+            ])))
+        }
+
+        Operation::PullMany {
+            pattern,
+            entity_ids,
+        } => {
+            info!(
+                "Executing pull-many: pattern={}, entity_ids={:?}",
+                pattern, entity_ids
+            );
+
+            let client = state.pool.get().await?;
+
+            let mut results = Vec::with_capacity(entity_ids.len());
+            for entity_id in &entity_ids {
+                let row = client
+                    .query_one("SELECT mentat_pull($1, $2)", &[&pattern, entity_id])
+                    .await?;
+
+                let result_json: serde_json::Value = row.get(0);
+                results.push(json_to_response_value(&result_json));
+            }
+
+            ("pull_many", Ok(ResponseValue::Vector(results)))
+        }
+
+        Operation::IndexRange {
+            attrid,
+            start,
+            end,
+            limit,
+        } => {
+            info!(
+                "Executing index-range: attrid={}, start={:?}, end={:?}, limit={:?}",
+                attrid, start, end, limit
+            );
+
+            let client = state.pool.get().await?;
+
+            // Clean the attribute identifier
+            let clean_attr = attrid
+                .trim_matches(|c: char| c == ':' || c == '"')
+                .to_string();
+            let attr_with_colon = if clean_attr.starts_with(':') {
+                clean_attr.clone()
+            } else {
+                format!(":{}", clean_attr)
+            };
+
+            // Look up the attribute's entid from the schema
+            let attr_row = client
+                .query_opt(
+                    "SELECT entid FROM mentat.idents WHERE ident = $1",
+                    &[&attr_with_colon],
+                )
+                .await?;
+
+            let attr_entid: i64 = match attr_row {
+                Some(row) => row.get(0),
+                None => {
+                    return Err(ServerError::Internal(format!(
+                        "Unknown attribute: {}",
+                        attrid
+                    )));
+                }
+            };
+
+            // Build SQL for AVET index range scan using typed-column schema.
+            // We query the appropriate type-specific tables.
+            // For simplicity, we query all types with a UNION ALL and filter by attribute.
+            let limit_clause = limit
+                .map(|l| format!(" LIMIT {}", l))
+                .unwrap_or_default();
+
+            // Determine which value conditions to apply
+            let (start_condition, end_condition) = match (&start, &end) {
+                (Some(s), Some(e)) => {
+                    let s_escaped = s.replace('\'', "''");
+                    let e_escaped = e.replace('\'', "''");
+                    (
+                        format!(" AND v::TEXT >= '{}'", s_escaped),
+                        format!(" AND v::TEXT <= '{}'", e_escaped),
+                    )
+                }
+                (Some(s), None) => {
+                    let s_escaped = s.replace('\'', "''");
+                    (format!(" AND v::TEXT >= '{}'", s_escaped), String::new())
+                }
+                (None, Some(e)) => {
+                    let e_escaped = e.replace('\'', "''");
+                    (String::new(), format!(" AND v::TEXT <= '{}'", e_escaped))
+                }
+                (None, None) => (String::new(), String::new()),
+            };
+
+            // Query across all type-specific tables for this attribute
+            let query = format!(
+                "SELECT e, a, v::TEXT AS v_text, tx, added \
+                 FROM (\
+                     SELECT e, a, v::TEXT AS v, tx, added FROM mentat.datoms_ref_new WHERE a = $1 AND added = true{start}{end} \
+                     UNION ALL \
+                     SELECT e, a, v::TEXT, tx, added FROM mentat.datoms_long_new WHERE a = $1 AND added = true{start}{end} \
+                     UNION ALL \
+                     SELECT e, a, v::TEXT, tx, added FROM mentat.datoms_text_new WHERE a = $1 AND added = true{start}{end} \
+                     UNION ALL \
+                     SELECT e, a, v::TEXT, tx, added FROM mentat.datoms_keyword_new WHERE a = $1 AND added = true{start}{end} \
+                     UNION ALL \
+                     SELECT e, a, v::TEXT, tx, added FROM mentat.datoms_double_new WHERE a = $1 AND added = true{start}{end} \
+                     UNION ALL \
+                     SELECT e, a, v::TEXT, tx, added FROM mentat.datoms_boolean_new WHERE a = $1 AND added = true{start}{end} \
+                 ) AS all_datoms \
+                 ORDER BY v_text, e, tx{limit}",
+                start = start_condition,
+                end = end_condition,
+                limit = limit_clause,
+            );
+
+            let rows = client.query(&query, &[&attr_entid]).await?;
+
+            let datoms: Vec<ResponseValue> = rows
+                .iter()
+                .map(|row| {
+                    let e: i64 = row.get(0);
+                    let a: i64 = row.get(1);
+                    let v_text: String = row.get(2);
+                    let tx: i64 = row.get(3);
+                    let added: bool = row.get(4);
+
+                    ResponseValue::Vector(vec![
+                        ResponseValue::Integer(e),
+                        ResponseValue::Integer(a),
+                        ResponseValue::String(v_text),
+                        ResponseValue::Integer(tx),
+                        ResponseValue::Boolean(added),
+                    ])
+                })
+                .collect();
+
+            ("index_range", Ok(ResponseValue::Vector(datoms)))
+        }
+
+        Operation::Entid { ident } => {
+            info!("Resolving entid for ident: {}", ident);
+
+            let client = state.pool.get().await?;
+
+            // Clean the ident - ensure it has a colon prefix
+            let clean_ident = ident.trim_matches(|c: char| c == '"');
+            let lookup_ident = if clean_ident.starts_with(':') {
+                clean_ident.to_string()
+            } else {
+                format!(":{}", clean_ident)
+            };
+
+            let row = client
+                .query_opt(
+                    "SELECT entid FROM mentat.idents WHERE ident = $1",
+                    &[&lookup_ident],
+                )
+                .await?;
+
+            match row {
+                Some(r) => {
+                    let entid: i64 = r.get(0);
+                    ("entid", Ok(ResponseValue::Integer(entid)))
+                }
+                None => {
+                    return Err(ServerError::Internal(format!(
+                        "Unknown ident: {}",
+                        ident
+                    )));
+                }
+            }
+        }
+
+        Operation::Ident { entid } => {
+            info!("Resolving ident for entid: {}", entid);
+
+            let client = state.pool.get().await?;
+
+            let row = client
+                .query_opt(
+                    "SELECT ident FROM mentat.idents WHERE entid = $1",
+                    &[&entid],
+                )
+                .await?;
+
+            match row {
+                Some(r) => {
+                    let ident: String = r.get(0);
+                    ("ident", Ok(ResponseValue::Keyword(
+                        ident.trim_start_matches(':').to_string(),
+                    )))
+                }
+                None => {
+                    return Err(ServerError::Internal(format!(
+                        "Unknown entid: {}",
+                        entid
+                    )));
+                }
+            }
+        }
+
+        Operation::DbStats => {
+            info!("Executing db-stats");
+
+            let client = state.pool.get().await?;
+
+            // Count datoms across all type-specific tables
+            let total_datoms: i64 = client
+                .query_one(
+                    "SELECT (\
+                        (SELECT COUNT(*) FROM mentat.datoms_ref_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_boolean_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_long_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_double_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_text_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_keyword_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_instant_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_uuid_new WHERE added = true) + \
+                        (SELECT COUNT(*) FROM mentat.datoms_bytes_new WHERE added = true)\
+                    )::BIGINT",
+                    &[],
+                )
+                .await?
+                .get(0);
+
+            let total_transactions: i64 = client
+                .query_one(
+                    "SELECT COUNT(*)::BIGINT FROM mentat.transactions",
+                    &[],
+                )
+                .await?
+                .get(0);
+
+            let schema_attributes: i64 = client
+                .query_one("SELECT COUNT(*)::BIGINT FROM mentat.schema", &[])
+                .await?
+                .get(0);
+
+            let basis_t: i64 = client
+                .query_one(
+                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
+                    &[],
+                )
+                .await?
+                .get(0);
+
+            ("db_stats", Ok(ResponseValue::Map(vec![
+                (
+                    ResponseValue::Keyword("datoms".to_string()),
+                    ResponseValue::Integer(total_datoms),
+                ),
+                (
+                    ResponseValue::Keyword("transactions".to_string()),
+                    ResponseValue::Integer(total_transactions),
+                ),
+                (
+                    ResponseValue::Keyword("schema-attributes".to_string()),
+                    ResponseValue::Integer(schema_attributes),
+                ),
+                (
+                    ResponseValue::Keyword("basis-t".to_string()),
+                    ResponseValue::Integer(basis_t),
+                ),
+            ])))
         }
     };
 

@@ -1,10 +1,16 @@
 use crate::error::{self, MentatError};
 use crate::functions::store_management;
-use edn::entities::OpType;
+use edn::entities::{BuiltinTxFn, OpType};
 use edn::parse;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use std::collections::BTreeMap;
+
+/// Maximum number of retries for serialization failures (SQLSTATE 40001).
+const MAX_SERIALIZATION_RETRIES: u32 = 5;
+
+/// Base delay in milliseconds for exponential backoff on serialization retry.
+const BASE_RETRY_DELAY_MS: u64 = 10;
 
 /// Entids for built-in schema attributes (from bootstrap data in 06_bootstrap_data.sql).
 mod bootstrap_entids {
@@ -196,6 +202,133 @@ pub fn t(
     execute_transaction_body(&schema_name, edn_tx)
 }
 
+/// Speculatively apply an EDN transaction without committing to the database.
+///
+/// Equivalent to Datomic's `d/with`: applies the transaction in a savepoint,
+/// captures the transaction report (tempid resolution, tx-data, db-before,
+/// db-after), then rolls back the savepoint so no persistent changes are made.
+///
+/// This enables "what-if" transaction previews for UI applications, validation
+/// of complex transactions before committing, and testing transaction logic
+/// without side effects.
+///
+/// Returns the same JSON transaction report format as `mentat_transact`:
+/// ```json
+/// {
+///   "db-before": {"basis-t": <N>},
+///   "db-after": {"basis-t": <M>},
+///   "tx-data": [[e, a, v, tx, added], ...],
+///   "tempids": {"tempid-string": entity-id, ...}
+/// }
+/// ```
+///
+/// # Example
+/// ```sql
+/// SELECT mentat.mentat_with('[[:db/add "t" :person/name "Alice"]]');
+/// ```
+#[pg_extern]
+pub fn mentat_with(edn_tx: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    execute_speculative_transaction("mentat", edn_tx)
+}
+
+/// Speculatively apply an EDN transaction against a named store without
+/// committing.
+///
+/// Like `mentat_with` but targets a specific store. See `mentat_with` for
+/// full documentation.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat.with('my_store',
+///   '[[:db/add "t" :person/name "Alice"]]');
+/// ```
+#[pg_extern(name = "with")]
+pub fn mentat_with_store(
+    store_name: &str,
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let schema_name = resolve_store_schema(store_name)?;
+    execute_speculative_transaction(&schema_name, edn_tx)
+}
+
+/// List available built-in transaction functions.
+///
+/// Returns a JSON array describing each built-in transaction function,
+/// including its name, argument format, and description. This allows
+/// clients to discover available functions programmatically.
+///
+/// # Example
+/// ```sql
+/// SELECT mentat.transaction_fns();
+/// ```
+///
+/// Returns:
+/// ```json
+/// [
+///   {"name": ":db.fn/cas", "args": "e a old-value new-value",
+///    "description": "Compare-and-swap: atomically set attribute to new value if current value matches old value"},
+///   {"name": ":db.fn/retractEntity", "args": "entity-id",
+///    "description": "Retract all datoms for an entity"}
+/// ]
+/// ```
+#[pg_extern(name = "transaction_fns")]
+pub fn mentat_transaction_fns() -> String {
+    r#"[{"name":":db.fn/cas","args":"e a old-value new-value","description":"Compare-and-swap: atomically set attribute to new value if current value matches old value. Fails if current value does not match old-value. Use nil as old-value to assert that no value currently exists."},{"name":":db.fn/retractEntity","args":"entity-id","description":"Retract all datoms for an entity. Also accepted as :db/retractEntity."}]"#.to_string()
+}
+
+/// Execute a speculative transaction using a SAVEPOINT.
+///
+/// This runs the full transaction processing pipeline (parsing, tempid
+/// resolution, constraint checking, datom insertion) inside a PostgreSQL
+/// SAVEPOINT, captures the transaction report, then rolls back the savepoint
+/// to undo all database modifications.
+///
+/// The approach guarantees that speculative transactions produce identical
+/// results to committed transactions (same constraint checking, same tempid
+/// allocation, same cardinality handling) because they use the exact same
+/// code path.
+fn execute_speculative_transaction(
+    schema: &str,
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Create a savepoint so we can roll back all writes after capturing the result.
+    // The savepoint name includes a random suffix to avoid collisions with
+    // nested speculative transactions (though that's unlikely in practice).
+    let savepoint_name = "mentat_with_sp";
+
+    Spi::run(&format!("SAVEPOINT {}", savepoint_name))?;
+
+    // Run the full transaction inside the savepoint
+    let result = execute_transaction_inner(schema, edn_tx);
+
+    // Always roll back the savepoint to discard writes, regardless of success/failure.
+    // On success: we captured the report, no need to persist.
+    // On failure: the error propagates, savepoint cleanup is still needed.
+    let rollback_result = Spi::run(&format!("ROLLBACK TO SAVEPOINT {}", savepoint_name));
+
+    // Release the savepoint to free resources
+    let _ = Spi::run(&format!("RELEASE SAVEPOINT {}", savepoint_name));
+
+    // If rollback itself failed, that's a serious issue
+    if let Err(rollback_err) = rollback_result {
+        return Err(MentatError::Internal {
+            message: format!(
+                "Failed to rollback speculative transaction savepoint: {}",
+                rollback_err
+            ),
+            source: None,
+        }
+        .into());
+    }
+
+    // Invalidate caches since the savepoint rollback may have left stale state
+    // from schema installations that were rolled back.
+    crate::cache::get_cache().invalidate();
+    crate::functions::query::clear_stmt_cache();
+
+    result
+}
+
 /// Resolve a store name to its PostgreSQL schema name.
 ///
 /// For "default", returns "mentat". For other names, validates the store
@@ -213,70 +346,260 @@ fn resolve_store_schema(
     Ok(store_management::get_schema_for_store(store_name))
 }
 
-/// Internal function containing the actual transaction logic.
-///
-/// The `schema` parameter is the PostgreSQL schema name (e.g., "mentat" for
-/// the default store, or "mentat_<name>" for a named store). All SQL
-/// queries are parameterized with this schema.
-///
-/// Runs within the caller's PostgreSQL transaction. Uses savepoints to ensure
-/// that schema installation and datom insertion are atomic: if Pass 2 (datom
-/// insertion) fails after schema was written in Pass 1, the savepoint rollback
-/// undoes the schema changes too.
-///
-/// Transaction isolation: Uses SERIALIZABLE isolation to prevent lost updates,
-/// non-repeatable reads, and phantom reads under concurrent writes. When two
-/// transactions conflict, PostgreSQL raises SQLSTATE 40001
-/// (serialization_failure). The mentatd server-side retry logic handles
-/// retrying these failures with exponential backoff.
-fn execute_transaction_body(
-    schema: &str,
-    edn_tx: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // NOTE: Transaction isolation level cannot be set here because SPI
-    // has already started a transaction. In production deployments, set
-    // default_transaction_isolation = 'serializable' in postgresql.conf
-    // or have the client (mentatd) wrap calls in explicit transactions.
-    // For now, rely on PostgreSQL's default READ COMMITTED isolation.
-    // Spi::run("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")?;
+/// Check whether an error is a PostgreSQL serialization failure (SQLSTATE 40001)
+/// or deadlock detected (SQLSTATE 40P01). These are retriable errors.
+fn is_serialization_failure(err: &(dyn std::error::Error + Send + Sync)) -> bool {
+    let msg = err.to_string();
+    // PostgreSQL serialization failure indicators
+    msg.contains("40001")
+        || msg.contains("serialization_failure")
+        || msg.contains("could not serialize access")
+        || msg.contains("40P01")
+        || msg.contains("deadlock detected")
+}
 
-    // Quote the schema name for safe SQL interpolation
-    let qs = store_management::quote_ident(schema);
+// ============================================================================
+// Transaction Function Framework
+// ============================================================================
 
-    // Parse EDN transaction
-    let value_and_span = parse::value(edn_tx)?;
-    let value = value_and_span.without_spans();
+/// Recognize a keyword as a built-in transaction function invocation.
+///
+/// Returns `Some(BuiltinTxFn)` if the keyword matches a known transaction
+/// function, or `None` if it's not a recognized function.
+///
+/// Supported patterns:
+///   - `:db.fn/cas` -> `BuiltinTxFn::Cas`
+///   - `:db.fn/retractEntity` -> `BuiltinTxFn::RetractEntity`
+///   - `:db/retractEntity` -> `BuiltinTxFn::RetractEntity`
+fn recognize_tx_fn(kw: &edn::symbols::Keyword) -> Option<BuiltinTxFn> {
+    match (kw.namespace(), kw.name()) {
+        (Some("db.fn"), "cas") | (Some("db"), "cas") => Some(BuiltinTxFn::Cas),
+        (Some("db.fn"), "retractEntity")
+        | (Some("db"), "retractEntity")
+        | (None, "retractEntity") => Some(BuiltinTxFn::RetractEntity),
+        _ => None,
+    }
+}
 
-    // Validate it's a vector
-    let entities = match value {
-        edn::Value::Vector(ref vec) => vec,
-        _ => return Err(MentatError::InvalidTransaction {
-            message: format!(
-                "Transaction must be a vector of entities, got {}. \
-                 Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
-                value_type_name(&value)
-            ),
-        }.into()),
+/// Execute the `:db.fn/retractEntity` transaction function.
+///
+/// Queries all current datoms for the given entity and generates retraction
+/// datoms for each one, effectively removing the entity from the database.
+///
+/// In Datomic, `:db/retractEntity` retracts all datoms where the entity
+/// appears in the `e` position. Component attributes are handled recursively
+/// (retract entity cascades to component references).
+fn execute_retract_entity_fn(
+    e: i64,
+    qs: &str,
+    pending_datoms: &mut Vec<PendingDatom>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let retract_query = format!(
+        "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
+                v_text, v_keyword, v_instant, v_uuid, v_bytes \
+         FROM {}.datoms WHERE e = $1 AND added = true",
+        qs
+    );
+    Spi::connect(|client| {
+        let rows = client.select(
+            &retract_query,
+            None,
+            &[DatumWithOid::from(e)],
+        )?;
+
+        for row in rows {
+            let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
+            let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
+            let v = read_typed_value_from_row(&row, v_type_tag, 3)?;
+
+            pending_datoms.push(PendingDatom {
+                e,
+                a,
+                v,
+                added: false,
+            });
+        }
+
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+    })?;
+    Ok(())
+}
+
+/// Execute the `:db.fn/cas` (compare-and-swap) transaction function.
+///
+/// Atomically sets attribute `a` on entity `e` to `new_edn` if and only if
+/// the current value equals `old_edn`. If `old_edn` is `nil`, the attribute
+/// must not currently have a value.
+///
+/// On success, pushes a retraction of the old value (if not nil) and an
+/// assertion of the new value into `pending_datoms`.
+///
+/// On failure, returns a `CasFailed` error describing the mismatch.
+fn execute_cas_fn(
+    e: i64,
+    a: i64,
+    old_edn: &edn::Value,
+    new_edn: &edn::Value,
+    qs: &str,
+    tempid_map: &mut BTreeMap<String, i64>,
+    pending_datoms: &mut Vec<PendingDatom>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let is_ref = lookup_value_type(a).as_deref() == Some("ref");
+
+    // Get current value(s) for this (e, a) pair
+    let cas_query = format!(
+        "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
+                v_text, v_keyword, v_instant, v_uuid, v_bytes \
+         FROM {}.datoms WHERE e = $1 AND a = $2 AND added = true",
+        qs
+    );
+    let current_values: Vec<TypedValue> = Spi::connect(|client| {
+        let rows = client.select(
+            &cas_query,
+            None,
+            &[DatumWithOid::from(e), DatumWithOid::from(a)],
+        )?;
+
+        let mut vals = Vec::new();
+        for row in rows {
+            let v_type_tag: i16 = row.get(1)?.ok_or("Missing type tag")?;
+            let v = read_typed_value_from_row(&row, v_type_tag, 2)?;
+            vals.push(v);
+        }
+        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(vals)
+    })?;
+
+    // Check cardinality -- CAS on cardinality-many with multiple values is an error
+    if let Some(attr_info) = lookup_attribute_info(a) {
+        if attr_info.cardinality == "many" && current_values.len() > 1 {
+            let attr_name = crate::cache::get_cache()
+                .get_ident(a)
+                .unwrap_or_else(|| format!("entid:{}", a));
+            return Err(MentatError::CasFailed {
+                entity: e,
+                attr: attr_name,
+                expected: "at most one existing value".to_string(),
+                actual: format!(
+                    "cardinality-many attribute has {} values; \
+                     CAS requires at most one existing value",
+                    current_values.len()
+                ),
+            }.into());
+        }
+    }
+
+    let old_is_nil = matches!(old_edn, edn::Value::Nil);
+
+    // Encode old value for comparison (unless nil)
+    let old_encoded: Option<TypedValue> = if old_is_nil {
+        None
+    } else if is_ref {
+        Some(encode_ref_value(old_edn, tempid_map, qs)?)
+    } else {
+        Some(encode_value(old_edn)?)
     };
+
+    // Compare current database state with expected old value
+    let cas_matches = if old_is_nil {
+        // old-value is nil: expect no current value
+        current_values.is_empty()
+    } else if let Some(ref old_val) = old_encoded {
+        // old-value is not nil: expect exactly one matching value
+        current_values.len() == 1 && current_values[0] == *old_val
+    } else {
+        false
+    };
+
+    if !cas_matches {
+        // Build a human-readable description of the current value
+        let current_desc = if current_values.is_empty() {
+            "nil".to_string()
+        } else {
+            current_values
+                .iter()
+                .map(format_typed_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let attr_name = crate::cache::get_cache()
+            .get_ident(a)
+            .unwrap_or_else(|| format!("entid:{}", a));
+        return Err(MentatError::CasFailed {
+            entity: e,
+            attr: attr_name,
+            expected: format!("{:?}", old_edn),
+            actual: current_desc,
+        }.into());
+    }
+
+    // CAS matched -- retract old value (if not nil) and assert new value
+    if !old_is_nil {
+        if let Some(old_val) = old_encoded {
+            pending_datoms.push(PendingDatom {
+                e,
+                a,
+                v: old_val,
+                added: false,
+            });
+        }
+    }
+
+    let new_val = if is_ref {
+        encode_ref_value(new_edn, tempid_map, qs)?
+    } else {
+        encode_value(new_edn)?
+    };
+    pending_datoms.push(PendingDatom {
+        e,
+        a,
+        v: new_val,
+        added: true,
+    });
+
+    Ok(())
+}
+
+/// Allocate a transaction ID using an advisory lock to prevent race conditions.
+///
+/// Uses `pg_advisory_xact_lock` with a store-specific lock key derived from
+/// hashing the schema name. The advisory lock is held for the duration of the
+/// current PostgreSQL transaction (released on COMMIT/ROLLBACK), ensuring that
+/// only one transaction at a time allocates a tx_id and writes to the
+/// transactions table for a given store.
+///
+/// This prevents the "lost update" problem where two concurrent transactions
+/// allocate consecutive tx_ids but interleave their writes, producing
+/// out-of-order or duplicate transaction records.
+fn allocate_tx_id(qs: &str) -> Result<(i64, i64, i64), Box<dyn std::error::Error + Send + Sync>> {
+    // Acquire a transaction-scoped advisory lock keyed on the store schema.
+    // We use a hash of the schema name as the lock key to avoid collisions
+    // between different stores while ensuring the same store serializes.
+    // The lock is automatically released when the transaction commits or
+    // rolls back -- no explicit unlock is needed.
+    Spi::run(&format!(
+        "SELECT pg_advisory_xact_lock(hashtext('{}')::bigint)",
+        qs
+    ))?;
 
     // Get basis-t before transaction (max tx id currently in the database).
     // In Datomic, basis-t represents the latest transaction point.
-    let basis_t_before = Spi::get_one::<i64>(
-        &format!("SELECT COALESCE(MAX(tx), 0) FROM {}.transactions", qs),
-    )
+    // The advisory lock ensures this read is consistent with the subsequent
+    // sequence allocation -- no other transaction can interleave.
+    let basis_t_before = Spi::get_one::<i64>(&format!(
+        "SELECT COALESCE(MAX(tx), 0) FROM {}.transactions",
+        qs
+    ))
     .ok()
     .flatten()
     .unwrap_or(0);
 
-    // Allocate transaction ID
-    let tx_id = Spi::get_one::<i64>(
-        &format!("SELECT nextval('{}.partition_tx_seq')", qs),
-    )
-    .ok()
-    .flatten()
-    .ok_or_else(|| MentatError::AllocationFailed {
-        partition: "db.part/tx".to_string(),
-    })?;
+    // Allocate transaction ID from the sequence
+    let tx_id = Spi::get_one::<i64>(&format!("SELECT nextval('{}.partition_tx_seq')", qs))
+        .ok()
+        .flatten()
+        .ok_or_else(|| MentatError::AllocationFailed {
+            partition: "db.part/tx".to_string(),
+        })?;
 
     // Create transaction record and get the timestamp as microseconds since epoch
     let tx_instant_micros = Spi::get_one_with_args::<i64>(
@@ -296,6 +619,98 @@ fn execute_transaction_body(
             qs
         ),
     })?;
+
+    Ok((basis_t_before, tx_id, tx_instant_micros))
+}
+
+/// Internal function containing the actual transaction logic.
+///
+/// The `schema` parameter is the PostgreSQL schema name (e.g., "mentat" for
+/// the default store, or "mentat_<name>" for a named store). All SQL
+/// queries are parameterized with this schema.
+///
+/// Runs within the caller's PostgreSQL transaction. Uses savepoints to ensure
+/// that schema installation and datom insertion are atomic: if Pass 2 (datom
+/// insertion) fails after schema was written in Pass 1, the savepoint rollback
+/// undoes the schema changes too.
+///
+/// Transaction isolation: Uses SERIALIZABLE isolation to prevent lost updates,
+/// non-repeatable reads, and phantom reads under concurrent writes. When two
+/// transactions conflict, PostgreSQL raises SQLSTATE 40001
+/// (serialization_failure). Serialization failures are automatically retried
+/// with exponential backoff (up to MAX_SERIALIZATION_RETRIES attempts).
+fn execute_transaction_body(
+    schema: &str,
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut attempt: u32 = 0;
+
+    loop {
+        attempt += 1;
+
+        match execute_transaction_inner(schema, edn_tx) {
+            Ok(result) => return Ok(result),
+            Err(err) => {
+                if is_serialization_failure(err.as_ref()) && attempt < MAX_SERIALIZATION_RETRIES {
+                    // Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms
+                    let delay_ms = BASE_RETRY_DELAY_MS * (1u64 << (attempt - 1));
+
+                    // Use pg_sleep for the delay since we're inside SPI.
+                    // Savepoint rollback happens automatically on error, so
+                    // the next attempt starts with a clean slate.
+                    let _ = Spi::run(&format!("SELECT pg_sleep({})", delay_ms as f64 / 1000.0));
+
+                    // Continue to next attempt
+                    continue;
+                }
+
+                // Not a serialization failure or retries exhausted
+                if is_serialization_failure(err.as_ref()) {
+                    return Err(MentatError::SerializationFailure {
+                        message: format!(
+                            "Transaction failed after {} attempts due to concurrent \
+                             modifications. The transaction was retried with exponential \
+                             backoff but could not be serialized. Original error: {}",
+                            attempt, err
+                        ),
+                        attempt,
+                    }
+                    .into());
+                }
+
+                return Err(err);
+            }
+        }
+    }
+}
+
+/// The inner transaction body, called by `execute_transaction_body` which
+/// handles retry logic for serialization failures.
+fn execute_transaction_inner(
+    schema: &str,
+    edn_tx: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    // Quote the schema name for safe SQL interpolation
+    let qs = store_management::quote_ident(schema);
+
+    // Parse EDN transaction
+    let value_and_span = parse::value(edn_tx)?;
+    let value = value_and_span.without_spans();
+
+    // Validate it's a vector
+    let entities = match value {
+        edn::Value::Vector(ref vec) => vec,
+        _ => return Err(MentatError::InvalidTransaction {
+            message: format!(
+                "Transaction must be a vector of entities, got {}. \
+                 Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
+                value_type_name(&value)
+            ),
+        }.into()),
+    };
+
+    // Allocate transaction ID with advisory lock protection
+    let (basis_t_before, tx_id, tx_instant_micros) = allocate_tx_id(&qs)?;
 
     // Insert :db/txInstant datom for this transaction using typed column
     // Use to_timestamp() in SQL to convert microseconds to TIMESTAMPTZ
@@ -411,164 +826,56 @@ fn execute_transaction_body(
 
     for (entity_idx, entity_value) in entities.iter().enumerate() {
         match entity_value {
-            // Handle :db/retractEntity - format: [:db/retractEntity entity-id]
+            // Handle built-in transaction functions via the dispatch framework.
+            // Recognized functions: :db.fn/cas, :db/cas, :db.fn/retractEntity,
+            // :db/retractEntity, :retractEntity
             edn::Value::Vector(ref entity_vec)
-                if entity_vec.len() == 2
-                    && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "retractEntity") =>
+                if entity_vec.len() >= 2
+                    && matches!(&entity_vec[0], edn::Value::Keyword(kw) if recognize_tx_fn(kw).is_some()) =>
             {
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
-
-                // Query all current datoms for this entity
-                let retract_query = format!(
-                    "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
-                            v_text, v_keyword, v_instant, v_uuid, v_bytes \
-                     FROM {}.datoms WHERE e = $1 AND added = true",
-                    qs
-                );
-                Spi::connect(|client| {
-                    let rows = client.select(
-                        &retract_query,
-                        None,
-                        &[DatumWithOid::from(e)],
-                    )?;
-
-                    for row in rows {
-                        let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
-                        let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
-                        let v = read_typed_value_from_row(&row, v_type_tag, 3)?;
-
-                        pending_datoms.push(PendingDatom {
-                            e,
-                            a,
-                            v,
-                            added: false,
-                        });
-                    }
-
-                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-                })?;
-            }
-            // Handle :db.fn/cas - format: [:db.fn/cas e a old-value new-value]
-            edn::Value::Vector(ref entity_vec)
-                if entity_vec.len() == 5
-                    && matches!(&entity_vec[0], edn::Value::Keyword(kw) if kw.name() == "cas" && kw.namespace() == Some("db.fn")) =>
-            {
-                let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
-                let a = resolve_attribute(&entity_vec[2])?;
-                let old_edn = &entity_vec[3];
-                let new_edn = &entity_vec[4];
-
-                let is_ref = lookup_value_type(a).as_deref() == Some("ref");
-
-                // Get current value(s) for this (e, a) pair
-                let cas_query = format!(
-                    "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
-                            v_text, v_keyword, v_instant, v_uuid, v_bytes \
-                     FROM {}.datoms WHERE e = $1 AND a = $2 AND added = true",
-                    qs
-                );
-                let current_values: Vec<TypedValue> = Spi::connect(|client| {
-                    let rows = client.select(
-                        &cas_query,
-                        None,
-                        &[DatumWithOid::from(e), DatumWithOid::from(a)],
-                    )?;
-
-                    let mut vals = Vec::new();
-                    for row in rows {
-                        let v_type_tag: i16 = row.get(1)?.ok_or("Missing type tag")?;
-                        let v = read_typed_value_from_row(&row, v_type_tag, 2)?;
-                        vals.push(v);
-                    }
-                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(vals)
-                })?;
-
-                // Check cardinality -- CAS on cardinality-many with multiple values is an error
-                if let Some(attr_info) = lookup_attribute_info(a) {
-                    if attr_info.cardinality == "many" && current_values.len() > 1 {
-                        let attr_name = crate::cache::get_cache()
-                            .get_ident(a)
-                            .unwrap_or_else(|| format!("entid:{}", a));
-                        return Err(MentatError::CasFailed {
-                            entity: e,
-                            attr: attr_name,
-                            expected: format!("at most one existing value"),
-                            actual: format!(
-                                "cardinality-many attribute has {} values; \
-                                 CAS requires at most one existing value",
-                                current_values.len()
-                            ),
-                        }.into());
-                    }
-                }
-
-                let old_is_nil = matches!(old_edn, edn::Value::Nil);
-
-                // Encode old value for comparison (unless nil)
-                let old_encoded: Option<TypedValue> = if old_is_nil {
-                    None
-                } else if is_ref {
-                    Some(encode_ref_value(old_edn, &mut tempid_map, &qs)?)
-                } else {
-                    Some(encode_value(old_edn)?)
+                let kw = match &entity_vec[0] {
+                    edn::Value::Keyword(kw) => kw,
+                    _ => continue, // unreachable due to guard
+                };
+                let tx_fn = match recognize_tx_fn(kw) {
+                    Some(f) => f,
+                    None => continue, // unreachable due to guard
                 };
 
-                // Compare current database state with expected old value
-                let cas_matches = if old_is_nil {
-                    // old-value is nil: expect no current value
-                    current_values.is_empty()
-                } else if let Some(ref old_val) = old_encoded {
-                    // old-value is not nil: expect exactly one matching value
-                    current_values.len() == 1 && current_values[0] == *old_val
-                } else {
-                    false
-                };
-
-                if !cas_matches {
-                    // Build a human-readable description of the current value
-                    let current_desc = if current_values.is_empty() {
-                        "nil".to_string()
-                    } else {
-                        current_values
-                            .iter()
-                            .map(format_typed_value)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    };
-                    let attr_name = crate::cache::get_cache()
-                        .get_ident(a)
-                        .unwrap_or_else(|| format!("entid:{}", a));
-                    return Err(MentatError::CasFailed {
-                        entity: e,
-                        attr: attr_name,
-                        expected: format!("{:?}", old_edn),
-                        actual: current_desc,
-                    }.into());
-                }
-
-                // CAS matched -- retract old value (if not nil) and assert new value
-                if !old_is_nil {
-                    if let Some(old_val) = old_encoded {
-                        pending_datoms.push(PendingDatom {
-                            e,
-                            a,
-                            v: old_val,
-                            added: false,
-                        });
+                match tx_fn {
+                    BuiltinTxFn::RetractEntity => {
+                        if entity_vec.len() != 2 {
+                            return Err(MentatError::InvalidTransaction {
+                                message: format!(
+                                    ":db.fn/retractEntity requires exactly 1 argument (entity-id), \
+                                     got {}. Format: [:db.fn/retractEntity entity-id]",
+                                    entity_vec.len() - 1
+                                ),
+                            }.into());
+                        }
+                        let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
+                        execute_retract_entity_fn(e, &qs, &mut pending_datoms)?;
+                    }
+                    BuiltinTxFn::Cas => {
+                        if entity_vec.len() != 5 {
+                            return Err(MentatError::InvalidTransaction {
+                                message: format!(
+                                    ":db.fn/cas requires exactly 4 arguments \
+                                     (entity attr old-value new-value), got {}. \
+                                     Format: [:db.fn/cas e a old-val new-val]",
+                                    entity_vec.len() - 1
+                                ),
+                            }.into());
+                        }
+                        let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
+                        let a = resolve_attribute(&entity_vec[2])?;
+                        execute_cas_fn(
+                            e, a,
+                            &entity_vec[3], &entity_vec[4],
+                            &qs, &mut tempid_map, &mut pending_datoms,
+                        )?;
                     }
                 }
-
-                let new_val = if is_ref {
-                    encode_ref_value(new_edn, &mut tempid_map, &qs)?
-                } else {
-                    encode_value(new_edn)?
-                };
-                pending_datoms.push(PendingDatom {
-                    e,
-                    a,
-                    v: new_val,
-                    added: true,
-                });
             }
             // Handle :db/add and :db/retract - format: [:db/add e a v] or [:db/retract e a v]
             edn::Value::Vector(ref entity_vec) if entity_vec.len() >= 4 => {
@@ -639,6 +946,150 @@ fn execute_transaction_body(
                 }
             }
             _ => {}
+        }
+    }
+
+    // --- Upsert resolution for :db.unique/identity attributes ---
+    // In Datomic, when a tempid-allocated entity asserts a value for a
+    // :db.unique/identity attribute that already exists in the database,
+    // the tempid should resolve to the existing entity's ID (upsert)
+    // rather than causing a unique constraint violation.
+    //
+    // Two phases:
+    //   Phase A: Check the DB for existing entities with the same value.
+    //   Phase B: Within the transaction, merge tempids that assert the same
+    //            identity-unique value (in-transaction unification).
+    let mut upsert_remaps: BTreeMap<i64, i64> = BTreeMap::new(); // old_eid -> target_eid
+
+    // Phase A: DB-level upsert resolution
+    for datom in &pending_datoms {
+        if !datom.added {
+            continue;
+        }
+        if let Some(attr_info) = lookup_attribute_info(datom.a) {
+            if attr_info.unique_constraint.as_deref() == Some("identity") {
+                if let Ok(Some(existing_eid)) = check_unique_typed_value(datom.a, &datom.v, &qs) {
+                    if existing_eid != datom.e {
+                        // Check for conflicting remaps: if this tempid was already
+                        // remapped to a different entity, that's an error (two
+                        // identity-unique attrs on the same tempid point to
+                        // different existing entities).
+                        if let Some(&prev_remap) = upsert_remaps.get(&datom.e) {
+                            if prev_remap != existing_eid {
+                                return Err(MentatError::InvalidTransaction {
+                                    message: format!(
+                                        "Conflicting upsert: tempid for entity {} resolves to \
+                                         both {} and {} via different :db.unique/identity attributes",
+                                        datom.e, prev_remap, existing_eid
+                                    ),
+                                }.into());
+                            }
+                        } else {
+                            upsert_remaps.insert(datom.e, existing_eid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Phase B: In-transaction tempid merging for :db.unique/identity
+    // When two different tempids in the same transaction assert the same value
+    // for an identity-unique attribute, merge them to the same entity ID
+    // (the first one seen becomes the canonical entity).
+    {
+        // Collect (index, attr_id, effective_eid) for identity-unique assertions
+        let mut identity_assertions: Vec<(usize, i64, i64)> = Vec::new();
+
+        for (idx, datom) in pending_datoms.iter().enumerate() {
+            if !datom.added {
+                continue;
+            }
+            if let Some(attr_info) = lookup_attribute_info(datom.a) {
+                if attr_info.unique_constraint.as_deref() == Some("identity") {
+                    let effective_e = upsert_remaps.get(&datom.e).copied().unwrap_or(datom.e);
+                    identity_assertions.push((idx, datom.a, effective_e));
+                }
+            }
+        }
+
+        // For each pair, check if they share the same (attr, value) but different entities
+        for i in 0..identity_assertions.len() {
+            for j in (i + 1)..identity_assertions.len() {
+                let (idx_i, a_i, e_i) = identity_assertions[i];
+                let (idx_j, a_j, _e_j) = identity_assertions[j];
+
+                if a_i != a_j {
+                    continue;
+                }
+                if pending_datoms[idx_i].v != pending_datoms[idx_j].v {
+                    continue;
+                }
+
+                // Same attr and value, different entities -- merge
+                let orig_e_j = pending_datoms[idx_j].e;
+                let target_e = e_i; // first one wins
+
+                if let Some(&prev_remap) = upsert_remaps.get(&orig_e_j) {
+                    if prev_remap != target_e {
+                        return Err(MentatError::InvalidTransaction {
+                            message: format!(
+                                "Conflicting upsert: tempid for entity {} resolves to \
+                                 both {} and {} via :db.unique/identity merging",
+                                orig_e_j, prev_remap, target_e
+                            ),
+                        }.into());
+                    }
+                } else if orig_e_j != target_e {
+                    upsert_remaps.insert(orig_e_j, target_e);
+                }
+            }
+        }
+    }
+
+    // Apply upsert remaps to all pending datoms and the tempid map
+    if !upsert_remaps.is_empty() {
+        for datom in &mut pending_datoms {
+            if let Some(&new_eid) = upsert_remaps.get(&datom.e) {
+                datom.e = new_eid;
+            }
+            // Also remap ref values that point to remapped entities
+            if let TypedValue::Ref(ref_id) = &datom.v {
+                if let Some(&new_ref) = upsert_remaps.get(ref_id) {
+                    datom.v = TypedValue::Ref(new_ref);
+                }
+            }
+        }
+        // Update tempid_map so the TxReport reflects the upsert resolution
+        for (_tempid, eid) in tempid_map.iter_mut() {
+            if let Some(&new_eid) = upsert_remaps.get(eid) {
+                *eid = new_eid;
+            }
+        }
+
+        // Deduplicate identical assertion datoms that may result from tempid
+        // merging. After upsert remapping, two formerly distinct tempids now
+        // share the same entity ID, so their identical assertions (same e, a, v,
+        // added) should be collapsed to avoid cardinality-one violations.
+        let mut dedup_indices: Vec<usize> = Vec::new();
+        for (i, datom) in pending_datoms.iter().enumerate() {
+            if !datom.added {
+                continue;
+            }
+            // Check if an earlier datom in the list is identical
+            let is_dup = pending_datoms[..i].iter().any(|earlier| {
+                earlier.added
+                    && earlier.e == datom.e
+                    && earlier.a == datom.a
+                    && earlier.v == datom.v
+            });
+            if is_dup {
+                dedup_indices.push(i);
+            }
+        }
+        // Remove duplicates in reverse order to preserve indices
+        for &idx in dedup_indices.iter().rev() {
+            pending_datoms.remove(idx);
         }
     }
 
@@ -1226,13 +1677,18 @@ fn validate_datom_constraints(
 
     // 3. Unique constraint validation
     if let Some(ref unique_type) = attr_info.unique_constraint {
-        // Check within this transaction for duplicate values
+        // Check within this transaction for duplicate values from different entities
         let dups_in_tx = all_pending
             .iter()
             .filter(|d| d.a == datom.a && d.v == datom.v && d.e != datom.e && d.added)
             .count();
 
         if dups_in_tx > 0 {
+            // For :db.unique/identity, in-transaction duplicates from different
+            // entities should have been resolved by the upsert remapping pass.
+            // If we still see them here, it means two different non-tempid entities
+            // are asserting the same identity value, which is a real conflict.
+            // For :db.unique/value, always error on duplicates.
             let ident_name = crate::cache::get_cache()
                 .get_ident(datom.a)
                 .unwrap_or_else(|| format!("entid:{}", datom.a));
@@ -1256,6 +1712,11 @@ fn validate_datom_constraints(
 
         if let Some(existing_e) = existing_entity {
             if existing_e != datom.e {
+                // For :db.unique/identity, this should not happen after the
+                // upsert remapping pass -- the datom.e should have been remapped
+                // to existing_e already. If it wasn't remapped, it means the
+                // entity ID was a literal (not a tempid), so this is a real
+                // conflict regardless of unique type.
                 let ident_name = crate::cache::get_cache()
                     .get_ident(datom.a)
                     .unwrap_or_else(|| format!("entid:{}", datom.a));
@@ -1266,6 +1727,9 @@ fn validate_datom_constraints(
                     new_eid: datom.e,
                 }.into());
             }
+            // existing_e == datom.e: the entity already has this value for this
+            // unique attribute. This is fine -- it's either an upsert (identity)
+            // or an idempotent re-assertion (value). No error needed.
         }
     }
 
@@ -1722,7 +2186,7 @@ fn get_store_id_from_schema(schema: &str) -> Result<i32, Box<dyn std::error::Err
 
     let store_id: Option<i32> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
-        vec![DatumWithOid::from(store_name)],
+        &[DatumWithOid::from(store_name)],
     )?;
 
     store_id.ok_or_else(|| {

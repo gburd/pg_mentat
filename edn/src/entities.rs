@@ -227,6 +227,25 @@ pub enum OpType {
     Retract,
 }
 
+/// Identifies a built-in transaction function.
+///
+/// In Datomic, transaction functions are invoked as vectors within the transaction:
+///   `[:db.fn/cas e a old-value new-value]`
+///   `[:db.fn/retractEntity e]`
+///
+/// This enum lists the built-in functions supported by pg_mentat.
+/// User-defined transaction functions are not yet supported.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
+pub enum BuiltinTxFn {
+    /// Compare-and-swap: `[:db.fn/cas entity attr old-val new-val]`
+    /// Atomically sets `attr` on `entity` to `new-val` if and only if the
+    /// current value is `old-val`. Errors if the current value doesn't match.
+    Cas,
+    /// Retract all datoms for an entity: `[:db.fn/retractEntity entity-id]`
+    /// or `[:db/retractEntity entity-id]`.
+    RetractEntity,
+}
+
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialOrd, PartialEq)]
 pub enum Entity<V> {
     // Like [:db/add|:db/retract e a v].

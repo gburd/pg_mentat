@@ -1,3 +1,4 @@
+pub mod datomic_client;
 pub mod parser;
 pub mod serializer;
 pub mod transit_parser;
@@ -97,6 +98,41 @@ pub enum Operation {
 
     // Basis timestamp (d/basis-t)
     BasisT,
+
+    // Lazy query sequence (d/qseq) - streaming chunked results
+    Qseq {
+        query: String,
+        args: Vec<String>,
+        chunk_size: Option<usize>,
+        db_id: Option<String>,
+    },
+
+    // Pull multiple entities (d/pull-many)
+    PullMany {
+        pattern: String,
+        entity_ids: Vec<i64>,
+    },
+
+    // Index range scan (d/index-range)
+    IndexRange {
+        attrid: String,
+        start: Option<String>,
+        end: Option<String>,
+        limit: Option<usize>,
+    },
+
+    // Entity ID resolution (d/entid)
+    Entid {
+        ident: String,
+    },
+
+    // Ident resolution (d/ident)
+    Ident {
+        entid: i64,
+    },
+
+    // Database statistics (d/db-stats)
+    DbStats,
 
     // Health check
     Health,

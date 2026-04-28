@@ -238,10 +238,230 @@ END;
 $$;
 
 -- =========================================================================
+-- Relationship navigation views
+-- =========================================================================
+
+-- Test 16: entity_references view shows refs with attribute names
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.entity_references;
+    ASSERT cnt > 0, 'entity_references view should have rows (schema refs exist)';
+    RAISE NOTICE 'PASS: entity_references view has rows (count: %)', cnt;
+END;
+$$;
+
+-- Test 17: entity_references resolves target idents
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.entity_references
+    WHERE target_ident IS NOT NULL;
+    -- Bootstrap refs to :db.type/*, :db.cardinality/* should have idents
+    ASSERT cnt > 0, 'entity_references should resolve some target idents';
+    RAISE NOTICE 'PASS: entity_references resolves target idents (count: %)', cnt;
+END;
+$$;
+
+-- Test 18: reverse_references view works
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.reverse_references;
+    ASSERT cnt > 0, 'reverse_references view should have rows';
+    RAISE NOTICE 'PASS: reverse_references view has rows (count: %)', cnt;
+END;
+$$;
+
+-- Test 19: graph_edges view
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.graph_edges;
+    ASSERT cnt > 0, 'graph_edges view should have rows';
+    RAISE NOTICE 'PASS: graph_edges view has rows (count: %)', cnt;
+END;
+$$;
+
+-- =========================================================================
+-- Transaction history views
+-- =========================================================================
+
+-- Test 20: tx_log view shows transactions
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.tx_log;
+    ASSERT cnt > 0, 'tx_log view should have rows';
+    RAISE NOTICE 'PASS: tx_log view has rows (count: %)', cnt;
+END;
+$$;
+
+-- Test 21: tx_log has datom counts
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.tx_log WHERE datom_count > 0;
+    ASSERT cnt > 0, 'tx_log should have transactions with datom_count > 0';
+    RAISE NOTICE 'PASS: tx_log has datom counts (count: %)', cnt;
+END;
+$$;
+
+-- Test 22: entity_history view includes all operations
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.entity_history;
+    ASSERT cnt > 0, 'entity_history view should have rows';
+    RAISE NOTICE 'PASS: entity_history view has rows (count: %)', cnt;
+END;
+$$;
+
+-- Test 23: entity_history has assert operations
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.entity_history WHERE operation = 'assert';
+    ASSERT cnt > 0, 'entity_history should have assert operations';
+    RAISE NOTICE 'PASS: entity_history has assert operations (count: %)', cnt;
+END;
+$$;
+
+-- Test 24: recent_changes view
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.recent_changes;
+    ASSERT cnt > 0, 'recent_changes view should have rows';
+    RAISE NOTICE 'PASS: recent_changes view has rows (count: %)', cnt;
+END;
+$$;
+
+-- =========================================================================
+-- Schema summary view
+-- =========================================================================
+
+-- Test 25: schema_summary view shows user attributes
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.schema_summary WHERE ident LIKE ':test/%';
+    ASSERT cnt >= 5, 'schema_summary should show test attributes, got: ' || cnt;
+    RAISE NOTICE 'PASS: schema_summary has test attributes (count: %)', cnt;
+END;
+$$;
+
+-- Test 26: schema_summary has usage counts
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.schema_summary
+    WHERE ident = ':test/name' AND entity_count >= 2;
+    ASSERT cnt = 1, 'schema_summary should show entity_count >= 2 for :test/name';
+    RAISE NOTICE 'PASS: schema_summary has usage counts';
+END;
+$$;
+
+-- =========================================================================
+-- Convenience functions
+-- =========================================================================
+
+-- Test 27: entity_value function returns text values
+DO $$
+DECLARE
+    val TEXT;
+    alice_eid BIGINT;
+BEGIN
+    -- Find Alice's entity ID
+    SELECT entity_id INTO alice_eid FROM mentat.text_values
+    WHERE attribute = ':test/name' AND value = 'Alice' LIMIT 1;
+
+    val := mentat.entity_value(alice_eid, ':test/name');
+    ASSERT val = 'Alice', 'entity_value should return Alice, got: ' || COALESCE(val, 'NULL');
+    RAISE NOTICE 'PASS: entity_value returns text values';
+END;
+$$;
+
+-- Test 28: entity_value function returns numeric values
+DO $$
+DECLARE
+    val TEXT;
+    alice_eid BIGINT;
+BEGIN
+    SELECT entity_id INTO alice_eid FROM mentat.text_values
+    WHERE attribute = ':test/name' AND value = 'Alice' LIMIT 1;
+
+    val := mentat.entity_value(alice_eid, ':test/age');
+    ASSERT val = '30', 'entity_value should return 30, got: ' || COALESCE(val, 'NULL');
+    RAISE NOTICE 'PASS: entity_value returns numeric values';
+END;
+$$;
+
+-- Test 29: lookup_entity function
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.lookup_entity(':test/name', 'Alice');
+    ASSERT cnt >= 1, 'lookup_entity should find Alice, got count: ' || cnt;
+    RAISE NOTICE 'PASS: lookup_entity finds entities by value (count: %)', cnt;
+END;
+$$;
+
+-- Test 30: count_by_attribute function
+DO $$
+DECLARE
+    cnt INT;
+    test_name_count BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.count_by_attribute();
+    ASSERT cnt > 0, 'count_by_attribute should return rows';
+
+    SELECT entity_count INTO test_name_count FROM mentat.count_by_attribute()
+    WHERE attribute = ':test/name';
+    ASSERT test_name_count >= 2, 'count_by_attribute should show >= 2 entities for :test/name, got: ' || test_name_count;
+    RAISE NOTICE 'PASS: count_by_attribute works (total attrs: %)', cnt;
+END;
+$$;
+
+-- Test 31: find_text function
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.find_text('Alice');
+    ASSERT cnt >= 1, 'find_text should find Alice, got: ' || cnt;
+    RAISE NOTICE 'PASS: find_text finds text matches (count: %)', cnt;
+END;
+$$;
+
+-- Test 32: entities_with_attribute function
+DO $$
+DECLARE
+    cnt INT;
+BEGIN
+    SELECT COUNT(*) INTO cnt FROM mentat.entities_with_attribute(':test/name');
+    ASSERT cnt >= 2, 'entities_with_attribute should find >= 2 entities, got: ' || cnt;
+    RAISE NOTICE 'PASS: entities_with_attribute works (count: %)', cnt;
+END;
+$$;
+
+-- =========================================================================
 -- Virtual tables on custom stores
 -- =========================================================================
 
--- Test 16: Virtual tables on a new store
+-- Test 33: Virtual tables on a new store include new views
 DO $$
 DECLARE
     result TEXT;
@@ -249,13 +469,28 @@ DECLARE
 BEGIN
     PERFORM mentat_create_store('vt_test_store', 'store for virtual table tests');
 
-    -- Verify views were auto-created
+    -- Verify all views were auto-created (original + new)
     SELECT COUNT(*) INTO cnt
     FROM information_schema.views
     WHERE table_schema = 'mentat_vt_test_store'
-      AND table_name IN ('entities', 'attributes', 'facts', 'text_values', 'numeric_values');
-    ASSERT cnt >= 5, 'Custom store should have virtual table views, got: ' || cnt;
+      AND table_name IN (
+          'entities', 'attributes', 'facts', 'text_values', 'numeric_values',
+          'entity_references', 'reverse_references', 'graph_edges',
+          'tx_log', 'entity_history', 'recent_changes', 'schema_summary'
+      );
+    ASSERT cnt >= 12, 'Custom store should have all virtual table views, got: ' || cnt;
     RAISE NOTICE 'PASS: virtual tables auto-created for new store (count: %)', cnt;
+
+    -- Verify functions were created
+    SELECT COUNT(*) INTO cnt
+    FROM information_schema.routines
+    WHERE routine_schema = 'mentat_vt_test_store'
+      AND routine_name IN (
+          'entities_with_attribute', 'lookup_entity', 'entity_value',
+          'count_by_attribute', 'find_text'
+      );
+    ASSERT cnt >= 5, 'Custom store should have helper functions, got: ' || cnt;
+    RAISE NOTICE 'PASS: helper functions created for new store (count: %)', cnt;
 
     -- Clean up
     PERFORM mentat_drop_store('vt_test_store');

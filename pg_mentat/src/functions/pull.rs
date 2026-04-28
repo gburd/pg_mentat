@@ -275,7 +275,7 @@ type PullError = Box<dyn std::error::Error + Send + Sync>;
 ///   - Wildcard with map overrides: `[* {:person/friends [:person/name]}]`
 #[pg_extern]
 pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
-    mentat_pull_in_store("default", pattern, entity_id)
+    pull("default", pattern, entity_id)
 }
 
 /// Pull entity data using a pull pattern from a named store.
@@ -336,7 +336,7 @@ pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullErr
 /// ```
 #[pg_extern]
 pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
-    mentat_pull_many_in_store("default", pattern, entity_ids)
+    pull_many("default", pattern, entity_ids)
 }
 
 /// Pull entity data for multiple entities from a named store using a pull pattern.

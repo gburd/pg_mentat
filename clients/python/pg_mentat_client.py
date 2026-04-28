@@ -219,7 +219,226 @@ class MentatClient:
                 return json.loads(result)
             return result
 
+    # -- Native SQL view access ------------------------------------------
+
+    def facts(self, entity_id=None, attribute=None, store="default"):
+        """Query the facts view for human-readable EAVT data.
+
+        Args:
+            entity_id: Optional entity ID filter.
+            attribute: Optional attribute ident filter (e.g. ':person/name').
+            store: Store name (default: "default").
+
+        Returns:
+            List of fact dicts with keys: entity_id, attribute, value,
+            value_type, tx, tx_time.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, attribute, value, value_type, tx, tx_time FROM {}.facts".format(schema)
+        params = []
+        wheres = []
+        if entity_id is not None:
+            wheres.append("entity_id = %s")
+            params.append(entity_id)
+        if attribute is not None:
+            wheres.append("attribute = %s")
+            params.append(attribute)
+        if wheres:
+            sql += " WHERE " + " AND ".join(wheres)
+        sql += " ORDER BY entity_id, attribute"
+        with self._cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def text_values(self, attribute=None, store="default"):
+        """Query text_values view.
+
+        Args:
+            attribute: Optional attribute ident filter.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: entity_id, attribute, value, tx.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, attribute, value, tx FROM {}.text_values".format(schema)
+        params = []
+        if attribute is not None:
+            sql += " WHERE attribute = %s"
+            params.append(attribute)
+        with self._cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def numeric_values(self, attribute=None, store="default"):
+        """Query numeric_values view.
+
+        Args:
+            attribute: Optional attribute ident filter.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: entity_id, attribute, value, tx.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, attribute, value, tx FROM {}.numeric_values".format(schema)
+        params = []
+        if attribute is not None:
+            sql += " WHERE attribute = %s"
+            params.append(attribute)
+        with self._cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def entity_references(self, source=None, target=None, store="default"):
+        """Query entity_references view for relationship navigation.
+
+        Args:
+            source: Optional source entity ID filter.
+            target: Optional target entity ID filter.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: source_entity, attribute,
+            target_entity, target_ident, tx.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT source_entity, attribute, target_entity, target_ident, tx FROM {}.entity_references".format(schema)
+        params = []
+        wheres = []
+        if source is not None:
+            wheres.append("source_entity = %s")
+            params.append(source)
+        if target is not None:
+            wheres.append("target_entity = %s")
+            params.append(target)
+        if wheres:
+            sql += " WHERE " + " AND ".join(wheres)
+        with self._cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def entity_history(self, entity_id=None, store="default"):
+        """Query entity_history view for temporal data.
+
+        Args:
+            entity_id: Optional entity ID filter.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: entity_id, attribute, value,
+            value_type, tx, tx_time, operation.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, attribute, value, value_type, tx, tx_time, operation FROM {}.entity_history".format(schema)
+        params = []
+        if entity_id is not None:
+            sql += " WHERE entity_id = %s"
+            params.append(entity_id)
+        sql += " ORDER BY tx DESC"
+        with self._cursor() as cur:
+            cur.execute(sql, params)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def tx_log(self, limit=100, store="default"):
+        """Query tx_log view for transaction history.
+
+        Args:
+            limit: Maximum number of transactions to return.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: tx, tx_time, datom_count.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT tx, tx_time, datom_count FROM {}.tx_log ORDER BY tx DESC LIMIT %s".format(schema)
+        with self._cursor() as cur:
+            cur.execute(sql, (limit,))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def schema_summary(self, store="default"):
+        """Query schema_summary view for attribute usage statistics.
+
+        Args:
+            store: Store name.
+
+        Returns:
+            List of dicts with attribute usage info.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT * FROM {}.schema_summary".format(schema)
+        with self._cursor() as cur:
+            cur.execute(sql)
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def lookup_entity(self, attribute, value, store="default"):
+        """Find entities by attribute value using the lookup_entity function.
+
+        Args:
+            attribute: Attribute ident (e.g. ':person/name').
+            value: Value to search for (as string).
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: entity_id, tx.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, tx FROM {}.lookup_entity(%s, %s)".format(schema)
+        with self._cursor() as cur:
+            cur.execute(sql, (attribute, value))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    def entity_value(self, entity_id, attribute, store="default"):
+        """Get a single attribute value for an entity.
+
+        Args:
+            entity_id: Entity ID.
+            attribute: Attribute ident (e.g. ':person/name').
+            store: Store name.
+
+        Returns:
+            The value as a string, or None if not found.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT {}.entity_value(%s, %s)".format(schema)
+        with self._cursor() as cur:
+            cur.execute(sql, (entity_id, attribute))
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def find_text(self, search_query, store="default"):
+        """Full-text search across all text values.
+
+        Args:
+            search_query: Search query string.
+            store: Store name.
+
+        Returns:
+            List of dicts with keys: entity_id, attribute, value, rank.
+        """
+        schema = self._schema_for_store(store)
+        sql = "SELECT entity_id, attribute, value, rank FROM {}.find_text(%s)".format(schema)
+        with self._cursor() as cur:
+            cur.execute(sql, (search_query,))
+            cols = [d[0] for d in cur.description]
+            return [dict(zip(cols, row)) for row in cur.fetchall()]
+
     # -- Helpers ---------------------------------------------------------
+
+    @staticmethod
+    def _schema_for_store(store_name):
+        """Derive the PostgreSQL schema name for a store."""
+        if store_name == "default":
+            return "mentat"
+        return "mentat_{}".format(store_name)
 
     @contextmanager
     def _cursor(self):

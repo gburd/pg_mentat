@@ -34,7 +34,7 @@ fn get_store_id_for_schema(schema: &str) -> Result<i32, Box<dyn std::error::Erro
 
     let store_id: Option<i32> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
-        vec![DatumWithOid::from(store_name)],
+        &[DatumWithOid::from(store_name)],
     )?;
 
     store_id.ok_or_else(|| {
@@ -242,7 +242,7 @@ pub fn diff_default(
     query: &str,
     inputs: JsonB,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
-    mentat_diff("default", from_tx, to_tx, query, inputs)
+    diff("default", from_tx, to_tx, query, inputs)
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +423,7 @@ pub fn log_default(
     start_tx: i64,
     end_tx: i64,
 ) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
-    mentat_log("default", start_tx, end_tx)
+    log("default", start_tx, end_tx)
 }
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ use serde_json::json;
 /// ```
 #[pg_extern]
 pub fn mentat_schema() -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
-    mentat_schema_in_store("default")
+    schema("default")
 }
 
 /// Return complete schema information as JSON from a named store

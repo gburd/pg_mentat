@@ -1,0 +1,71 @@
+;; Data fixture: sample entities for the social schema.
+;; Requires schema_social.edn to be loaded first.
+;;
+;; Creates 5 people with cross-references:
+;;   Alice -> friends: [Bob, Carol]
+;;   Bob   -> friends: [Alice], mentor: Carol
+;;   Carol -> friends: [Alice, Bob, Dave]
+;;   Dave  -> friends: [Carol], mentor: Alice
+;;   Eve   -> friends: [], mentor: Bob
+;;
+;; Usage:
+;;   SELECT mentat_transact(pg_read_file('/path/to/data_social.edn'));
+
+[
+  ;; Define all people first
+  {:db/id "alice"
+   :person/name "Alice"
+   :person/age 30
+   :person/email "alice@example.com"
+   :person/active true
+   :person/tags ["engineer" "team-lead"]
+   :person/bio "Alice is a senior engineer who leads the platform team."}
+
+  {:db/id "bob"
+   :person/name "Bob"
+   :person/age 25
+   :person/email "bob@example.com"
+   :person/active true
+   :person/tags ["engineer" "junior"]
+   :person/bio "Bob is a junior engineer learning distributed systems."}
+
+  {:db/id "carol"
+   :person/name "Carol"
+   :person/age 35
+   :person/email "carol@example.com"
+   :person/active true
+   :person/tags ["manager" "mentor"]
+   :person/bio "Carol manages the data infrastructure team."}
+
+  {:db/id "dave"
+   :person/name "Dave"
+   :person/age 28
+   :person/email "dave@example.com"
+   :person/active false
+   :person/tags ["engineer" "contractor"]
+   :person/bio "Dave is a contractor specializing in database optimization."}
+
+  {:db/id "eve"
+   :person/name "Eve"
+   :person/age 22
+   :person/email "eve@example.com"
+   :person/active true
+   :person/tags ["intern"]
+   :person/bio "Eve is an intern exploring various engineering roles."}
+
+  ;; Cross-references (friendships and mentorship)
+  [:db/add "alice" :person/friends "bob"]
+  [:db/add "alice" :person/friends "carol"]
+
+  [:db/add "bob"   :person/friends "alice"]
+  [:db/add "bob"   :person/mentor  "carol"]
+
+  [:db/add "carol" :person/friends "alice"]
+  [:db/add "carol" :person/friends "bob"]
+  [:db/add "carol" :person/friends "dave"]
+
+  [:db/add "dave"  :person/friends "carol"]
+  [:db/add "dave"  :person/mentor  "alice"]
+
+  [:db/add "eve"   :person/mentor  "bob"]
+]

@@ -267,6 +267,86 @@ fn parse_operation(
 
         "basis-t" => Ok(Operation::BasisT),
 
+        "qseq" => {
+            let args_map = extract_args_map(map)?;
+            let query = extract_value_as_string(args_map, "query", input)?;
+            let args = extract_optional_vector(args_map, "args", input).unwrap_or_default();
+            let chunk_size = extract_optional_int(args_map, "chunk-size").map(|i| i as usize);
+            let db_id = extract_optional_string(args_map, "db-id");
+
+            Ok(Operation::Qseq {
+                query,
+                args,
+                chunk_size,
+                db_id,
+            })
+        }
+
+        "pull-many" => {
+            let args_map = extract_args_map(map)?;
+            let pattern = extract_value_as_string(args_map, "pattern", input)?;
+
+            let entity_ids_key = get_key_for("entity-ids");
+            let entity_ids = match args_map.get(entity_ids_key.as_ref()) {
+                Some(v) => match &v.inner {
+                    SpannedValue::Vector(vec) => {
+                        let mut ids = Vec::with_capacity(vec.len());
+                        for item in vec {
+                            match &item.inner {
+                                SpannedValue::Integer(i) => ids.push(*i),
+                                _ => {
+                                    return Err(ParseError::InvalidType(
+                                        "entity-ids elements must be integers".to_string(),
+                                    ))
+                                }
+                            }
+                        }
+                        ids
+                    }
+                    _ => {
+                        return Err(ParseError::InvalidType(
+                            "entity-ids must be a vector".to_string(),
+                        ))
+                    }
+                },
+                None => return Err(ParseError::MissingField("entity-ids".to_string())),
+            };
+
+            Ok(Operation::PullMany {
+                pattern,
+                entity_ids,
+            })
+        }
+
+        "index-range" => {
+            let args_map = extract_args_map(map)?;
+            let attrid = extract_value_as_string(args_map, "attrid", input)?;
+            let start = extract_optional_string(args_map, "start");
+            let end = extract_optional_string(args_map, "end");
+            let limit = extract_optional_int(args_map, "limit").map(|i| i as usize);
+
+            Ok(Operation::IndexRange {
+                attrid,
+                start,
+                end,
+                limit,
+            })
+        }
+
+        "entid" => {
+            let args_map = extract_args_map(map)?;
+            let ident = extract_value_as_string(args_map, "ident", input)?;
+            Ok(Operation::Entid { ident })
+        }
+
+        "ident" => {
+            let args_map = extract_args_map(map)?;
+            let entid = extract_required_int(args_map, "entid")?;
+            Ok(Operation::Ident { entid })
+        }
+
+        "db-stats" => Ok(Operation::DbStats),
+
         "health" => Ok(Operation::Health),
 
         _ => Err(ParseError::InvalidOperation(op_keyword.name().to_string())),
@@ -1117,5 +1197,144 @@ mod tests {
         let input = r#"{:op :q}"#;
         let req = parse_request(input);
         assert!(req.is_err());
+    }
+
+    // ---- New Datomic operations ----
+
+    #[test]
+    fn test_parse_qseq_basic() {
+        let input = r#"{:op :qseq :args {:query "[:find ?e :where [?e :name]]" :args []}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::Qseq { query, args, chunk_size, db_id } => {
+                assert!(query.contains("find"));
+                assert!(args.is_empty());
+                assert!(chunk_size.is_none());
+                assert!(db_id.is_none());
+            }
+            _ => panic!("Expected Qseq operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_qseq_with_chunk_size() {
+        let input = r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::Qseq { chunk_size, .. } => {
+                assert_eq!(chunk_size, Some(500));
+            }
+            _ => panic!("Expected Qseq operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pull_many() {
+        let input = r#"{:op :pull-many :args {:pattern "[*]" :entity-ids [42 43 44]}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::PullMany { entity_ids, .. } => {
+                assert_eq!(entity_ids, vec![42, 43, 44]);
+            }
+            _ => panic!("Expected PullMany operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pull_many_empty_ids() {
+        let input = r#"{:op :pull-many :args {:pattern "[*]" :entity-ids []}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::PullMany { entity_ids, .. } => {
+                assert!(entity_ids.is_empty());
+            }
+            _ => panic!("Expected PullMany operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_pull_many_missing_ids() {
+        let input = r#"{:op :pull-many :args {:pattern "[*]"}}"#;
+        let req = parse_request(input);
+        assert!(req.is_err());
+    }
+
+    #[test]
+    fn test_parse_index_range_basic() {
+        let input = r#"{:op :index-range :args {:attrid ":person/name"}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::IndexRange {
+                attrid,
+                start,
+                end,
+                limit,
+            } => {
+                assert!(attrid.contains("person/name"));
+                assert!(start.is_none());
+                assert!(end.is_none());
+                assert!(limit.is_none());
+            }
+            _ => panic!("Expected IndexRange operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_index_range_with_bounds() {
+        let input = r#"{:op :index-range :args {:attrid ":person/name" :start "A" :end "M" :limit 100}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::IndexRange {
+                start, end, limit, ..
+            } => {
+                assert_eq!(start.as_deref(), Some("A"));
+                assert_eq!(end.as_deref(), Some("M"));
+                assert_eq!(limit, Some(100));
+            }
+            _ => panic!("Expected IndexRange operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_entid() {
+        let input = r#"{:op :entid :args {:ident ":person/name"}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::Entid { ident } => {
+                assert!(ident.contains("person/name"));
+            }
+            _ => panic!("Expected Entid operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_ident() {
+        let input = r#"{:op :ident :args {:entid 42}}"#;
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::Ident { entid } => {
+                assert_eq!(entid, 42);
+            }
+            _ => panic!("Expected Ident operation"),
+        }
+    }
+
+    #[test]
+    fn test_parse_db_stats() {
+        let input = "{:op :db-stats}";
+        let req = parse_request(input);
+        assert!(req.is_ok());
+        match req.unwrap().op {
+            Operation::DbStats => {}
+            _ => panic!("Expected DbStats operation"),
+        }
     }
 }

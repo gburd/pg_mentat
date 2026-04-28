@@ -2,6 +2,19 @@ use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();
 
+/// Extension initialization: register GUC parameters and planner hooks.
+///
+/// Called automatically by PostgreSQL when the shared library is loaded.
+#[allow(non_snake_case)]
+#[pg_guard]
+pub extern "C-unwind" fn _PG_init() {
+    // Register planner GUC parameters (optimizer hints, timeouts, limits)
+    unsafe { planner::init_planner_hooks() };
+
+    // Register monitoring GUC parameters (slow query threshold, logging)
+    monitoring::register_monitoring_gucs();
+}
+
 // Initialize the mentat schema during CREATE EXTENSION
 extension_sql!(
     r#"
@@ -618,6 +631,7 @@ extension_sql!(
 );
 
 mod cache;
+pub mod monitoring;
 #[cfg(any(test, feature = "pg_test"))]
 mod cache_tests;
 #[cfg(any(test, feature = "pg_test"))]
@@ -730,6 +744,16 @@ mod entity_lifecycle_tests;
 mod query_join_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod error_handling_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod performance_benchmark_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod speculative_transaction_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_safety_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod datalog_feature_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod fulltext_bm25_tests;
 pub mod error;
 pub mod functions;
 mod operators;
@@ -821,6 +845,14 @@ mod mentat {
     pub use crate::functions::virtual_tables::*;
 }
 
+// Monitoring views (index_health, table_health).
+// Must run after schema and tables are created.
+extension_sql_file!(
+    "../sql/monitoring_views.sql",
+    name = "monitoring_views",
+    requires = ["view_helpers"],
+);
+
 // Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)
 // Must run after all mentat_* functions are created by pgrx.
 extension_sql_file!(
@@ -839,6 +871,10 @@ extension_sql_file!(
         mentat_storage_stats,
         mentat_stmt_cache_stats,
         mentat_stmt_cache_clear,
+        mentat_index_health,
+        mentat_health_check,
+        mentat_backend_stats,
+        mentat_reset_stats,
     ],
 );
 
