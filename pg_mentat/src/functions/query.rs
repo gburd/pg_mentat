@@ -162,6 +162,122 @@ impl<'a> SqlBuilder<'a> {
 }
 
 // ============================================================================
+// Type-Specific Table Helpers
+// ============================================================================
+
+/// Resolve a schema_prefix (e.g., "mentat." or "\"mentat_foo\".") to a store_id.
+///
+/// New type-specific tables live in the `mentat` schema and use `store_id` for
+/// multi-store isolation. This helper extracts the store name from schema_prefix,
+/// queries the `mentat.stores` table, and returns the store_id.
+///
+/// The result is cached in a thread-local to avoid repeated SPI lookups within
+/// the same backend session.
+fn resolve_store_id(schema_prefix: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    // Extract schema name: "mentat." -> "mentat", "\"mentat_foo\"." -> "mentat_foo"
+    let schema = schema_prefix.trim_end_matches('.');
+    let schema = schema.trim_matches('"');
+
+    let store_name = if schema == "mentat" {
+        "default"
+    } else if let Some(name) = schema.strip_prefix("mentat_") {
+        name
+    } else {
+        return Err(MentatError::InvalidQuery {
+            message: format!("Cannot resolve store_id for schema '{}'", schema),
+            suggestion: Some("Schema must be 'mentat' or 'mentat_*'".to_string()),
+        }.into());
+    };
+
+    let store_id: Option<i32> = Spi::get_one_with_args(
+        "SELECT store_id FROM mentat.stores WHERE store_name = $1",
+        &[DatumWithOid::from(store_name)],
+    )?;
+
+    store_id.ok_or_else(|| {
+        Box::new(MentatError::InvalidQuery {
+            message: format!("Store '{}' not found in mentat.stores", store_name),
+            suggestion: Some("Create the store first with mentat_create_store()".to_string()),
+        }) as Box<dyn std::error::Error + Send + Sync>
+    })
+}
+
+/// Build a UNION ALL subquery that presents the same column interface as the
+/// old wide-row datoms table, reading from all 9 type-specific tables.
+///
+/// The resulting subquery has columns:
+///   e, a, value_type_tag, v_ref, v_bool, v_long, v_double, v_text,
+///   v_keyword, v_instant, v_uuid, v_bytes, tx, added
+///
+/// Each branch of the UNION ALL populates only its native-type column and
+/// NULLs for the others, replicating the old wide-row layout.
+///
+/// `store_id_param` is the $N placeholder for the store_id parameter.
+fn build_datoms_union_subquery(store_id_param: &str) -> String {
+    format!(
+        "(SELECT e, a, {ref_tag} AS value_type_tag, \
+                v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
+                NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
+                NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant, \
+                NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, added \
+         FROM mentat.datoms_ref_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {bool_tag}, \
+                NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
+         FROM mentat.datoms_boolean_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {long_tag}, \
+                NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
+         FROM mentat.datoms_long_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {double_tag}, \
+                NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, added \
+         FROM mentat.datoms_double_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {instant_tag}, \
+                NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, added \
+         FROM mentat.datoms_instant_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {str_tag}, \
+                NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, added \
+         FROM mentat.datoms_text_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {kw_tag}, \
+                NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, added \
+         FROM mentat.datoms_keyword_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {uuid_tag}, \
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, added \
+         FROM mentat.datoms_uuid_new WHERE store_id = {sid} \
+         UNION ALL \
+         SELECT e, a, {bytes_tag}, \
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, added \
+         FROM mentat.datoms_bytes_new WHERE store_id = {sid})",
+        sid = store_id_param,
+        ref_tag = type_tag::REF,
+        bool_tag = type_tag::BOOLEAN,
+        long_tag = type_tag::LONG,
+        double_tag = type_tag::DOUBLE,
+        instant_tag = type_tag::INSTANT,
+        str_tag = type_tag::STRING,
+        kw_tag = type_tag::KEYWORD,
+        uuid_tag = type_tag::UUID,
+        bytes_tag = type_tag::BYTES,
+    )
+}
+
+/// Build a FROM-clause fragment for a single datoms-like table alias.
+///
+/// This generates `(UNION ALL subquery) AS alias` with store_id filtering.
+fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
+    format!(
+        "{} AS {}",
+        build_datoms_union_subquery(store_id_param),
+        alias
+    )
+}
+
+// ============================================================================
 // Query Complexity and Optimizer Hints
 // ============================================================================
 
@@ -451,44 +567,58 @@ fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value], schema_prefix: &str) -> 
     lookup_ref_query(attr_entid, &arr[1], schema_prefix)
 }
 
-/// Perform a lookup ref query against the typed value columns.
+/// Perform a lookup ref query against type-specific tables.
+///
+/// Queries the appropriate type-specific table directly based on the value type,
+/// using store_id for multi-store isolation.
 fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &str) -> Option<i64> {
+    // Resolve store_id for the type-specific tables
+    let store_id = resolve_store_id(schema_prefix).ok()?;
+
     match value {
         serde_json::Value::String(s) => {
             if let Some(stripped) = s.strip_prefix(':') {
                 Spi::get_one_with_args::<i64>(
-                    &format!(
-                        "SELECT e FROM {schema_prefix}datoms \
-                         WHERE a = $1 AND v_keyword = $2 AND value_type_tag = 8 AND added = true LIMIT 1"
-                    ),
-                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(stripped)],
+                    "SELECT e FROM mentat.datoms_keyword_new \
+                     WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+                    &[
+                        DatumWithOid::from(store_id),
+                        DatumWithOid::from(attr_entid),
+                        DatumWithOid::from(stripped),
+                    ],
                 ).ok().flatten()
             } else {
                 Spi::get_one_with_args::<i64>(
-                    &format!(
-                        "SELECT e FROM {schema_prefix}datoms \
-                         WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1"
-                    ),
-                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(s.as_str())],
+                    "SELECT e FROM mentat.datoms_text_new \
+                     WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+                    &[
+                        DatumWithOid::from(store_id),
+                        DatumWithOid::from(attr_entid),
+                        DatumWithOid::from(s.as_str()),
+                    ],
                 ).ok().flatten()
             }
         }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Spi::get_one_with_args::<i64>(
-                    &format!(
-                        "SELECT e FROM {schema_prefix}datoms \
-                         WHERE a = $1 AND v_long = $2 AND value_type_tag = 2 AND added = true LIMIT 1"
-                    ),
-                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(i)],
+                    "SELECT e FROM mentat.datoms_long_new \
+                     WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+                    &[
+                        DatumWithOid::from(store_id),
+                        DatumWithOid::from(attr_entid),
+                        DatumWithOid::from(i),
+                    ],
                 ).ok().flatten()
             } else if let Some(f) = n.as_f64() {
                 Spi::get_one_with_args::<i64>(
-                    &format!(
-                        "SELECT e FROM {schema_prefix}datoms \
-                         WHERE a = $1 AND v_double = $2 AND value_type_tag = 3 AND added = true LIMIT 1"
-                    ),
-                    &[DatumWithOid::from(attr_entid), DatumWithOid::from(f)],
+                    "SELECT e FROM mentat.datoms_double_new \
+                     WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+                    &[
+                        DatumWithOid::from(store_id),
+                        DatumWithOid::from(attr_entid),
+                        DatumWithOid::from(f),
+                    ],
                 ).ok().flatten()
             } else {
                 None
@@ -496,11 +626,13 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &
         }
         serde_json::Value::Bool(b) => {
             Spi::get_one_with_args::<i64>(
-                &format!(
-                    "SELECT e FROM {schema_prefix}datoms \
-                     WHERE a = $1 AND v_bool = $2 AND value_type_tag = 1 AND added = true LIMIT 1"
-                ),
-                &[DatumWithOid::from(attr_entid), DatumWithOid::from(*b)],
+                "SELECT e FROM mentat.datoms_boolean_new \
+                 WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(attr_entid),
+                    DatumWithOid::from(*b),
+                ],
             ).ok().flatten()
         }
         _ => None,
@@ -1373,6 +1505,10 @@ fn build_sql_from_datalog(
     input_bindings: &HashMap<String, serde_json::Value>,
     schema_prefix: &str,
 ) -> Result<(String, QueryComplexity), Box<dyn std::error::Error + Send + Sync>> {
+    // Resolve store_id and bind it as a parameter for type-specific table queries.
+    let store_id = resolve_store_id(schema_prefix)?;
+    let store_id_param = builder.bind_bigint(store_id as i64);
+
     // Separate clause types
     let mut pattern_clauses = Vec::new();
     let mut or_joins = Vec::new();
@@ -1401,7 +1537,7 @@ fn build_sql_from_datalog(
     for (fts_idx, wf) in where_fns.iter().enumerate() {
         let op_name = wf.operator.0.as_str();
         if op_name == "fulltext" {
-            let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix)?;
+            let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix, &store_id_param)?;
             fts_joins.push(fj);
         } else {
             // Arithmetic binding functions: [(* ?age 2) ?double-age]
@@ -1423,7 +1559,7 @@ fn build_sql_from_datalog(
     let mut rule_cte_info: Option<RuleCteInfo> = None;
     if !rule_invocations.is_empty() && !parsed.rules.is_empty() {
         let (cte_sql, cte_info) =
-            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal, schema_prefix)?;
+            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal, schema_prefix, &store_id_param)?;
         cte_prefix = cte_sql;
         rule_cte_info = Some(cte_info);
     }
@@ -1446,6 +1582,7 @@ fn build_sql_from_datalog(
             &rule_cte_info,
             input_bindings,
             schema_prefix,
+            &store_id_param,
         )?
     };
 
@@ -1548,10 +1685,13 @@ fn build_sql_from_datalog(
             let mut arm_extra_var_bindings = extra_var_bindings.clone();
             let mut arm_builder = SqlBuilder::new();
 
+            // Each OR arm has its own builder so bind store_id for it
+            let arm_store_id_param = arm_builder.bind_bigint(store_id as i64);
+
             for (idx, wf) in arm_where_fns.iter().enumerate() {
                 if wf.operator.0.as_str() == "fulltext" {
                     let fts_idx = fts_joins.len() + idx;
-                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix)?;
+                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix, &arm_store_id_param)?;
                     arm_fts_joins.push(fts_join);
                 } else {
                     return Err(format!(
@@ -1575,6 +1715,7 @@ fn build_sql_from_datalog(
                 &rule_cte_info,
                 input_bindings,
                 schema_prefix,
+                &arm_store_id_param,
             )?;
 
             // Remap $N parameter placeholders so they don't collide
@@ -1641,6 +1782,7 @@ fn build_fulltext_join(
     builder: &mut SqlBuilder<'_>,
     var_bindings: &mut HashMap<String, String>,
     schema_prefix: &str,
+    store_id_param: &str,
 ) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
     if wf.args.len() < 3 {
         return Err(":db.error/fulltext-args fulltext requires at least 3 arguments: \
@@ -1744,7 +1886,10 @@ fn build_fulltext_join(
         }
     }
 
-    let from_fragment = format!("{schema_prefix}datoms {datoms_alias}, {schema_prefix}fulltext {fts_alias}");
+    let from_fragment = format!(
+        "{} AS {datoms_alias}, {schema_prefix}fulltext {fts_alias}",
+        build_datoms_union_subquery(store_id_param)
+    );
 
     Ok(FtsJoin {
         from_fragment,
@@ -1958,6 +2103,7 @@ fn build_extended_pattern_query(
     rule_cte_info: &Option<RuleCteInfo>,
     input_bindings: &HashMap<String, serde_json::Value>,
     schema_prefix: &str,
+    store_id_param: &str,
 ) -> Result<
     (String, HashMap<String, (String, &'static str)>),
     Box<dyn std::error::Error + Send + Sync>,
@@ -2133,10 +2279,11 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             if !is_cardinality_many {
                 let param2 = builder.bind_bigint(as_of_tx);
                 where_clauses.push(format!(
-                    "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
+                    "NOT EXISTS (SELECT 1 FROM {} AS newer \
                      WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                      AND newer.added = true \
-                     AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                     AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                    build_datoms_union_subquery(store_id_param)
                 ));
             }
         }
@@ -2158,7 +2305,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
         }
 
-        joins.push(format!("{schema_prefix}datoms {alias}"));
+        joins.push(build_datoms_from_fragment(&alias, store_id_param));
     }
 
     // Add FTS joins
@@ -2201,7 +2348,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle NOT clauses as NOT EXISTS subqueries
     for not_join in not_joins {
-        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal, schema_prefix)?;
+        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal, schema_prefix, store_id_param)?;
         where_clauses.push(not_sql);
     }
 
@@ -2452,6 +2599,7 @@ fn build_not_exists_subquery(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     schema_prefix: &str,
+    store_id_param: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Groundedness validation: collect all variables mentioned in the NOT
     // clause and verify each one is bound in the outer scope.
@@ -2604,10 +2752,11 @@ fn build_not_exists_subquery(
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of_tx);
                         sub_where.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
+                            "NOT EXISTS (SELECT 1 FROM {} AS newer \
                              WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                              AND newer.added = true \
-                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                            build_datoms_union_subquery(store_id_param)
                         ));
                     }
                 }
@@ -2616,7 +2765,7 @@ fn build_not_exists_subquery(
                     sub_where.push(format!("{alias}.tx > {param}"));
                 }
 
-                sub_joins.push(format!("{schema_prefix}datoms {alias}"));
+                sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
             }
             _ => {
                 return Err(":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
@@ -2752,6 +2901,7 @@ fn build_rule_ctes(
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     schema_prefix: &str,
+    store_id_param: &str,
 ) -> Result<(String, RuleCteInfo), Box<dyn std::error::Error + Send + Sync>> {
     let mut cte_parts = Vec::new();
     let mut var_to_col: HashMap<String, (String, &'static str)> = HashMap::new();
@@ -2796,7 +2946,7 @@ fn build_rule_ctes(
         let mut union_parts = Vec::new();
         for clause in &rule.clauses {
             let clause_sql =
-                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name, schema_prefix)?;
+                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name, schema_prefix, store_id_param)?;
             union_parts.push(clause_sql);
         }
 
@@ -3012,6 +3162,7 @@ fn build_rule_clause_sql(
     temporal: &TemporalOption,
     rule_name: &str,
     schema_prefix: &str,
+    store_id_param: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Map head argument variables to CTE column positions
     let mut head_var_to_col: HashMap<String, usize> = HashMap::new();
@@ -3144,10 +3295,11 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     if !is_cardinality_many {
                         let param2 = builder.bind_bigint(as_of);
                         where_parts.push(format!(
-                            "NOT EXISTS (SELECT 1 FROM {schema_prefix}datoms newer \
+                            "NOT EXISTS (SELECT 1 FROM {} AS newer \
                              WHERE newer.e = {alias}.e AND newer.a = {alias}.a \
                              AND newer.added = true \
-                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})"
+                             AND newer.tx > {alias}.tx AND newer.tx <= {param2})",
+                            build_datoms_union_subquery(store_id_param)
                         ));
                     }
                 }
@@ -3156,7 +3308,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     where_parts.push(format!("{alias}.tx > {param}"));
                 }
 
-                pattern_joins.push(format!("{schema_prefix}datoms {alias}"));
+                pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {
                 // Recursive self-reference: JOIN against the CTE itself

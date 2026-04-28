@@ -8,6 +8,127 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
+// Store ID resolution
+// ---------------------------------------------------------------------------
+
+/// Get store_id from a PostgreSQL schema name (e.g. "mentat" -> 0, "mentat_foo" -> lookup).
+/// This mirrors the logic in transact.rs but is local to pull.
+fn get_store_id_from_schema(schema: &str) -> Result<i32, PullError> {
+    let store_name = if schema == "mentat" {
+        "default"
+    } else if let Some(name) = schema.strip_prefix("mentat_") {
+        name
+    } else {
+        return Err(MentatError::InvalidStoreName {
+            store_name: schema.to_string(),
+            reason: "Schema must be 'mentat' or 'mentat_*'".to_string(),
+        }
+        .into());
+    };
+
+    let store_id: Option<i32> = Spi::get_one_with_args(
+        "SELECT store_id FROM mentat.stores WHERE store_name = $1",
+        &[DatumWithOid::from(store_name)],
+    )?;
+
+    store_id.ok_or_else(|| {
+        MentatError::InvalidStoreName {
+            store_name: store_name.to_string(),
+            reason: "Store not found in mentat.stores".to_string(),
+        }
+        .into()
+    })
+}
+
+// ---------------------------------------------------------------------------
+// UNION ALL query builders for type-specific tables
+// ---------------------------------------------------------------------------
+
+/// Build a UNION ALL query across all type-specific tables that returns rows
+/// in the same column layout as the old wide datoms table:
+///   (value_type_tag, v_ref, v_bool, v_long, v_double, v_text, v_keyword,
+///    v_instant_micros, v_uuid_text, v_bytes)
+///
+/// Each sub-query filters by store_id and applies the given WHERE clause suffix
+/// (which should reference `e`, `a`, `added` etc.).
+///
+/// `extra_select_prefix` allows prepending columns (e.g., "e, " for multi-entity queries).
+/// `where_clause` is the filter applied to each sub-select (excluding store_id which is always added).
+fn build_union_all_datoms_query(
+    store_id: i32,
+    extra_select_prefix: &str,
+    where_clause: &str,
+    order_clause: &str,
+) -> String {
+    format!(
+        "SELECT * FROM (\
+            SELECT {pfx}{ref_tag} AS value_type_tag, \
+                   v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
+                   NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
+                   NULL::TEXT AS v_keyword, \
+                   NULL::BIGINT AS v_instant_micros, NULL::TEXT AS v_uuid, NULL::BYTEA AS v_bytes \
+            FROM mentat.datoms_ref_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{bool_tag}, \
+                   NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL \
+            FROM mentat.datoms_boolean_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{long_tag}, \
+                   NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL \
+            FROM mentat.datoms_long_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{double_tag}, \
+                   NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL \
+            FROM mentat.datoms_double_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{instant_tag}, \
+                   NULL, NULL, NULL, NULL, NULL, NULL, \
+                   EXTRACT(EPOCH FROM v)::BIGINT * 1000000 + \
+                   EXTRACT(MICROSECOND FROM v)::BIGINT % 1000000, NULL, NULL \
+            FROM mentat.datoms_instant_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{text_tag}, \
+                   NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL \
+            FROM mentat.datoms_text_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{kw_tag}, \
+                   NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL \
+            FROM mentat.datoms_keyword_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{uuid_tag}, \
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, v::TEXT, NULL \
+            FROM mentat.datoms_uuid_new \
+            WHERE store_id = {sid} AND {whr} \
+            UNION ALL \
+            SELECT {pfx}{bytes_tag}, \
+                   NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v \
+            FROM mentat.datoms_bytes_new \
+            WHERE store_id = {sid} AND {whr} \
+        ) AS _datoms {order}",
+        pfx = extra_select_prefix,
+        sid = store_id,
+        whr = where_clause,
+        order = order_clause,
+        ref_tag = type_tag::REF,
+        bool_tag = type_tag::BOOLEAN,
+        long_tag = type_tag::LONG,
+        double_tag = type_tag::DOUBLE,
+        instant_tag = type_tag::INSTANT,
+        text_tag = type_tag::STRING,
+        kw_tag = type_tag::KEYWORD,
+        uuid_tag = type_tag::UUID,
+        bytes_tag = type_tag::BYTES,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Schema cache — loaded once per pull call to eliminate repeated SPI lookups
 // ---------------------------------------------------------------------------
 
@@ -168,6 +289,7 @@ pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
 #[pg_extern]
 pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
+    let store_id = get_store_id_from_schema(&db_schema)?;
     let parsed = edn::parse::value(pattern)
         .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
             message: format!(
@@ -194,7 +316,7 @@ pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullErr
 
     Spi::connect(|client| {
         let schema = SchemaCache::load(&client, &db_schema)?;
-        execute_pull(&client, &schema, &db_schema, entity_id, &specs, &mut result_map, &mut visited, 0)
+        execute_pull(&client, &schema, &db_schema, store_id, entity_id, &specs, &mut result_map, &mut visited, 0)
     })?;
 
     Ok(JsonB(serde_json::Value::Object(result_map)))
@@ -228,6 +350,7 @@ pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, Pu
 #[pg_extern]
 pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
+    let store_id = get_store_id_from_schema(&db_schema)?;
     let parsed = edn::parse::value(pattern)
         .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
             message: format!(
@@ -253,7 +376,7 @@ pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<Jso
     // For simple patterns (no wildcard, no map specs, no recursion), use a
     // batched query that fetches all entities' attributes in one round-trip.
     if !has_wildcard && !has_map_or_recursive {
-        return pull_many_batched(&db_schema, &specs, &entity_ids);
+        return pull_many_batched(&db_schema, store_id, &specs, &entity_ids);
     }
 
     // For complex patterns, fall back to per-entity pull (still sharing one SPI connection).
@@ -266,7 +389,7 @@ pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<Jso
             result_map.insert(":db/id".to_string(), json!(eid));
             let mut visited = HashSet::new();
             visited.insert(eid);
-            execute_pull(&client, &schema, &db_schema, eid, &specs, &mut result_map, &mut visited, 0)?;
+            execute_pull(&client, &schema, &db_schema, store_id, eid, &specs, &mut result_map, &mut visited, 0)?;
             results.push(serde_json::Value::Object(result_map));
         }
         Ok::<(), PullError>(())
@@ -285,6 +408,7 @@ pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<Jso
 /// batched query for referenced component entities.
 fn pull_many_batched(
     db_schema: &str,
+    store_id: i32,
     specs: &[PullAttrSpec],
     entity_ids: &[i64],
 ) -> Result<JsonB, PullError> {
@@ -326,16 +450,20 @@ fn pull_many_batched(
         .join(",");
 
     Spi::connect(|client| {
+        let datoms_subquery = build_union_all_datoms_query(
+            store_id,
+            "e, a, ",
+            &format!("e IN ({eid_csv}) AND added = true"),
+            "",
+        );
         let query = format!(
             "SELECT d.e, s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                     d.v_ref, d.v_bool, d.v_long, d.v_double, \
                     d.v_text, d.v_keyword, \
-                    EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                    EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                    d.v_uuid::TEXT, d.v_bytes \
-             FROM {schema}.datoms d \
+                    d.v_instant_micros, d.v_uuid, d.v_bytes \
+             FROM ({datoms_subquery}) AS d \
              JOIN {schema}.schema s ON d.a = s.entid \
-             WHERE d.e IN ({eid_csv}) AND s.ident IN ({ident_csv}) AND d.added = true \
+             WHERE s.ident IN ({ident_csv}) \
              ORDER BY d.e, s.ident",
             schema = db_schema
         );
@@ -397,16 +525,19 @@ fn pull_many_batched(
             let component_ids: HashSet<i64> = pending_components.iter().map(|p| p.ref_id).collect();
             let comp_eid_csv: String = component_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
 
+            let comp_datoms_subquery = build_union_all_datoms_query(
+                store_id,
+                "e, a, ",
+                &format!("e IN ({comp_eid_csv}) AND added = true"),
+                "",
+            );
             let comp_query = format!(
                 "SELECT d.e, s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                         d.v_ref, d.v_bool, d.v_long, d.v_double, \
                         d.v_text, d.v_keyword, \
-                        EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                        EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                        d.v_uuid::TEXT, d.v_bytes \
-                 FROM {schema}.datoms d \
+                        d.v_instant_micros, d.v_uuid, d.v_bytes \
+                 FROM ({comp_datoms_subquery}) AS d \
                  JOIN {schema}.schema s ON d.a = s.entid \
-                 WHERE d.e IN ({comp_eid_csv}) AND d.added = true \
                  ORDER BY d.e, s.ident",
                 schema = db_schema
             );
@@ -775,6 +906,7 @@ fn execute_pull(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     specs: &[PullAttrSpec],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -847,6 +979,7 @@ fn execute_pull(
             client,
             schema,
             db_schema,
+            store_id,
             entity_id,
             &forward_attrs,
             result_map,
@@ -861,6 +994,7 @@ fn execute_pull(
             client,
             schema,
             db_schema,
+            store_id,
             entity_id,
             &reverse_attrs,
             result_map,
@@ -879,6 +1013,7 @@ fn execute_pull(
                     client,
                     schema,
                     db_schema,
+                    store_id,
                     entity_id,
                     result_map,
                     &override_idents,
@@ -899,6 +1034,7 @@ fn execute_pull(
                         client,
                         schema,
                         db_schema,
+                        store_id,
                         entity_id,
                         ident,
                         forward_ident,
@@ -914,6 +1050,7 @@ fn execute_pull(
                         client,
                         schema,
                         db_schema,
+                        store_id,
                         entity_id,
                         forward_ident,
                         sub_pattern,
@@ -936,6 +1073,7 @@ fn execute_pull(
                     client,
                     schema,
                     db_schema,
+                    store_id,
                     entity_id,
                     ident,
                     forward_ident,
@@ -965,6 +1103,7 @@ fn pull_forward_attributes_batched(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     attrs: &[ForwardAttrSpec<'_>],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -982,16 +1121,20 @@ fn pull_forward_attributes_batched(
         .collect::<Vec<_>>()
         .join(",");
 
+    let datoms_subquery = build_union_all_datoms_query(
+        store_id,
+        "a, ",
+        &format!("e = {} AND added = true", entity_id),
+        "",
+    );
     let query = format!(
         "SELECT s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                 d.v_ref, d.v_bool, d.v_long, d.v_double, \
                 d.v_text, d.v_keyword, \
-                EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                d.v_uuid::TEXT, d.v_bytes \
-         FROM {schema}.datoms d \
+                d.v_instant_micros, d.v_uuid, d.v_bytes \
+         FROM ({datoms_subquery}) AS d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE d.e = $1 AND s.ident IN ({ident_csv}) AND d.added = true \
+         WHERE s.ident IN ({ident_csv}) \
          ORDER BY s.ident",
         schema = db_schema
     );
@@ -1014,7 +1157,7 @@ fn pull_forward_attributes_batched(
     }
     let mut pending_components: Vec<PendingComponentRef> = Vec::new();
 
-    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+    for row in client.select(&query, None, &[])? {
         let ident: String = row.get(1)?.ok_or("Missing ident")?;
         let cardinality: String = row.get(2)?.ok_or("Missing cardinality")?;
         let is_component: bool = row.get(3)?.unwrap_or(false);
@@ -1066,6 +1209,7 @@ fn pull_forward_attributes_batched(
             client,
             schema,
             db_schema,
+            store_id,
             pc.ref_id,
             &mut sub_map,
             &HashSet::new(),
@@ -1097,6 +1241,7 @@ fn pull_reverse_attributes_batched(
     client: &SpiClient<'_>,
     _schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     attrs: &[ReverseAttrSpec<'_>],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -1112,15 +1257,17 @@ fn pull_reverse_attributes_batched(
         .collect::<Vec<_>>()
         .join(",");
 
+    // Reverse lookups are always ref-type, so query only datoms_ref_new.
     let query = format!(
         "SELECT s.ident, d.e \
-         FROM {schema}.datoms d \
+         FROM mentat.datoms_ref_new d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE s.ident IN ({ident_csv}) AND d.v_ref = $1 \
-               AND d.value_type_tag = {ref_tag} AND d.added = true \
+         WHERE d.store_id = {store_id} AND s.ident IN ({ident_csv}) \
+               AND d.v = {entity_id} AND d.added = true \
          ORDER BY s.ident, d.e",
         schema = db_schema,
-        ref_tag = type_tag::REF,
+        store_id = store_id,
+        entity_id = entity_id,
     );
 
     // Build lookup for limit/rename per forward_ident.
@@ -1133,7 +1280,7 @@ fn pull_reverse_attributes_batched(
     let mut refs_by_ident: HashMap<String, Vec<i64>> = HashMap::new();
     let mut ident_counts: HashMap<String, usize> = HashMap::new();
 
-    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+    for row in client.select(&query, None, &[])? {
         let ident: String = row.get(1)?.ok_or("Missing ident")?;
         let e: i64 = row.get(2)?.ok_or("Missing entity")?;
 
@@ -1169,22 +1316,27 @@ fn pull_wildcard(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
     override_idents: &HashSet<String>,
     visited: &mut HashSet<i64>,
     depth: usize,
 ) -> Result<(), PullError> {
+    let datoms_subquery = build_union_all_datoms_query(
+        store_id,
+        "a, ",
+        &format!("e = {} AND added = true", entity_id),
+        "",
+    );
     let query = format!(
         "SELECT s.ident, s.cardinality::TEXT, s.value_type::TEXT, s.component, \
                 d.value_type_tag, d.v_ref, d.v_bool, d.v_long, d.v_double, \
                 d.v_text, d.v_keyword, \
-                EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                d.v_uuid::TEXT, d.v_bytes \
-         FROM {schema}.datoms d \
+                d.v_instant_micros, d.v_uuid, d.v_bytes \
+         FROM ({datoms_subquery}) AS d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE d.e = $1 AND d.added = true \
+         WHERE true \
          ORDER BY s.ident",
         schema = db_schema
     );
@@ -1201,7 +1353,7 @@ fn pull_wildcard(
     }
 
     let mut rows = Vec::new();
-    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+    for row in client.select(&query, None, &[])? {
         let v_type_tag: i16 = row.get(5)?.ok_or("Missing type tag")?;
         let (decoded, ref_id) = decode_row_typed_value(&row, v_type_tag, 6)?;
         rows.push(DatomRow {
@@ -1232,6 +1384,7 @@ fn pull_wildcard(
                         client,
                         schema,
                         db_schema,
+                        store_id,
                         ref_id,
                         &mut sub_map,
                         &HashSet::new(),
@@ -1258,6 +1411,7 @@ fn pull_forward_map_spec(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     ident: &str,
     sub_pattern: &[PullAttrSpec],
@@ -1267,7 +1421,7 @@ fn pull_forward_map_spec(
     visited: &mut HashSet<i64>,
     depth: usize,
 ) -> Result<(), PullError> {
-    let ref_ids = query_forward_refs(client, db_schema, entity_id, ident, limit)?;
+    let ref_ids = query_forward_refs(client, db_schema, store_id, entity_id, ident, limit)?;
     let output_key = rename.unwrap_or(ident);
 
     if ref_ids.is_empty() {
@@ -1287,6 +1441,7 @@ fn pull_forward_map_spec(
                 client,
                 schema,
                 db_schema,
+                store_id,
                 ref_id,
                 sub_pattern,
                 &mut sub_map,
@@ -1310,6 +1465,7 @@ fn pull_forward_map_spec(
                     client,
                     schema,
                     db_schema,
+                    store_id,
                     *ref_id,
                     sub_pattern,
                     &mut sub_map,
@@ -1333,6 +1489,7 @@ fn pull_reverse_map_spec(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1343,7 +1500,7 @@ fn pull_reverse_map_spec(
     visited: &mut HashSet<i64>,
     depth: usize,
 ) -> Result<(), PullError> {
-    let ref_ids = query_reverse_refs(client, db_schema, entity_id, forward_ident, limit)?;
+    let ref_ids = query_reverse_refs(client, db_schema, store_id, entity_id, forward_ident, limit)?;
     let output_key = rename.unwrap_or(display_ident);
 
     if ref_ids.is_empty() {
@@ -1361,6 +1518,7 @@ fn pull_reverse_map_spec(
                 client,
                 schema,
                 db_schema,
+                store_id,
                 *ref_id,
                 sub_pattern,
                 &mut sub_map,
@@ -1387,6 +1545,7 @@ fn pull_recursive(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1407,9 +1566,9 @@ fn pull_recursive(
     }
 
     let ref_ids = if reverse {
-        query_reverse_refs(client, db_schema, entity_id, forward_ident, None)?
+        query_reverse_refs(client, db_schema, store_id, entity_id, forward_ident, None)?
     } else {
-        query_forward_refs(client, db_schema, entity_id, forward_ident, None)?
+        query_forward_refs(client, db_schema, store_id, entity_id, forward_ident, None)?
     };
 
     let output_key = rename.unwrap_or(display_ident);
@@ -1448,12 +1607,13 @@ fn pull_recursive(
             sub_map.insert(":db/id".to_string(), json!(ref_id));
             // Pull all attributes of the target (excluding the recursive one), plus recurse.
             pull_all_attributes_for_recursive(
-                client, schema, db_schema, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                client, schema, db_schema, store_id, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
             )?;
             execute_pull(
                 client,
                 schema,
                 db_schema,
+                store_id,
                 ref_id,
                 &[self_spec],
                 &mut sub_map,
@@ -1476,12 +1636,13 @@ fn pull_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(*ref_id));
                 pull_all_attributes_for_recursive(
-                    client, schema, db_schema, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                    client, schema, db_schema, store_id, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
                 )?;
                 execute_pull(
                     client,
                     schema,
                     db_schema,
+                    store_id,
                     *ref_id,
                     &[self_spec.clone()],
                     &mut sub_map,
@@ -1509,30 +1670,28 @@ fn pull_recursive(
 fn query_forward_refs(
     client: &SpiClient<'_>,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     ident: &str,
     limit: Option<&LimitSpec>,
 ) -> Result<Vec<i64>, PullError> {
+    // Forward refs only come from datoms_ref_new.
+    let escaped_ident = ident.replace('\'', "''");
     let query = format!(
-        "SELECT d.v_ref \
-         FROM {schema}.datoms d \
+        "SELECT d.v \
+         FROM mentat.datoms_ref_new d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE d.e = $1 AND s.ident = $2 AND d.value_type_tag = $3 AND d.added = true",
-        schema = db_schema
+         WHERE d.store_id = {store_id} AND d.e = {entity_id} \
+               AND s.ident = '{escaped_ident}' AND d.added = true",
+        schema = db_schema,
+        store_id = store_id,
+        entity_id = entity_id,
     );
 
     let max_rows = resolve_limit(limit);
     let mut ref_ids = Vec::new();
 
-    for row in client.select(
-        &query,
-        None,
-        &[
-            DatumWithOid::from(entity_id),
-            DatumWithOid::from(ident),
-            DatumWithOid::from(type_tag::REF),
-        ],
-    )? {
+    for row in client.select(&query, None, &[])? {
         if ref_ids.len() >= max_rows {
             break;
         }
@@ -1547,30 +1706,28 @@ fn query_forward_refs(
 fn query_reverse_refs(
     client: &SpiClient<'_>,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     forward_ident: &str,
     limit: Option<&LimitSpec>,
 ) -> Result<Vec<i64>, PullError> {
+    // Reverse refs only come from datoms_ref_new.
+    let escaped_ident = forward_ident.replace('\'', "''");
     let query = format!(
         "SELECT d.e \
-         FROM {schema}.datoms d \
+         FROM mentat.datoms_ref_new d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE s.ident = $1 AND d.v_ref = $2 AND d.value_type_tag = $3 AND d.added = true",
-        schema = db_schema
+         WHERE d.store_id = {store_id} AND s.ident = '{escaped_ident}' \
+               AND d.v = {entity_id} AND d.added = true",
+        schema = db_schema,
+        store_id = store_id,
+        entity_id = entity_id,
     );
 
     let max_rows = resolve_limit(limit);
     let mut ref_ids = Vec::new();
 
-    for row in client.select(
-        &query,
-        None,
-        &[
-            DatumWithOid::from(forward_ident),
-            DatumWithOid::from(entity_id),
-            DatumWithOid::from(type_tag::REF),
-        ],
-    )? {
+    for row in client.select(&query, None, &[])? {
         if ref_ids.len() >= max_rows {
             break;
         }
@@ -1590,6 +1747,7 @@ fn query_reverse_refs(
 fn query_forward_refs_batched(
     client: &SpiClient<'_>,
     db_schema: &str,
+    store_id: i32,
     entity_ids: &[i64],
     ident: &str,
     limit: Option<&LimitSpec>,
@@ -1602,15 +1760,16 @@ fn query_forward_refs_batched(
     let eid_csv: String = entity_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
     let escaped_ident = ident.replace('\'', "''");
 
+    // Batched forward refs only come from datoms_ref_new.
     let query = format!(
-        "SELECT d.e, d.v_ref \
-         FROM {schema}.datoms d \
+        "SELECT d.e, d.v \
+         FROM mentat.datoms_ref_new d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE d.e IN ({eid_csv}) AND s.ident = '{escaped_ident}' \
-               AND d.value_type_tag = {ref_tag} AND d.added = true \
+         WHERE d.store_id = {store_id} AND d.e IN ({eid_csv}) \
+               AND s.ident = '{escaped_ident}' AND d.added = true \
          ORDER BY d.e",
         schema = db_schema,
-        ref_tag = type_tag::REF,
+        store_id = store_id,
     );
 
     let mut result: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -1637,22 +1796,27 @@ fn pull_all_attributes_for_recursive(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
+    store_id: i32,
     entity_id: i64,
     recursive_forward_ident: &str,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
     visited: &mut HashSet<i64>,
     depth: usize,
 ) -> Result<(), PullError> {
+    let datoms_subquery = build_union_all_datoms_query(
+        store_id,
+        "a, ",
+        &format!("e = {} AND added = true", entity_id),
+        "",
+    );
     let query = format!(
         "SELECT s.ident, s.cardinality::TEXT, s.component, d.value_type_tag, \
                 d.v_ref, d.v_bool, d.v_long, d.v_double, \
                 d.v_text, d.v_keyword, \
-                EXTRACT(EPOCH FROM d.v_instant)::BIGINT * 1000000 + \
-                EXTRACT(MICROSECOND FROM d.v_instant)::BIGINT % 1000000 AS v_instant_micros, \
-                d.v_uuid::TEXT, d.v_bytes \
-         FROM {schema}.datoms d \
+                d.v_instant_micros, d.v_uuid, d.v_bytes \
+         FROM ({datoms_subquery}) AS d \
          JOIN {schema}.schema s ON d.a = s.entid \
-         WHERE d.e = $1 AND d.added = true \
+         WHERE true \
          ORDER BY s.ident",
         schema = db_schema
     );
@@ -1668,7 +1832,7 @@ fn pull_all_attributes_for_recursive(
     }
 
     let mut rows = Vec::new();
-    for row in client.select(&query, None, &[DatumWithOid::from(entity_id)])? {
+    for row in client.select(&query, None, &[])? {
         let ident: String = row.get(1)?.ok_or("Missing ident")?;
         let cardinality: String = row.get(2)?.ok_or("Missing cardinality")?;
         let is_component: bool = row.get(3)?.unwrap_or(false);
@@ -1690,7 +1854,7 @@ fn pull_all_attributes_for_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(rid));
                 visited.insert(rid);
-                pull_wildcard(client, schema, db_schema, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
+                pull_wildcard(client, schema, db_schema, store_id, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
                 let value = serde_json::Value::Object(sub_map);
                 insert_value(result_map, &attr_row.ident, value, &attr_row.cardinality);
             } else {

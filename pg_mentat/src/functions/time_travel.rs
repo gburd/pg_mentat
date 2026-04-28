@@ -15,6 +15,36 @@ fn resolve_schema_prefix(store_name: &str) -> String {
     format!("{}.", quote_ident(&schema))
 }
 
+/// Look up the `store_id` for a given schema name.
+///
+/// The `mentat` schema maps to the `"default"` store; any `mentat_<name>`
+/// schema maps to `<name>`.  The id is fetched from `mentat.stores`.
+fn get_store_id_for_schema(schema: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+    let store_name = if schema == "mentat" {
+        "default"
+    } else if let Some(name) = schema.strip_prefix("mentat_") {
+        name
+    } else {
+        return Err(crate::error::MentatError::InvalidStoreName {
+            store_name: schema.to_string(),
+            reason: "Schema must be 'mentat' or 'mentat_*'".to_string(),
+        }
+        .into());
+    };
+
+    let store_id: Option<i32> = Spi::get_one_with_args(
+        "SELECT store_id FROM mentat.stores WHERE store_name = $1",
+        vec![DatumWithOid::from(store_name)],
+    )?;
+
+    store_id.ok_or_else(|| {
+        crate::error::MentatError::StoreNotFound {
+            store_name: store_name.to_string(),
+        }
+        .into()
+    })
+}
+
 /// Extract the results array from a query response envelope.
 ///
 /// `mentat_query_internal` returns different shapes depending on FindSpec:
@@ -269,23 +299,60 @@ pub fn log(
     let schema = get_schema_for_store(store_name);
     let quoted_schema = quote_ident(&schema);
 
-    // Query datoms joined with transactions for the tx_instant timestamp.
-    // We include both assertions (added = true) and retractions (added = false).
+    // Resolve the store_id for filtering the type-specific tables.
+    let store_id = get_store_id_for_schema(&schema)?;
+
+    // Query all type-specific tables with UNION ALL, joined with
+    // transactions for the tx_instant timestamp.  Each sub-query selects
+    // a `type_tag` literal and casts `v` to text so that the UNION is
+    // type-compatible.  Both assertions and retractions are included.
     let sql = format!(
         r#"
-        SELECT
-            d.tx,
-            t.tx_instant::TEXT AS tx_instant,
-            d.e,
-            d.a,
-            d.value_type_tag,
-            d.v_ref, d.v_bool, d.v_long, d.v_double,
-            d.v_text, d.v_keyword,
-            d.v_uuid::TEXT,
-            d.added
-        FROM {schema}.datoms d
+        SELECT d.tx,
+               t.tx_instant::TEXT AS tx_instant,
+               d.e,
+               d.a,
+               d.type_tag,
+               d.v_text,
+               d.added
+        FROM (
+            SELECT tx, e, a, 0::smallint AS type_tag, v::text AS v_text, added
+              FROM mentat.datoms_ref_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 1::smallint, v::text, added
+              FROM mentat.datoms_boolean_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 2::smallint, v::text, added
+              FROM mentat.datoms_long_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 3::smallint, v::text, added
+              FROM mentat.datoms_double_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 4::smallint, v::text, added
+              FROM mentat.datoms_instant_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 7::smallint, v, added
+              FROM mentat.datoms_text_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 8::smallint, v, added
+              FROM mentat.datoms_keyword_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 10::smallint, v::text, added
+              FROM mentat.datoms_uuid_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+            UNION ALL
+            SELECT tx, e, a, 11::smallint, encode(v, 'hex'), added
+              FROM mentat.datoms_bytes_new
+             WHERE store_id = $1 AND tx > $2 AND tx <= $3
+        ) d
         JOIN {schema}.transactions t ON t.tx = d.tx
-        WHERE d.tx > $1 AND d.tx <= $2
         ORDER BY d.tx ASC, d.e ASC, d.a ASC
         "#,
         schema = quoted_schema,
@@ -298,21 +365,26 @@ pub fn log(
             &sql,
             None,
             &[
+                DatumWithOid::from(store_id),
                 DatumWithOid::from(start_tx),
                 DatumWithOid::from(end_tx),
             ],
         )?;
 
         for row in rows {
+            // Column layout from the UNION ALL query:
+            //   1 = tx, 2 = tx_instant, 3 = e, 4 = a,
+            //   5 = type_tag, 6 = v_text, 7 = added
             let tx: i64 = row.get::<i64>(1)?.unwrap_or(0);
             let tx_instant: String = row.get::<String>(2)?.unwrap_or_default();
             let e: i64 = row.get::<i64>(3)?.unwrap_or(0);
             let a: i64 = row.get::<i64>(4)?.unwrap_or(0);
             let type_tag: i16 = row.get::<i16>(5)?.unwrap_or(0);
-            let added: bool = row.get::<bool>(13)?.unwrap_or(true);
+            let v_text: String = row.get::<String>(6)?.unwrap_or_default();
+            let added: bool = row.get::<bool>(7)?.unwrap_or(true);
 
-            // Decode the value from the appropriate typed column.
-            let v = decode_datom_value(&row, type_tag)?;
+            // Convert the text representation back to the appropriate JSON type.
+            let v = decode_text_value(type_tag, &v_text);
 
             // Resolve attribute entid to ident if possible.
             let a_display: serde_json::Value =
@@ -358,54 +430,55 @@ pub fn log_default(
 // Value decoding helper
 // ---------------------------------------------------------------------------
 
-/// Decode a typed value from a datoms row.
+/// Convert a text-encoded value back to its natural JSON representation.
 ///
-/// Column layout (starting at column 6):
-///   6 = v_ref, 7 = v_bool, 8 = v_long, 9 = v_double,
-///   10 = v_text, 11 = v_keyword, 12 = v_uuid::TEXT
-fn decode_datom_value(
-    row: &pgrx::spi::SpiHeapTupleData<'_>,
-    type_tag: i16,
-) -> Result<serde_json::Value, pgrx::spi::SpiError> {
+/// The UNION ALL query casts every value to `text`.  This function parses
+/// that text back into the JSON type that makes sense for the given
+/// `type_tag` so that the audit log is human-readable.
+fn decode_text_value(type_tag: i16, v_text: &str) -> serde_json::Value {
     match type_tag {
         0 => {
-            // ref
-            let v: i64 = row.get::<i64>(6)?.unwrap_or(0);
-            Ok(json!(v))
+            // ref -- integer entity id
+            v_text.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(v_text))
         }
         1 => {
             // boolean
-            let v: bool = row.get::<bool>(7)?.unwrap_or(false);
-            Ok(json!(v))
+            match v_text {
+                "t" | "true" => json!(true),
+                "f" | "false" => json!(false),
+                _ => json!(v_text),
+            }
         }
         2 => {
             // long
-            let v: i64 = row.get::<i64>(8)?.unwrap_or(0);
-            Ok(json!(v))
+            v_text.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(v_text))
         }
         3 => {
             // double
-            let v: f64 = row.get::<f64>(9)?.unwrap_or(0.0);
-            Ok(json!(v))
+            v_text.parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v_text))
+        }
+        4 => {
+            // instant (timestamp cast to text)
+            json!(v_text)
         }
         7 => {
-            // string
-            let v: String = row.get::<String>(10)?.unwrap_or_default();
-            Ok(json!(v))
+            // string (already text)
+            json!(v_text)
         }
         8 => {
-            // keyword
-            let v: String = row.get::<String>(11)?.unwrap_or_default();
-            Ok(json!(format!(":{}", v)))
+            // keyword -- prepend colon for display
+            json!(format!(":{}", v_text))
         }
         10 => {
-            // uuid
-            let v: String = row.get::<String>(12)?.unwrap_or_default();
-            Ok(json!(v))
+            // uuid (cast to text)
+            json!(v_text)
+        }
+        11 => {
+            // bytes (hex-encoded)
+            json!(format!("\\x{}", v_text))
         }
         _ => {
-            // For instant, bytes, and other types, return type_tag info
-            Ok(json!(format!("<type_tag:{}>", type_tag)))
+            json!(format!("<type_tag:{}>", type_tag))
         }
     }
 }
@@ -518,5 +591,63 @@ mod tests {
         let response = json!({});
         let extracted = extract_results_array(&response);
         assert_eq!(extracted, json!([]));
+    }
+
+    #[test]
+    fn test_decode_text_value_ref() {
+        assert_eq!(decode_text_value(0, "12345"), json!(12345));
+    }
+
+    #[test]
+    fn test_decode_text_value_boolean() {
+        assert_eq!(decode_text_value(1, "t"), json!(true));
+        assert_eq!(decode_text_value(1, "true"), json!(true));
+        assert_eq!(decode_text_value(1, "f"), json!(false));
+        assert_eq!(decode_text_value(1, "false"), json!(false));
+    }
+
+    #[test]
+    fn test_decode_text_value_long() {
+        assert_eq!(decode_text_value(2, "42"), json!(42));
+        assert_eq!(decode_text_value(2, "-100"), json!(-100));
+    }
+
+    #[test]
+    fn test_decode_text_value_double() {
+        assert_eq!(decode_text_value(3, "3.14"), json!(3.14));
+    }
+
+    #[test]
+    fn test_decode_text_value_instant() {
+        assert_eq!(
+            decode_text_value(4, "2025-01-15 10:30:00+00"),
+            json!("2025-01-15 10:30:00+00")
+        );
+    }
+
+    #[test]
+    fn test_decode_text_value_string() {
+        assert_eq!(decode_text_value(7, "hello world"), json!("hello world"));
+    }
+
+    #[test]
+    fn test_decode_text_value_keyword() {
+        assert_eq!(decode_text_value(8, "person/name"), json!(":person/name"));
+    }
+
+    #[test]
+    fn test_decode_text_value_uuid() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(decode_text_value(10, uuid), json!(uuid));
+    }
+
+    #[test]
+    fn test_decode_text_value_bytes() {
+        assert_eq!(decode_text_value(11, "deadbeef"), json!("\\xdeadbeef"));
+    }
+
+    #[test]
+    fn test_decode_text_value_unknown() {
+        assert_eq!(decode_text_value(99, "foo"), json!("<type_tag:99>"));
     }
 }
