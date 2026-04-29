@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 
-from pg_mentat.client import (
+from pg_mentat.transit import (
     Keyword,
     Symbol,
     PgMentatError,
@@ -371,20 +371,20 @@ class TestRequestEncoding:
 
 class TestClientTypes:
     def test_client_creation(self):
-        from pg_mentat.client import client, Client
+        from pg_mentat.transit import client, Client
 
         c = client(endpoint="ws://localhost:8080/ws")
         assert isinstance(c, Client)
         assert c.endpoint == "ws://localhost:8080/ws"
 
     def test_client_with_api_key(self):
-        from pg_mentat.client import client
+        from pg_mentat.transit import client
 
         c = client(endpoint="ws://localhost:8080/ws", api_key="secret")
         assert c.api_key == "secret"
 
     def test_as_of(self):
-        from pg_mentat.client import Db, as_of
+        from pg_mentat.transit import Db, as_of
 
         database = Db(
             connection=None,  # type: ignore
@@ -399,7 +399,7 @@ class TestClientTypes:
         assert result.is_history is False
 
     def test_since(self):
-        from pg_mentat.client import Db, since
+        from pg_mentat.transit import Db, since
 
         database = Db(
             connection=None,  # type: ignore
@@ -414,7 +414,7 @@ class TestClientTypes:
         assert result.is_history is False
 
     def test_history(self):
-        from pg_mentat.client import Db, history
+        from pg_mentat.transit import Db, history
 
         database = Db(
             connection=None,  # type: ignore
