@@ -1,824 +1,345 @@
 """
-Datomic-compatible Python client for pg_mentat.
+pg_mentat Python client -- Direct PostgreSQL access.
 
-Implements the Datomic Client API protocol over WebSocket connections
-using Transit+JSON encoding. Provides both synchronous and async interfaces.
+Provides an idiomatic Python API with Connection and Database classes.
+Connects directly to PostgreSQL and calls pg_mentat extension functions
+via standard SQL. No mentatd daemon required.
+
+Requirements:
+    pip install psycopg2-binary  # or psycopg2 for production
 
 Usage::
 
-    import pg_mentat
+    from pg_mentat import Connection
 
-    c = pg_mentat.client(endpoint="ws://localhost:8080/ws")
-    conn = pg_mentat.connect(c, db_name="my-db")
-    database = pg_mentat.db(conn)
-    results = pg_mentat.q('[:find ?e ?name :where [?e :person/name ?name]]', database)
-    pg_mentat.transact(conn, tx_data='[{:person/name "Alice"}]')
+    conn = Connection("dbname=postgres")
+    db = conn.db()
+    results = db.q('[:find ?e ?name :where [?e :person/name ?name]]')
+    entity = db.pull('[*]', 42)
+    conn.close()
 """
 
 from __future__ import annotations
 
 import json
-import threading
-import uuid
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from contextlib import contextmanager
+from datetime import datetime
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 
 try:
-    import websocket as _ws_mod  # websocket-client package
+    import psycopg2
+    import psycopg2.extras
 except ImportError:
-    _ws_mod = None
+    raise ImportError(
+        "psycopg2 is required: pip install psycopg2-binary"
+    )
 
-try:
-    import websockets  # websockets package (async)
-except ImportError:
-    websockets = None
 
+class MentatError(Exception):
+    """Error raised by pg_mentat operations."""
 
-# ---------------------------------------------------------------------------
-# Transit+JSON encoding / decoding
-# ---------------------------------------------------------------------------
-
-class Keyword:
-    """Represents a Clojure/EDN keyword like :db/name."""
-
-    __slots__ = ("namespace", "name")
-
-    def __init__(self, name: str, namespace: str | None = None):
-        if namespace is None and "/" in name and not name.startswith("/"):
-            parts = name.split("/", 1)
-            self.namespace = parts[0]
-            self.name = parts[1]
-        else:
-            self.namespace = namespace
-            self.name = name
-
-    def __repr__(self) -> str:
-        return f":{self}" if self.namespace else f":{self.name}"
-
-    def __str__(self) -> str:
-        return f"{self.namespace}/{self.name}" if self.namespace else self.name
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, Keyword):
-            return self.namespace == other.namespace and self.name == other.name
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash((self.namespace, self.name))
-
-
-class Symbol:
-    """Represents a Clojure/EDN symbol."""
-
-    __slots__ = ("name",)
-
-    def __init__(self, name: str):
-        self.name = name
-
-    def __repr__(self) -> str:
-        return self.name
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, Symbol):
-            return self.name == other.name
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self.name)
-
-
-def _transit_encode_value(v: Any) -> Any:
-    """Encode a Python value as a Transit+JSON-compatible structure."""
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, Keyword):
-        return f"~:{v}"
-    if isinstance(v, Symbol):
-        return f"~${v.name}"
-    if isinstance(v, int):
-        if v > 2_147_483_647 or v < -2_147_483_648:
-            return f"~i{v}"
-        return v
-    if isinstance(v, float):
-        return v
-    if isinstance(v, str):
-        if v.startswith("~") or v.startswith("^"):
-            return f"~{v}"
-        return v
-    if isinstance(v, uuid.UUID):
-        return f"~u{v}"
-    if isinstance(v, dict):
-        result = ["^ "]
-        for k, val in v.items():
-            result.append(_transit_encode_value(k))
-            result.append(_transit_encode_value(val))
-        return result
-    if isinstance(v, (list, tuple)):
-        return [_transit_encode_value(item) for item in v]
-    if isinstance(v, set):
-        return ["~#set", [_transit_encode_value(item) for item in v]]
-    return str(v)
-
-
-def transit_encode(m: Any) -> str:
-    """Encode a value as a Transit+JSON string."""
-    return json.dumps(_transit_encode_value(m), separators=(",", ":"))
-
-
-def _transit_decode_tagged(s: str) -> Any:
-    """Decode a Transit tagged string."""
-    if s.startswith("~:"):
-        return Keyword(s[2:])
-    if s.startswith("~$"):
-        return Symbol(s[2:])
-    if s.startswith("~i"):
-        return int(s[2:])
-    if s.startswith("~u"):
-        return uuid.UUID(s[2:])
-    if s.startswith("~m"):
-        return int(s[2:])  # milliseconds since epoch
-    if s == "~zNaN":
-        return float("nan")
-    if s == "~zINF":
-        return float("inf")
-    if s == "~z-INF":
-        return float("-inf")
-    if s.startswith("~~"):
-        return s[1:]  # escaped tilde
-    if s.startswith("~^"):
-        return "^" + s[2:]  # escaped caret
-    return s
-
-
-def transit_decode(v: Any) -> Any:
-    """Decode a Transit+JSON-parsed value to Python data."""
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return v
-    if isinstance(v, str):
-        return _transit_decode_tagged(v)
-    if isinstance(v, list):
-        if len(v) > 0 and v[0] == "^ ":
-            # cmap: ["^ ", k1, v1, k2, v2, ...]
-            result = {}
-            i = 1
-            while i + 1 < len(v):
-                key = transit_decode(v[i])
-                val = transit_decode(v[i + 1])
-                result[key] = val
-                i += 2
-            return result
-        if len(v) == 2 and isinstance(v[0], str):
-            tag = v[0]
-            if tag == "~#list":
-                return [transit_decode(item) for item in v[1]]
-            if tag == "~#set":
-                return {transit_decode(item) for item in v[1]}
-        return [transit_decode(item) for item in v]
-    if isinstance(v, dict):
-        return {transit_decode(k): transit_decode(val) for k, val in v.items()}
-    return v
-
-
-def _parse_transit_json(s: str) -> Any:
-    """Parse a Transit+JSON string to Python data."""
-    return transit_decode(json.loads(s))
-
-
-# ---------------------------------------------------------------------------
-# WebSocket connection (synchronous, using websocket-client)
-# ---------------------------------------------------------------------------
-
-class _WsConnection:
-    """WebSocket connection that handles Transit+JSON messages."""
-
-    def __init__(self, endpoint: str, api_key: str | None = None):
-        if _ws_mod is None:
-            raise ImportError(
-                "websocket-client package required. Install with: "
-                "pip install websocket-client"
-            )
-        self._endpoint = endpoint
-        self._api_key = api_key
-        self._pending: dict[str, threading.Event] = {}
-        self._results: dict[str, Any] = {}
-        self._general_queue: list[Any] = []
-        self._lock = threading.Lock()
-        self._closed = False
-        self._session_id: str | None = None
-
-        header = []
-        if api_key:
-            header.append(f"Authorization: Bearer {api_key}")
-
-        self._ws = _ws_mod.WebSocketApp(
-            endpoint,
-            header=header or None,
-            on_message=self._on_message,
-            on_error=self._on_error,
-            on_close=self._on_close,
-        )
-
-        self._thread = threading.Thread(target=self._ws.run_forever, daemon=True)
-        self._thread.start()
-
-        # Wait for welcome message
-        self._welcome_event = threading.Event()
-        if not self._welcome_event.wait(timeout=10):
-            raise ConnectionError(
-                f"Timeout waiting for WebSocket welcome from {endpoint}"
-            )
-
-    def _on_message(self, ws: Any, message: str) -> None:
-        parsed = _parse_transit_json(message)
-        # Check for welcome message
-        if isinstance(parsed, dict):
-            type_val = parsed.get(Keyword("type"))
-            if type_val == Keyword("datomic.client/session"):
-                self._session_id = parsed.get(Keyword("session-id"))
-                self._welcome_event.set()
-                return
-
-        # Route by request-id
-        rid = None
-        if isinstance(parsed, dict):
-            rid = parsed.get(Keyword("request-id"))
-            if rid is None:
-                # Try string key too
-                rid = parsed.get("request-id")
-        if rid:
-            with self._lock:
-                self._results[rid] = parsed
-                evt = self._pending.get(rid)
-                if evt:
-                    evt.set()
-        else:
-            with self._lock:
-                self._general_queue.append(parsed)
-                # Also signal welcome in case it was a plain result
-                if not self._welcome_event.is_set():
-                    self._welcome_event.set()
-
-    def _on_error(self, ws: Any, error: Exception) -> None:
-        pass  # Errors will surface as timeouts
-
-    def _on_close(self, ws: Any, close_status_code: int | None,
-                  close_msg: str | None) -> None:
-        self._closed = True
-        # Wake up any pending requests
-        with self._lock:
-            for evt in self._pending.values():
-                evt.set()
-
-    def send_request(self, request: dict[str, Any],
-                     timeout: float = 30.0) -> Any:
-        """Send a Transit+JSON request and wait for the response."""
-        if self._closed:
-            raise ConnectionError("WebSocket connection is closed")
-
-        request_id = str(uuid.uuid4())
-        request[Keyword("request-id")] = request_id
-
-        evt = threading.Event()
-        with self._lock:
-            self._pending[request_id] = evt
-
-        msg = transit_encode(request)
-        self._ws.send(msg)
-
-        if not evt.wait(timeout=timeout):
-            with self._lock:
-                self._pending.pop(request_id, None)
-            raise TimeoutError(f"Request timed out after {timeout}s")
-
-        with self._lock:
-            self._pending.pop(request_id, None)
-            result = self._results.pop(request_id, None)
-
-        if result is None:
-            raise ConnectionError("Connection closed before response received")
-
-        # Check for error
-        error = result.get(Keyword("error"))
-        if error:
-            msg_text = "Server error"
-            category = "fault"
-            if isinstance(error, dict):
-                msg_text = error.get(
-                    Keyword("cognitect.anomalies/message"), msg_text
-                )
-                cat = error.get(Keyword("cognitect.anomalies/category"))
-                if cat:
-                    category = str(cat)
-            raise PgMentatError(msg_text, category=category, response=result)
-
-        return result.get(Keyword("result"))
-
-    def close(self) -> None:
-        """Close the WebSocket connection."""
-        if not self._closed:
-            self._closed = True
-            self._ws.close()
-
-
-# ---------------------------------------------------------------------------
-# Async WebSocket connection (using websockets package)
-# ---------------------------------------------------------------------------
-
-class _AsyncWsConnection:
-    """Async WebSocket connection using the websockets library."""
-
-    def __init__(self) -> None:
-        self._ws = None
-        self._session_id: str | None = None
-
-    async def connect(self, endpoint: str,
-                      api_key: str | None = None) -> None:
-        if websockets is None:
-            raise ImportError(
-                "websockets package required for async. Install with: "
-                "pip install websockets"
-            )
-        extra_headers = {}
-        if api_key:
-            extra_headers["Authorization"] = f"Bearer {api_key}"
-
-        self._ws = await websockets.connect(
-            endpoint,
-            additional_headers=extra_headers or None,
-        )
-        # Read welcome message
-        raw = await self._ws.recv()
-        welcome = _parse_transit_json(raw)
-        if isinstance(welcome, dict):
-            self._session_id = welcome.get(Keyword("session-id"))
-
-    async def send_request(self, request: dict[str, Any]) -> Any:
-        """Send request and wait for response."""
-        if self._ws is None:
-            raise ConnectionError("Not connected")
-
-        request_id = str(uuid.uuid4())
-        request[Keyword("request-id")] = request_id
-
-        msg = transit_encode(request)
-        await self._ws.send(msg)
-
-        raw = await self._ws.recv()
-        result = _parse_transit_json(raw)
-
-        # Check for error
-        if isinstance(result, dict):
-            error = result.get(Keyword("error"))
-            if error and isinstance(error, dict):
-                msg_text = error.get(
-                    Keyword("cognitect.anomalies/message"), "Server error"
-                )
-                category = str(
-                    error.get(
-                        Keyword("cognitect.anomalies/category"),
-                        "fault",
-                    )
-                )
-                raise PgMentatError(
-                    msg_text, category=category, response=result
-                )
-
-        if isinstance(result, dict):
-            return result.get(Keyword("result"))
-        return result
-
-    async def close(self) -> None:
-        if self._ws:
-            await self._ws.close()
-            self._ws = None
-
-
-# ---------------------------------------------------------------------------
-# Error types
-# ---------------------------------------------------------------------------
-
-class PgMentatError(Exception):
-    """Error from the pg_mentat server."""
-
-    def __init__(self, message: str, category: str = "fault",
-                 response: Any = None):
+    def __init__(self, message: str, detail: Optional[str] = None):
         super().__init__(message)
-        self.category = category
-        self.response = response
+        self.detail = detail
 
 
-# ---------------------------------------------------------------------------
-# Datomic Client API data types
-# ---------------------------------------------------------------------------
+class Database:
+    """An immutable database value at a point in time.
 
-@dataclass
-class Client:
-    """A pg_mentat client configuration."""
-    endpoint: str
-    api_key: str | None = None
+    Database objects are lightweight snapshots. They do not hold connections
+    or cursors; instead, they borrow the parent Connection when executing
+    queries. Obtain a Database via ``Connection.db()`` or by calling
+    ``as_of()`` on an existing Database.
+
+    Typical usage::
+
+        db = conn.db()
+        results = db.q('[:find ?e :where [?e :person/name "Alice"]]')
+        old_db = db.as_of(1000005)
+        old_results = old_db.q('[:find ?e :where [?e :person/name "Alice"]]')
+    """
+
+    def __init__(
+        self,
+        connection: "Connection",
+        as_of_tx: Optional[int] = None,
+        as_of_instant: Optional[datetime] = None,
+    ) -> None:
+        self._conn = connection
+        self._as_of_tx = as_of_tx
+        self._as_of_instant = as_of_instant
+
+    def as_of(self, tx_or_instant: Union[int, datetime]) -> "Database":
+        """Return a new Database value filtered to a point in time.
+
+        Time-travel queries allow you to see the database as it existed at
+        a specific transaction or timestamp.
+
+        Args:
+            tx_or_instant: Either a transaction ID (int) or a datetime.
+
+        Returns:
+            A new Database that queries data as of that point in time.
+        """
+        if isinstance(tx_or_instant, datetime):
+            return Database(
+                self._conn,
+                as_of_instant=tx_or_instant,
+            )
+        return Database(
+            self._conn,
+            as_of_tx=int(tx_or_instant),
+        )
+
+    def q(self, query: str, *inputs: Any) -> Any:
+        """Execute a Datalog query.
+
+        Args:
+            query: Datalog query string in EDN format, e.g.
+                '[:find ?e ?name :where [?e :person/name ?name]]'
+            *inputs: Optional positional query inputs. If a single dict is
+                passed it is used as the inputs JSONB map. Otherwise inputs
+                are passed as a JSON array under the "args" key.
+
+        Returns:
+            Query results, typically a list of tuples (lists in Python).
+        """
+        inputs_dict = self._build_inputs(inputs)
+        with self._conn._cursor() as cur:
+            cur.execute(
+                "SELECT mentat_query(%s, %s::jsonb)",
+                (query, json.dumps(inputs_dict)),
+            )
+            return self._fetch_json(cur, "mentat_query")
+
+    def pull(self, pattern: Union[str, List[Any]], eid: int) -> Dict[str, Any]:
+        """Pull entity attributes matching a pattern.
+
+        Args:
+            pattern: Pull pattern as a string (EDN) or list.
+                Examples: '[*]', '[:person/name :person/email]'
+            eid: Entity ID to pull.
+
+        Returns:
+            Dict of entity attributes.
+        """
+        pattern_str = pattern if isinstance(pattern, str) else json.dumps(pattern)
+        with self._conn._cursor() as cur:
+            cur.execute(
+                "SELECT mentat_pull(%s, %s)",
+                (pattern_str, int(eid)),
+            )
+            return self._fetch_json(cur, "mentat_pull")
+
+    def pull_many(
+        self, pattern: Union[str, List[Any]], eids: Sequence[int]
+    ) -> List[Dict[str, Any]]:
+        """Pull attributes for multiple entities.
+
+        Args:
+            pattern: Pull pattern string or list.
+            eids: Sequence of entity IDs.
+
+        Returns:
+            List of entity attribute dicts.
+        """
+        pattern_str = pattern if isinstance(pattern, str) else json.dumps(pattern)
+        with self._conn._cursor() as cur:
+            cur.execute(
+                "SELECT mentat_pull_many(%s, %s)",
+                (pattern_str, list(eids)),
+            )
+            return self._fetch_json(cur, "mentat_pull_many")
+
+    def entity(self, eid: int) -> Dict[str, Any]:
+        """Get all attributes of an entity as a dict.
+
+        Args:
+            eid: Entity ID.
+
+        Returns:
+            Dict mapping attribute keywords to their values.
+        """
+        with self._conn._cursor() as cur:
+            cur.execute("SELECT mentat_entity(%s)", (int(eid),))
+            return self._fetch_json(cur, "mentat_entity")
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_inputs(self, inputs: tuple) -> Dict[str, Any]:
+        """Build the inputs JSONB for a query, including temporal options."""
+        if len(inputs) == 1 and isinstance(inputs[0], dict):
+            base = dict(inputs[0])
+        elif inputs:
+            base = {"args": list(inputs)}
+        else:
+            base = {}
+
+        # Inject temporal parameters
+        if self._as_of_tx is not None:
+            base["as_of_tx"] = self._as_of_tx
+        elif self._as_of_instant is not None:
+            base["as_of_instant"] = self._as_of_instant.isoformat()
+
+        return base
+
+    @staticmethod
+    def _fetch_json(cur: Any, func_name: str) -> Any:
+        """Fetch a single JSON result from the cursor."""
+        row = cur.fetchone()
+        if row is None:
+            raise MentatError(f"{func_name} returned no result")
+        result = row[0]
+        if isinstance(result, str):
+            return json.loads(result)
+        return result
 
 
-@dataclass
 class Connection:
-    """A connection to a specific database."""
-    client: Client
-    _ws: _WsConnection = field(repr=False)
-    db_name: str = ""
-    connection_id: str = ""
+    """A connection to a pg_mentat-enabled PostgreSQL database.
+
+    The Connection wraps a psycopg2 connection and provides methods to
+    transact data and obtain immutable Database snapshots for querying.
+
+    Supports use as a context manager::
+
+        with Connection("dbname=postgres") as conn:
+            conn.transact('[{:person/name "Alice"}]')
+            db = conn.db()
+            print(db.q('[:find ?name :where [?e :person/name ?name]]'))
+    """
+
+    def __init__(
+        self,
+        dsn: Optional[str] = None,
+        connection: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Create a connection to pg_mentat.
+
+        Args:
+            dsn: PostgreSQL connection string (e.g. "dbname=postgres host=localhost").
+            connection: An existing psycopg2 connection to reuse.
+                If provided, the Connection will not close it on exit.
+            **kwargs: Additional keyword arguments passed to psycopg2.connect().
+        """
+        if connection is not None:
+            self._conn = connection
+            self._owns_conn = False
+        else:
+            self._conn = psycopg2.connect(dsn, **kwargs)
+            self._conn.autocommit = True
+            self._owns_conn = True
+
+    def db(self) -> Database:
+        """Get the current database value.
+
+        Returns an immutable Database snapshot representing the current
+        state of the database. Use this for queries.
+
+        Returns:
+            A Database instance for querying.
+        """
+        return Database(self)
+
+    def transact(self, tx_data: Union[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+        """Execute a transaction.
+
+        Args:
+            tx_data: Either an EDN string or a list of dicts representing
+                transaction data.
+
+                EDN example::
+
+                    conn.transact('[{:person/name "Alice"}]')
+
+                List example::
+
+                    conn.transact([{":db/ident": ":person/name",
+                                    ":db/valueType": ":db.type/string",
+                                    ":db/cardinality": ":db.cardinality/one"}])
+
+        Returns:
+            Transaction report as a dict with tx metadata.
+        """
+        if isinstance(tx_data, list):
+            edn_tx = self._list_to_edn(tx_data)
+        else:
+            edn_tx = tx_data
+
+        with self._cursor() as cur:
+            cur.execute("SELECT mentat_transact(%s)", (edn_tx,))
+            row = cur.fetchone()
+            if row is None:
+                raise MentatError("mentat_transact returned no result")
+            result = row[0]
+            if isinstance(result, str):
+                return json.loads(result)
+            return result
 
     def close(self) -> None:
-        """Close the connection."""
-        self._ws.close()
-
-
-@dataclass
-class Db:
-    """An immutable database value at a point in time."""
-    connection: Connection
-    db_name: str = ""
-    database_id: str = ""
-    t: int = 0
-    next_t: int = 0
-    as_of_t: int | None = None
-    since_t: int | None = None
-    is_history: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Datomic Client API functions
-# ---------------------------------------------------------------------------
-
-def client(*, endpoint: str, api_key: str | None = None,
-           **kwargs: Any) -> Client:
-    """Create a pg_mentat client.
-
-    Drop-in replacement for datomic.client.api/client.
-
-    Args:
-        endpoint: WebSocket URL (e.g., "ws://localhost:8080/ws").
-        api_key: Optional API key for authentication.
-
-    Returns:
-        A Client object for use with connect(), list_databases(), etc.
-    """
-    return Client(endpoint=endpoint, api_key=api_key)
-
-
-def connect(c: Client, *, db_name: str) -> Connection:
-    """Connect to a database.
-
-    Drop-in replacement for datomic.client.api/connect.
-
-    Args:
-        c: Client from client().
-        db_name: Name of the database to connect to.
-
-    Returns:
-        A Connection object.
-    """
-    ws = _WsConnection(c.endpoint, api_key=c.api_key)
-    result = ws.send_request({
-        Keyword("op"): Keyword("connect"),
-        Keyword("args"): {
-            Keyword("db-name"): db_name,
-        },
-    })
-    conn_id = ""
-    if isinstance(result, dict):
-        conn_id = str(result.get(Keyword("database-id"), ""))
-    return Connection(client=c, _ws=ws, db_name=db_name,
-                      connection_id=conn_id)
-
-
-def db(conn: Connection) -> Db:
-    """Get the current database value.
-
-    Drop-in replacement for datomic.client.api/db.
-
-    Args:
-        conn: Connection from connect().
-
-    Returns:
-        An immutable Db value for use with q(), pull(), etc.
-    """
-    result = conn._ws.send_request({
-        Keyword("op"): Keyword("db"),
-        Keyword("args"): {
-            Keyword("db-name"): conn.db_name,
-        },
-    })
-    t = 0
-    next_t = 0
-    database_id = ""
-    if isinstance(result, dict):
-        t = result.get(Keyword("t"), 0)
-        next_t = result.get(Keyword("next-t"), 0)
-        database_id = str(result.get(Keyword("database-id"), ""))
-    return Db(
-        connection=conn,
-        db_name=conn.db_name,
-        database_id=database_id,
-        t=t,
-        next_t=next_t,
-    )
-
-
-def q(query: str, database: Db, *inputs: Any,
-      timeout: float | None = None) -> Any:
-    """Execute a Datalog query.
-
-    Drop-in replacement for datomic.client.api/q.
-
-    Args:
-        query: Datalog query string (EDN format).
-        database: Database value from db().
-        *inputs: Optional query input values.
-        timeout: Optional timeout in seconds.
-
-    Returns:
-        Query results (typically a list of tuples).
-    """
-    args: dict[Any, Any] = {
-        Keyword("query"): query,
-        Keyword("args"): list(inputs),
-    }
-    if database.as_of_t is not None:
-        args[Keyword("as-of")] = database.as_of_t
-    if database.since_t is not None:
-        args[Keyword("since")] = database.since_t
-    if database.is_history:
-        args[Keyword("history")] = True
-
-    request = {
-        Keyword("op"): Keyword("q"),
-        Keyword("args"): args,
-    }
-    return database.connection._ws.send_request(
-        request, timeout=timeout or 30.0
-    )
-
-
-def transact(conn: Connection, *, tx_data: str) -> Any:
-    """Execute a transaction.
-
-    Drop-in replacement for datomic.client.api/transact.
-
-    Args:
-        conn: Connection from connect().
-        tx_data: EDN string of transaction data.
-
-    Returns:
-        Transaction result with :db-before, :db-after, :tx-data, :tempids.
-    """
-    return conn._ws.send_request({
-        Keyword("op"): Keyword("transact"),
-        Keyword("args"): {
-            Keyword("connection-id"): conn.connection_id,
-            Keyword("tx-data"): tx_data,
-        },
-    })
-
-
-def pull(database: Db, pattern: str, eid: int) -> Any:
-    """Pull entity attributes.
-
-    Drop-in replacement for datomic.client.api/pull.
-
-    Args:
-        database: Database value from db().
-        pattern: Pull pattern string (EDN format, e.g. "[*]").
-        eid: Entity ID.
-
-    Returns:
-        Map of entity attributes.
-    """
-    return database.connection._ws.send_request({
-        Keyword("op"): Keyword("pull"),
-        Keyword("args"): {
-            Keyword("pattern"): pattern,
-            Keyword("entity-id"): eid,
-        },
-    })
-
-
-def pull_many(database: Db, pattern: str, eids: list[int]) -> list[Any]:
-    """Pull attributes for multiple entities.
-
-    Args:
-        database: Database value.
-        pattern: Pull pattern string.
-        eids: List of entity IDs.
-
-    Returns:
-        List of entity attribute maps.
-    """
-    return [pull(database, pattern, eid) for eid in eids]
-
-
-def datoms(database: Db, *, index: str,
-           components: list[str] | None = None) -> Any:
-    """Access raw datoms from an index.
-
-    Drop-in replacement for datomic.client.api/datoms.
-
-    Args:
-        database: Database value.
-        index: Index name (":eavt", ":aevt", ":avet", ":vaet").
-        components: Optional index component filters.
-
-    Returns:
-        Collection of datom tuples.
-    """
-    return database.connection._ws.send_request({
-        Keyword("op"): Keyword("datoms"),
-        Keyword("args"): {
-            Keyword("index"): index,
-            Keyword("components"): components or [],
-        },
-    })
-
-
-def with_db(database: Db, *, tx_data: str) -> Any:
-    """Speculative transaction (Datomic d/with).
-
-    Applies tx_data speculatively without committing.
-
-    Args:
-        database: Database value.
-        tx_data: EDN string of transaction data.
-
-    Returns:
-        Speculative result with :db-after and :tx-data.
-    """
-    return database.connection._ws.send_request({
-        Keyword("op"): Keyword("with"),
-        Keyword("args"): {
-            Keyword("tx-data"): tx_data,
-        },
-    })
-
-
-def tx_range(conn: Connection, *, start: int | None = None,
-             end: int | None = None) -> Any:
-    """Query the transaction log.
-
-    Args:
-        conn: Connection.
-        start: Optional start transaction ID.
-        end: Optional end transaction ID.
-
-    Returns:
-        Collection of transaction log entries.
-    """
-    args: dict[Any, Any] = {}
-    if start is not None:
-        args[Keyword("start")] = start
-    if end is not None:
-        args[Keyword("end")] = end
-    return conn._ws.send_request({
-        Keyword("op"): Keyword("tx-range"),
-        Keyword("args"): args,
-    })
-
-
-# ---------------------------------------------------------------------------
-# Time-travel database values
-# ---------------------------------------------------------------------------
-
-def as_of(database: Db, t: int) -> Db:
-    """Return a database value as of a specific transaction.
-
-    Args:
-        database: Database value.
-        t: Transaction ID.
-
-    Returns:
-        New Db filtered to that point in time.
-    """
-    return Db(
-        connection=database.connection,
-        db_name=database.db_name,
-        database_id=database.database_id,
-        t=database.t,
-        next_t=database.next_t,
-        as_of_t=t,
-        since_t=None,
-        is_history=False,
-    )
-
-
-def since(database: Db, t: int) -> Db:
-    """Return a database value showing only changes since a transaction.
-
-    Args:
-        database: Database value.
-        t: Transaction ID.
-
-    Returns:
-        New Db filtered to changes since t.
-    """
-    return Db(
-        connection=database.connection,
-        db_name=database.db_name,
-        database_id=database.database_id,
-        t=database.t,
-        next_t=database.next_t,
-        as_of_t=None,
-        since_t=t,
-        is_history=False,
-    )
-
-
-def history(database: Db) -> Db:
-    """Return a database value including all history.
-
-    Args:
-        database: Database value.
-
-    Returns:
-        New Db with full history (assertions and retractions).
-    """
-    return Db(
-        connection=database.connection,
-        db_name=database.db_name,
-        database_id=database.database_id,
-        t=database.t,
-        next_t=database.next_t,
-        as_of_t=None,
-        since_t=None,
-        is_history=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Catalog operations
-# ---------------------------------------------------------------------------
-
-def list_databases(c: Client) -> Any:
-    """List available databases.
-
-    Args:
-        c: Client.
-
-    Returns:
-        List of database name strings.
-    """
-    ws = _WsConnection(c.endpoint, api_key=c.api_key)
-    try:
-        return ws.send_request({
-            Keyword("op"): Keyword("list-dbs"),
-            Keyword("args"): {},
-        })
-    finally:
-        ws.close()
-
-
-def create_database(c: Client, *, db_name: str) -> Any:
-    """Create a new database.
-
-    Args:
-        c: Client.
-        db_name: Name for the new database.
-
-    Returns:
-        True on success.
-    """
-    ws = _WsConnection(c.endpoint, api_key=c.api_key)
-    try:
-        return ws.send_request({
-            Keyword("op"): Keyword("create-db"),
-            Keyword("args"): {
-                Keyword("db-name"): db_name,
-            },
-        })
-    finally:
-        ws.close()
-
-
-def delete_database(c: Client, *, db_name: str) -> Any:
-    """Delete a database.
-
-    Args:
-        c: Client.
-        db_name: Name of the database to delete.
-
-    Returns:
-        True on success.
-    """
-    ws = _WsConnection(c.endpoint, api_key=c.api_key)
-    try:
-        return ws.send_request({
-            Keyword("op"): Keyword("delete-db"),
-            Keyword("args"): {
-                Keyword("db-name"): db_name,
-            },
-        })
-    finally:
-        ws.close()
+        """Close the underlying PostgreSQL connection.
+
+        Only closes if this Connection owns the connection (i.e., it was
+        not passed in via the ``connection`` parameter).
+        """
+        if self._owns_conn and self._conn and not self._conn.closed:
+            self._conn.close()
+
+    @property
+    def closed(self) -> bool:
+        """Whether the underlying connection is closed."""
+        return self._conn.closed != 0
+
+    # ------------------------------------------------------------------
+    # Context manager
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> "Connection":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def _cursor(self) -> Iterator[Any]:
+        """Create and yield a cursor, closing it afterward."""
+        cur = self._conn.cursor()
+        try:
+            yield cur
+        finally:
+            cur.close()
+
+    @staticmethod
+    def _list_to_edn(tx_data: List[Dict[str, Any]]) -> str:
+        """Convert a list of dicts to EDN transaction format.
+
+        This provides a convenience for Python users who prefer dicts
+        over raw EDN strings. Keys starting with ':' are treated as
+        keywords.
+        """
+        parts = []
+        for item in tx_data:
+            entries = []
+            for k, v in item.items():
+                key_str = k if k.startswith(":") else ":" + k
+                if isinstance(v, str) and v.startswith(":"):
+                    entries.append("{} {}".format(key_str, v))
+                elif isinstance(v, str):
+                    entries.append('{} "{}"'.format(key_str, v.replace('"', '\\"')))
+                elif isinstance(v, bool):
+                    entries.append("{} {}".format(key_str, "true" if v else "false"))
+                elif isinstance(v, (int, float)):
+                    entries.append("{} {}".format(key_str, v))
+                elif v is None:
+                    entries.append("{} nil".format(key_str))
+                else:
+                    entries.append('{} "{}"'.format(key_str, str(v)))
+            parts.append("{" + " ".join(entries) + "}")
+        return "[" + " ".join(parts) + "]"

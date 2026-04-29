@@ -33,6 +33,10 @@ members = [
   "pg_mentat", "mentatd"
   ]
 
+[patch.crates-io]
+# Fix for winnow v0.7.15 compatibility issues - force use of v1.0
+winnow = "=1.0.2"
+
 [build-dependencies]
 rustc_version = "0.4"
 
