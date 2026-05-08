@@ -204,3 +204,43 @@ DROP TRIGGER IF EXISTS dual_write_datoms_trigger ON mentat.datoms;
 CREATE TRIGGER dual_write_datoms_trigger
     AFTER INSERT ON mentat.datoms
     FOR EACH ROW EXECUTE FUNCTION mentat.dual_write_datoms();
+
+-- ---------------------------------------------------------------------------
+-- Extended statistics for the planner.
+--
+-- For Datalog workloads the planner's default assumption (columns are
+-- independent) is wrong for narrow datom tables: `a` (attribute) and `e`
+-- (entity) are highly correlated via cardinality, and most user attributes
+-- exhibit strong ndistinct skew (10 companies might have 10M employees).
+-- These CREATE STATISTICS declarations teach the planner about those
+-- correlations so it picks the right index without us having to force
+-- `enable_seqscan = off`.
+--
+-- Only the high-traffic tables get statistics; the low-volume boolean /
+-- uuid / bytes tables rarely need nudging.
+-- ---------------------------------------------------------------------------
+
+CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_ref_new_ae
+    (ndistinct, dependencies, mcv)
+    ON a, e FROM mentat.datoms_ref_new;
+
+CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_long_new_ae
+    (ndistinct, dependencies, mcv)
+    ON a, e FROM mentat.datoms_long_new;
+
+CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_text_new_ae
+    (ndistinct, dependencies, mcv)
+    ON a, e FROM mentat.datoms_text_new;
+
+CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_keyword_new_ae
+    (ndistinct, dependencies, mcv)
+    ON a, e FROM mentat.datoms_keyword_new;
+
+CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_instant_new_ae
+    (ndistinct, dependencies, mcv)
+    ON a, e FROM mentat.datoms_instant_new;
+
+-- Statistics become useful after ANALYZE. Users should run
+--   ANALYZE mentat.datoms_ref_new, mentat.datoms_long_new, ...
+-- after any bulk load. The aggressive autovacuum scale factor above
+-- (analyze at 2% dead tuples) keeps ongoing workloads covered.

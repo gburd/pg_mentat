@@ -175,7 +175,7 @@ fn get_index_info() -> Result<
 
 /// Whether to apply optimizer hints (SET LOCAL enable_seqscan, work_mem)
 /// during Mentat query execution.
-pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(true);
+pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(false);
 
 /// The work_mem value to SET LOCAL for complex Mentat queries.
 /// Only applied when `mentat.enable_optimizer_hints` is true and the query
@@ -250,7 +250,7 @@ pub unsafe fn init_planner_hooks() {
     GucRegistry::define_bool_guc(
         c"mentat.enable_optimizer_hints",
         c"Enable automatic optimizer hints for Mentat queries.",
-        c"When enabled, Mentat applies SET LOCAL enable_seqscan = off and SET LOCAL work_mem before executing generated SQL to encourage index usage on the datoms table.",
+        c"When enabled, Mentat applies SET LOCAL enable_seqscan = off and SET LOCAL work_mem before every query. DEFAULT: off. This was a workaround for the planner picking seqscans on the old wide-row storage; the narrow per-type tables in sql/10_narrow_storage.sql plus the CREATE STATISTICS there usually make the planner pick the right index on its own. Flip this on if you see EXPLAIN picking seqscan on a small, selective query that has an obvious index.",
         &ENABLE_OPTIMIZER_HINTS,
         GucContext::Userset,
         GucFlags::default(),
