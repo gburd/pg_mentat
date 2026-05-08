@@ -1,0 +1,201 @@
+# .github/workflows/ci.yml
+#
+# Full CI run: build, clippy (-D warnings per project policy),
+# CREATE EXTENSION smoke test, and `cargo pgrx test pg16`.
+#
+# Runs on push and pull_request. The lighter `installcheck.yml` provides
+# fast feedback on every push; this workflow is the gate for merging.
+#
+# PG matrix note: we pin to PG16 only. The pg13..pg18 feature flags compile,
+# but only PG16 is currently tested end-to-end. Expanding the matrix is
+# tracked in docs/ROADMAP.md — do not add versions here without also
+# verifying that `cargo pgrx install` and the smoke test pass locally for
+# that version.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PGRX_VERSION: "0.17.0"
+  RUST_TOOLCHAIN: "1.88.0"
+
+jobs:
+  # -------------------------------------------------------------------------
+  # Job 1: build + installcheck. Identical setup is needed for job 2, but
+  # we keep them separate so a clippy failure doesn't mask a build/install
+  # failure (or vice versa).
+  # -------------------------------------------------------------------------
+  build-and-install:
+    name: build + CREATE EXTENSION (pg16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # Using a service container is not enough: `cargo pgrx install` writes
+    # into PG_SHAREDIR and PG_LIBDIR, so we need a local postgres install
+    # that the runner user can `sudo` into. Apt-installed PG16 meets both.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL 16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-16 postgresql-server-dev-16 postgresql-client-16 \
+              libpq-dev build-essential pkg-config libclang-dev clang
+          sudo systemctl enable --now postgresql
+
+      - name: Configure postgres trust auth
+        run: |
+          sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+          PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file;")
+          echo "local all all trust"              | sudo tee -a "$PG_HBA" >/dev/null
+          echo "host  all all 127.0.0.1/32 trust" | sudo tee -a "$PG_HBA" >/dev/null
+          sudo systemctl restart postgresql
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-build-${{ runner.os }}-
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init (system PG16)
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      # Build with warnings-as-errors OFF. The zero-warnings policy is
+      # enforced by the separate `clippy` job below so build failures and
+      # lint failures show up independently in the check list.
+      - name: cargo build -p pg_mentat (pg16)
+        working-directory: pg_mentat
+        run: cargo build --no-default-features --features pg16
+
+      - name: cargo pgrx install (pg16)
+        working-directory: pg_mentat
+        run: |
+          sudo -E env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" \
+              cargo pgrx install --no-default-features --features pg16 \
+                --pg-config "$(which pg_config)"
+
+      - name: Smoke test (CREATE EXTENSION + SQL assertions)
+        env:
+          CI: "1"
+          PGHOST: "localhost"
+          PGPORT: "5432"
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+        run: bash scripts/smoke.sh
+
+  # -------------------------------------------------------------------------
+  # Job 2: clippy with -D warnings. Project policy (Cargo.toml [lints.clippy]
+  # + coding-standards.md "Zero Warnings Policy") is that warnings fail the
+  # build. This is the enforcement point.
+  # -------------------------------------------------------------------------
+  clippy:
+    name: clippy -D warnings (pg16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libpq headers (pgrx link-time)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-server-dev-16 libpq-dev build-essential \
+              pkg-config libclang-dev clang
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-clippy-${{ runner.os }}-
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init (system PG16)
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo clippy -p pg_mentat -- -D warnings
+        working-directory: pg_mentat
+        run: |
+          cargo clippy --no-default-features --features pg16 -- -D warnings
+
+  # -------------------------------------------------------------------------
+  # Job 3: `cargo pgrx test pg16`. This uses pgrx's in-tree test runner which
+  # spins up a throwaway postgres, installs the extension, and runs the
+  # #[pg_test] functions. It is intentionally separate so a missing
+  # `pg_test` fixture does not break the installcheck path.
+  # -------------------------------------------------------------------------
+  cargo-test:
+    name: cargo pgrx test pg16
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PG build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-server-dev-16 libpq-dev build-essential \
+              pkg-config libclang-dev clang
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-test-${{ runner.os }}-
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init (system PG16)
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo pgrx test pg16
+        working-directory: pg_mentat
+        run: |
+          cargo pgrx test --no-default-features --features pg16 pg16

@@ -1,4 +1,4 @@
-.PHONY: outdated fix upgrades install-upgrade-scripts
+.PHONY: outdated fix upgrades install-upgrade-scripts smoke
 
 # PostgreSQL extension directory (auto-detected via pg_config)
 PG_SHAREDIR := $(shell pg_config --sharedir 2>/dev/null || echo "/usr/share/postgresql")
@@ -24,3 +24,9 @@ install-upgrade-scripts:
 	done
 	@echo "Done. Available upgrade paths:"
 	@ls -1 $(EXTENSION_DIR)/pg_mentat--*--*.sql 2>/dev/null || echo "  (none installed)"
+
+# Install pg_mentat into the pgrx-managed cluster and run the smoke-test SQL.
+# See docs/CI.md for the exact commands CI runs; this target is the local
+# mirror of the installcheck.yml GitHub Actions workflow.
+smoke:
+	@bash scripts/smoke.sh

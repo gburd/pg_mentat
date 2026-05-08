@@ -1,30 +1,48 @@
 # pg_mentat
 
-A Datomic-compatible Datalog query engine as a PostgreSQL extension.
+A PostgreSQL extension that parses EDN transactions, stores them as
+Entity-Attribute-Value-Transaction (EAVT) datoms, and answers a subset
+of Datalog queries. Derived from Mozilla's [Mentat](https://github.com/mozilla/mentat)
+project, rewritten on top of [pgrx](https://github.com/pgcentralfoundation/pgrx)
+so that all functionality is reachable from any PostgreSQL client via
+`mentat_transact`, `mentat_query`, `mentat_pull`, and friends. An
+optional HTTP daemon (`mentatd`) speaks the Datomic-style EDN wire
+protocol for clients that need it.
 
-pg_mentat brings the power of [Datomic](https://docs.datomic.com/)'s immutable, time-aware, Datalog-based data model to PostgreSQL. Store data as Entity-Attribute-Value-Transaction (EAVT) tuples and query it with Datalog -- all through standard SQL function calls.
-
-Based on Mozilla's [Mentat](https://github.com/mozilla/mentat) project, pg_mentat reimplements the core as a [pgrx](https://github.com/pgcentralfoundation/pgrx) PostgreSQL extension. Use it directly from any PostgreSQL client -- no additional services required. An optional HTTP daemon (`mentatd`) is available for Datomic client protocol compatibility.
+pg_mentat is under active development. `docs/STATUS.md` lists what
+works, what partially works, and what is missing; `docs/ROADMAP.md`
+lays out the six-phase plan for closing the gaps.
 
 ## Features
 
+Legend: **Works** — exercised by tests and usable today.
+**Partial** — present with a stated gap.
+**Not implemented** — absent; use the workaround if there is one.
+
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Schema definition (value types, cardinality, uniqueness) | Complete | All Datomic schema attributes supported |
-| Transactions (assert, retract, retractEntity) | Complete | EDN transaction format |
-| Lookup refs in transactions and queries | Complete | `[:person/email "alice@example.com"]` |
-| Datalog queries with `:find`, `:where`, `:in` | Complete | Relations, tuples, collections, scalars |
-| Rules engine (recursive) | Complete | Transitive closure, graph traversal |
-| Aggregates | Complete | `count`, `sum`, `avg`, `min`, `max` |
-| Predicates and functions | Complete | `>`, `<`, `>=`, `<=`, `=`, `!=`, `ground`, `get-else` |
-| OR / NOT clauses | Complete | Composable query constraints |
-| Full-text search with scoring | Complete | PostgreSQL `tsvector` + BM25 ranking |
-| Pull API | Complete | Recursive pulls, reverse lookups, limits, defaults, wildcards |
-| Time travel (as-of, since, history) | Complete | Immutable audit trail |
-| Cardinality many | Complete | Multi-valued attributes with set semantics |
-| Entity and schema introspection | Complete | `mentat_entity()`, `mentat_schema()` |
-| mentatd HTTP daemon | Complete | EDN + Transit wire formats, connection pooling, caching |
-| Value types | Complete | string, long, double, boolean, instant, keyword, ref, uuid, bytes |
+| Schema definition (value types, cardinality, uniqueness) | Works | All Datomic schema attributes listed in `docs/STATUS.md` are accepted. |
+| Transactions (`assert`, `retract`, `:db.fn/retractEntity`) | Works | EDN transaction format; tempids and lookup refs resolve during the same transaction. |
+| Lookup refs in transactions and queries | Works | `[:person/email "alice@example.com"]` resolves to an entity ID. |
+| Datalog queries with `:find` and `:where` | Works | Scalar / tuple / collection / relation find-specs. |
+| `:in` bindings | Partial | Scalar inputs work; collection (`[?x ...]`), tuple (`[?x ?y]`), and relation (`[[?x ?y]]`) bindings are not yet executed end-to-end. |
+| Rules | Partial | Recursive rules work with patterns and the six comparison operators in bodies; non-arithmetic where-functions inside rule bodies return `:db.error/unsupported-rule-*`. |
+| Aggregates | Works | `count`, `sum`, `avg`, `min`, `max`. Other aggregates return `:db.error/unsupported-aggregate`. |
+| Predicates (`<`, `>`, `<=`, `>=`, `=`, `!=`) | Works | Supported at top level and in rule bodies. |
+| Arithmetic where-functions (`*`, `+`, `-`, `/`) | Works | Supported at top level and in rule bodies. |
+| `ground`, `get-else`, `tuple` | Not implemented | Roadmap Phase 3. No workaround today; the older feature table listing these as done was wrong. |
+| Attribute predicates (`[(attribute ?a :db/unique)]`) | Not implemented | Roadmap Phase 3. Read the schema via `mentat_schema()` from SQL as a stopgap. |
+| `or` / `or-join` | Partial | One top-level `or-join` per query; patterns and supported predicates work inside branches; `not` and rule invocations inside branches are rejected. |
+| `not` / `not-join` | Partial | Pattern clauses work with a groundedness check; predicates and function calls inside `not` are rejected. |
+| Full-text search | Works | Backed by PostgreSQL `tsvector` / GIN. Score exposed via `fulltext`. |
+| Pull API | Works | Attribute lists, wildcards, recursive nested pulls, reverse lookups, `:limit`, `:default`. |
+| Time travel (`asOf`, `since`, `history`) | Works | Passed via the `inputs` JSONB argument to `mentat_query`. |
+| Cardinality many | Works | Set semantics on storage and queries. |
+| Entity / schema introspection | Partial | `mentat_entity()` returns a JSON snapshot; `mentat_schema()` returns the current schema. There is no lazy `d/entity`-style navigator. |
+| Excision (`:db/excise`) | Not implemented | No roadmap item; retractions are preserved as history. |
+| Clojure peer library (`d/connect`, `d/db`, `d/entity`, …) | Not implemented | Roadmap Phase 5. `pg-mentat-client/` has a stub HTTP client for `mentatd`, not a peer. |
+| `mentatd` HTTP daemon | Partial | EDN wire format works; Transit is stubbed; connection pooling and LRU caching are wired. |
+| Value types | Works | `string`, `long`, `double`, `boolean`, `instant`, `keyword`, `ref`, `uuid`, `bytes`. `bigint` is rejected with `:db.error/unsupported-constant`. |
 
 ## Quick Start
 

@@ -1051,27 +1051,48 @@ fn mentat_explain_internal(
         sql_query.push_str(&format!(" OFFSET {}", offset));
     }
 
-    // Prepend EXPLAIN (FORMAT JSON) to the query
-    let explain_sql = format!("EXPLAIN (FORMAT JSON, VERBOSE) {}", sql_query);
+    // EXPLAIN (FORMAT TEXT) because pgrx's get::<String>(col) works reliably on
+    // the `text` column type, whereas the JSON format returns the `json` type
+    // which neither String nor JsonB Datum conversion handles cleanly in 0.17.
+    // (Trying FORMAT JSON silently returns 0 rows.)
+    // If callers want JSON-shaped plans, we can parse the text plan, or
+    // switch to `EXPLAIN (FORMAT JSON)::TEXT` once we confirm the cast works.
+    let explain_sql = format!("EXPLAIN (VERBOSE, FORMAT TEXT) {}", sql_query);
     let params = builder.params;
 
     let plan_json = Spi::connect(|client| {
-        let mut plan_rows = Vec::new();
+        // Must prepare first so bound params are typed correctly. `client.select(&str, ..., params)`
+        // works for literal queries, but EXPLAIN wrappers around parameterised SQL need the OID list
+        // attached to a prepared plan or SPI returns an empty result set and the JSON parse below
+        // fails with "EOF while parsing a value at line 1 column 0".
+        let arg_types: Vec<PgOid> =
+            params.iter().map(|p| PgOid::from_untagged(p.oid())).collect();
+        let prepared = client.prepare(&explain_sql, &arg_types)?;
 
-        for row in client.select(&explain_sql, None, &params)? {
-            if let Ok(Some(plan_str)) = row.get::<String>(1) {
-                plan_rows.push(plan_str);
+        let mut plan_rows: Vec<String> = Vec::new();
+        for row in client.select(&prepared, None, &params)? {
+            if let Ok(Some(s)) = row.get::<String>(1) {
+                plan_rows.push(s);
             }
         }
 
-        // EXPLAIN returns multiple rows, concatenate them
-        let full_plan = plan_rows.join("\n");
-        let parsed_plan: serde_json::Value = serde_json::from_str(&full_plan)?;
+        if plan_rows.is_empty() {
+            return Err::<_, Box<dyn std::error::Error + Send + Sync>>(
+                format!(
+                    "EXPLAIN returned no rows. Generated SQL was:\n{}",
+                    sql_query
+                )
+                .into(),
+            );
+        }
 
-        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(json!({
+        // Text-format EXPLAIN is one plan-line per row; join them.
+        let plan_text = plan_rows.join("\n");
+
+        Ok(json!({
             "datalog_query": query,
             "generated_sql": sql_query,
-            "explain_plan": parsed_plan
+            "explain_plan": plan_text
         }))
     })?;
 
@@ -3170,15 +3191,23 @@ fn pred_arg_to_sql(
             let var_name = format!("{}", v);
             if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
                 if *col == "v" {
-                    // For value comparisons, use COALESCE across typed columns
-                    // This produces the native typed value for correct comparisons
+                    // For value comparisons, use COALESCE across typed columns to
+                    // produce the native typed value.
+                    //
+                    // Subtle: every arm must evaluate to NULL when its column is
+                    // NULL, so COALESCE can actually skip it. The older code
+                    // used `CASE WHEN v_bool THEN 1 ELSE 0 END`, which returns
+                    // 0 for a NULL `v_bool` — that poisons COALESCE and makes
+                    // every `?a > 0` style predicate compare against 0 instead
+                    // of the real value. Keep the IS NULL guards below.
                     Ok(format!(
                         "COALESCE({alias}.v_ref::NUMERIC, \
-                         CASE WHEN {alias}.v_bool THEN 1 ELSE 0 END::NUMERIC, \
+                         CASE WHEN {alias}.v_bool IS NULL THEN NULL \
+                              WHEN {alias}.v_bool THEN 1::NUMERIC \
+                              ELSE 0::NUMERIC END, \
                          {alias}.v_long::NUMERIC, \
                          {alias}.v_double::NUMERIC, \
-                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC, \
-                         NULL)"
+                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC)"
                     ))
                 } else {
                     Ok(format!("{}.{}", alias, col))
@@ -3441,14 +3470,17 @@ fn pred_arg_to_sql_for_rule(
             let var_name = format!("{}", v);
             if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
                 if *col == "v" {
-                    // For value comparisons in rules, use COALESCE across typed columns
+                    // For value comparisons in rules, use COALESCE across typed
+                    // columns. Each arm must yield NULL when its column is NULL
+                    // (see build_predicate_clause for the full explanation).
                     Ok(format!(
                         "COALESCE({alias}.v_ref::NUMERIC, \
-                         CASE WHEN {alias}.v_bool THEN 1 ELSE 0 END::NUMERIC, \
+                         CASE WHEN {alias}.v_bool IS NULL THEN NULL \
+                              WHEN {alias}.v_bool THEN 1::NUMERIC \
+                              ELSE 0::NUMERIC END, \
                          {alias}.v_long::NUMERIC, \
                          {alias}.v_double::NUMERIC, \
-                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC, \
-                         NULL)"
+                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC)"
                     ))
                 } else if *col == "computed" {
                     // This is from a recursive rule invocation

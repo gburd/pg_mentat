@@ -1,0 +1,103 @@
+# .github/workflows/installcheck.yml
+#
+# Fast-feedback workflow: the single most important signal for any commit.
+# Runs on EVERY push and pull-request and must stay under 5 minutes.
+#
+# It only verifies:
+#   1. `cargo build -p pg_mentat` succeeds (catches duplicate-symbol link
+#      errors and Rust/PG type mismatches like i16 vs i32).
+#   2. `cargo pgrx install` succeeds (catches generator-level problems).
+#   3. `CREATE EXTENSION pg_mentat` runs end-to-end and the smoke-test SQL
+#      script passes (catches install-time SQL errors such as ROUND(float,int)
+#      or schema/bootstrap drift).
+#
+# The heavier `ci.yml` (clippy with -D warnings, cargo pgrx test, etc.) runs
+# on pull-requests only.
+
+name: installcheck
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: installcheck-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUSTFLAGS: "-D warnings=off"
+  PGRX_VERSION: "0.17.0"
+
+jobs:
+  installcheck:
+    name: CREATE EXTENSION + smoke.sql (PG16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # PG16 client + server packages (we use the system postgres here, not a
+      # service container, because `cargo pgrx install` needs write access to
+      # PG_SHAREDIR / PG_LIBDIR).
+      - name: Install PostgreSQL 16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-16 postgresql-server-dev-16 postgresql-client-16 \
+              libpq-dev build-essential pkg-config libclang-dev clang
+          sudo systemctl enable --now postgresql
+
+      - name: Configure postgres superuser + trust auth
+        run: |
+          sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+          PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file;")
+          echo "local all all trust"           | sudo tee -a "$PG_HBA" >/dev/null
+          echo "host  all all 127.0.0.1/32 trust" | sudo tee -a "$PG_HBA" >/dev/null
+          sudo systemctl restart postgresql
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.88.0"
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: installcheck-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            installcheck-${{ runner.os }}-cargo-
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: |
+          cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init (use system PG16)
+        run: |
+          cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo build (pg16)
+        working-directory: pg_mentat
+        run: cargo build --no-default-features --features pg16
+
+      - name: cargo pgrx install (pg16)
+        working-directory: pg_mentat
+        run: |
+          sudo -E env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" \
+              cargo pgrx install --no-default-features --features pg16 \
+                --pg-config "$(which pg_config)"
+
+      - name: Run smoke.sql
+        env:
+          CI: "1"
+          PGHOST: "localhost"
+          PGPORT: "5432"
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+        run: bash scripts/smoke.sh
