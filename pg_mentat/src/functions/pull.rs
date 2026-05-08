@@ -151,6 +151,10 @@ struct SchemaAttrInfo {
 /// Loaded with a single SPI query at the start of a pull call.
 struct SchemaCache {
     by_ident: HashMap<String, SchemaAttrInfo>,
+    /// Reverse lookup: entid -> ident. Used to render ref values as their
+    /// `:db/ident` keyword (e.g. `:db.type/ref`) instead of a raw entid,
+    /// matching Datomic's `d/entity` display.
+    ident_by_entid: HashMap<i64, String>,
 }
 
 impl SchemaCache {
@@ -162,6 +166,7 @@ impl SchemaCache {
             db_schema
         );
         let mut by_ident = HashMap::new();
+        let mut ident_by_entid = HashMap::new();
         for row in client.select(&query, None, &[])? {
             let entid: i64 = row.get(1)?.ok_or("Missing entid in schema")?;
             let ident: String = row.get(2)?.ok_or("Missing ident in schema")?;
@@ -169,10 +174,11 @@ impl SchemaCache {
             let is_component: bool = row.get(4)?.unwrap_or(false);
             by_ident.insert(
                 ident.clone(),
-                SchemaAttrInfo { entid, ident, cardinality, is_component },
+                SchemaAttrInfo { entid, ident: ident.clone(), cardinality, is_component },
             );
+            ident_by_entid.insert(entid, ident);
         }
-        Ok(SchemaCache { by_ident })
+        Ok(SchemaCache { by_ident, ident_by_entid })
     }
 
     fn get(&self, ident: &str) -> Option<&SchemaAttrInfo> {
@@ -184,6 +190,13 @@ impl SchemaCache {
             .get(ident)
             .map(|a| a.cardinality.clone())
             .unwrap_or_else(|| "one".to_string())
+    }
+
+    /// Resolve a ref-target entid to its `:db/ident` keyword, if the target
+    /// is a named schema entity. Returns `None` for refs to user-level entities
+    /// (which should render as `{":db/id": N}`).
+    fn ident_for_entid(&self, entid: i64) -> Option<&str> {
+        self.ident_by_entid.get(&entid).map(String::as_str)
     }
 }
 
@@ -1401,8 +1414,15 @@ fn pull_wildcard(
                 let value = serde_json::Value::Object(sub_map);
                 insert_value(result_map, &datom.ident, value, &datom.cardinality);
             } else {
-                let ref_obj = json!({":db/id": ref_id});
-                insert_value(result_map, &datom.ident, ref_obj, &datom.cardinality);
+                // If the ref target is a named schema entity (has `:db/ident`),
+                // render its keyword instead of the raw entid. Matches Datomic's
+                // `d/entity` display and makes `:db/valueType` look like
+                // `:db.type/ref` rather than the integer `70`.
+                let value = match schema.ident_for_entid(ref_id) {
+                    Some(ident) => json!(ident),
+                    None => json!({":db/id": ref_id}),
+                };
+                insert_value(result_map, &datom.ident, value, &datom.cardinality);
             }
         } else {
             insert_value(result_map, &datom.ident, datom.decoded.clone(), &datom.cardinality);

@@ -58,6 +58,32 @@ pub fn entity(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::
     })?;
 
     Spi::connect(|client| {
+        // Bulk-load a ref-target -> :db/ident map in a single query. This is
+        // what lets us render `:db/valueType 70` as `:db.type/ref` instead of
+        // a raw entid, matching Datomic's `d/entity` lazy-ident behaviour.
+        // One query covers every ref-typed attribute on this entity without
+        // N+1 lookups.
+        let mut ref_idents: std::collections::HashMap<i64, String> =
+            std::collections::HashMap::new();
+        let ident_query = "\
+            SELECT s.entid, s.ident \
+            FROM mentat.schema s \
+            WHERE s.entid IN ( \
+                SELECT DISTINCT d.v \
+                FROM mentat.datoms_ref_new d \
+                WHERE d.store_id = $1 AND d.e = $2 AND d.added = true \
+            )";
+        for row in client.select(
+            ident_query,
+            None,
+            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id)],
+        )? {
+            let entid: i64 = row.get(1)?.unwrap_or(0);
+            if let Ok(Some(ident)) = row.get::<String>(2) {
+                ref_idents.insert(entid, ident);
+            }
+        }
+
         // Query all type-specific tables with UNION ALL, joined to schema for ident
         let query = "
             SELECT s.ident, 0::SMALLINT AS type_tag, d.v::TEXT AS value
@@ -123,8 +149,20 @@ pub fn entity(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::
                 message: "Missing value column in entity query".to_string(),
             })?;
 
-            // Decode value from the text representation based on type_tag
-            let decoded_value = decode_text_value(v_type_tag, &value_str)?;
+            // Decode value from the text representation based on type_tag.
+            // Refs resolve to their `:db/ident` keyword if the target has one;
+            // otherwise they fall back to the raw entid (wrapped as a lookup-ref).
+            let decoded_value = if v_type_tag == type_tag::REF {
+                let ref_id: i64 = value_str.parse().map_err(|_| MentatError::DataCorruption {
+                    message: format!("Invalid ref value: {}", value_str),
+                })?;
+                match ref_idents.get(&ref_id) {
+                    Some(ident) => json!(ident),
+                    None => json!({":db/id": ref_id}),
+                }
+            } else {
+                decode_text_value(v_type_tag, &value_str)?
+            };
 
             // For cardinality-many attributes, we need to accumulate values
             if let Some(existing) = entity_map.get(&ident) {
