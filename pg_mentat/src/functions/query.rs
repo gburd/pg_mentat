@@ -216,6 +216,10 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i32, Box<dyn std::error::Erro
 ///
 /// `store_id_param` is the $N placeholder for the store_id parameter.
 fn build_datoms_union_subquery(store_id_param: &str) -> String {
+    // Cast every per-arm tag literal to SMALLINT so the UNION result column
+    // is SMALLINT. Casting only the first arm is not enough — Postgres resolves
+    // the UNION type across all arms and an untyped `1` / `2` / ... promotes
+    // the common type to INTEGER, then row.get::<i16>() blows up at runtime.
     format!(
         "(SELECT e, a, {ref_tag}::SMALLINT AS value_type_tag, \
                 v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
@@ -224,35 +228,35 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
                 NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, added \
          FROM mentat.datoms_ref_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {bool_tag}, \
+         SELECT e, a, {bool_tag}::SMALLINT, \
                 NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
          FROM mentat.datoms_boolean_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {long_tag}, \
+         SELECT e, a, {long_tag}::SMALLINT, \
                 NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
          FROM mentat.datoms_long_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {double_tag}, \
+         SELECT e, a, {double_tag}::SMALLINT, \
                 NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, added \
          FROM mentat.datoms_double_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {instant_tag}, \
+         SELECT e, a, {instant_tag}::SMALLINT, \
                 NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, added \
          FROM mentat.datoms_instant_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {str_tag}, \
+         SELECT e, a, {str_tag}::SMALLINT, \
                 NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, added \
          FROM mentat.datoms_text_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {kw_tag}, \
+         SELECT e, a, {kw_tag}::SMALLINT, \
                 NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, added \
          FROM mentat.datoms_keyword_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {uuid_tag}, \
+         SELECT e, a, {uuid_tag}::SMALLINT, \
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, added \
          FROM mentat.datoms_uuid_new WHERE store_id = {sid} \
          UNION ALL \
-         SELECT e, a, {bytes_tag}, \
+         SELECT e, a, {bytes_tag}::SMALLINT, \
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, added \
          FROM mentat.datoms_bytes_new WHERE store_id = {sid})",
         sid = store_id_param,

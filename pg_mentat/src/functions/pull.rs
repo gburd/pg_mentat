@@ -60,6 +60,12 @@ fn build_union_all_datoms_query(
     where_clause: &str,
     order_clause: &str,
 ) -> String {
+    // Every arm's tag must be cast to ::SMALLINT. Casting only the first arm
+    // does NOT force the UNION column type: Postgres resolves the common type
+    // across ALL arms, and untyped integer literals elsewhere promote the
+    // result to INTEGER. That produced 'integer (Oid 23) is not compatible
+    // with Rust type i16' at row.get::<i16>() time in pull_wildcard and
+    // friends. Cast per-arm, defensively.
     format!(
         "SELECT * FROM (\
             SELECT {pfx}{ref_tag}::SMALLINT AS value_type_tag, \
@@ -70,44 +76,44 @@ fn build_union_all_datoms_query(
             FROM mentat.datoms_ref_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{bool_tag}, \
+            SELECT {pfx}{bool_tag}::SMALLINT, \
                    NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL \
             FROM mentat.datoms_boolean_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{long_tag}, \
+            SELECT {pfx}{long_tag}::SMALLINT, \
                    NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL \
             FROM mentat.datoms_long_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{double_tag}, \
+            SELECT {pfx}{double_tag}::SMALLINT, \
                    NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL \
             FROM mentat.datoms_double_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{instant_tag}, \
+            SELECT {pfx}{instant_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, \
                    EXTRACT(EPOCH FROM v)::BIGINT * 1000000 + \
                    EXTRACT(MICROSECOND FROM v)::BIGINT % 1000000, NULL, NULL \
             FROM mentat.datoms_instant_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{text_tag}, \
+            SELECT {pfx}{text_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL \
             FROM mentat.datoms_text_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{kw_tag}, \
+            SELECT {pfx}{kw_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL \
             FROM mentat.datoms_keyword_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{uuid_tag}, \
+            SELECT {pfx}{uuid_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, v::TEXT, NULL \
             FROM mentat.datoms_uuid_new \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
-            SELECT {pfx}{bytes_tag}, \
+            SELECT {pfx}{bytes_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v \
             FROM mentat.datoms_bytes_new \
             WHERE store_id = {sid} AND {whr} \
