@@ -217,7 +217,7 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i32, Box<dyn std::error::Erro
 /// `store_id_param` is the $N placeholder for the store_id parameter.
 fn build_datoms_union_subquery(store_id_param: &str) -> String {
     format!(
-        "(SELECT e, a, {ref_tag} AS value_type_tag, \
+        "(SELECT e, a, {ref_tag}::SMALLINT AS value_type_tag, \
                 v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
                 NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                 NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant, \
@@ -434,7 +434,7 @@ fn build_typed_datoms_from_fragment(
     let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
 
     format!(
-        "(SELECT e, a, {tag} AS value_type_tag, \
+        "(SELECT e, a, {tag}::SMALLINT AS value_type_tag, \
                 {v_ref} AS v_ref, {v_bool} AS v_bool, {v_long} AS v_long, \
                 {v_double} AS v_double, {v_text} AS v_text, \
                 {v_keyword} AS v_keyword, {v_instant} AS v_instant, \

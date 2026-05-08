@@ -17,7 +17,7 @@ SELECT
     CASE
         WHEN t.n_live_tup + t.n_dead_tup > 0 THEN
             ROUND(
-                (t.n_dead_tup::FLOAT / (t.n_live_tup + t.n_dead_tup)) * 100,
+                (t.n_dead_tup::NUMERIC / (t.n_live_tup + t.n_dead_tup)) * 100,
                 1
             )
         ELSE 0
@@ -40,7 +40,7 @@ SELECT
     CASE
         WHEN n_live_tup + n_dead_tup > 0 THEN
             ROUND(
-                (n_dead_tup::FLOAT / (n_live_tup + n_dead_tup)) * 100,
+                (n_dead_tup::NUMERIC / (n_live_tup + n_dead_tup)) * 100,
                 1
             )
         ELSE 0
@@ -59,34 +59,30 @@ FROM pg_stat_user_tables
 WHERE schemaname = 'mentat'
 ORDER BY pg_total_relation_size(relid) DESC;
 
--- mentat.store_overview: Per-store datom counts by value type
--- Shows the number of active datoms per store, broken down by type.
--- Useful for monitoring data distribution and detecting type skew.
+-- mentat.store_overview: Per-store datom counts by value type.
+--
+-- Aggregates live datoms grouped by `value_type_tag` from the current
+-- (wide-row) `mentat.datoms` table. This view will be rewritten when the
+-- narrow-leaf-partition storage redesign lands (see docs/STORAGE_REDESIGN.md).
 CREATE OR REPLACE VIEW mentat.store_overview AS
+WITH counts AS (
+    SELECT value_type_tag, count(*) AS cnt
+    FROM mentat.datoms
+    WHERE added = TRUE
+    GROUP BY value_type_tag
+)
 SELECT
     s.store_name,
     s.store_id,
-    COALESCE(r.cnt, 0) AS ref_datoms,
-    COALESCE(b.cnt, 0) AS boolean_datoms,
-    COALESCE(l.cnt, 0) AS long_datoms,
-    COALESCE(d.cnt, 0) AS double_datoms,
-    COALESCE(t.cnt, 0) AS text_datoms,
-    COALESCE(k.cnt, 0) AS keyword_datoms,
-    COALESCE(i.cnt, 0) AS instant_datoms,
-    COALESCE(u.cnt, 0) AS uuid_datoms,
-    COALESCE(by.cnt, 0) AS bytes_datoms,
-    COALESCE(r.cnt, 0) + COALESCE(b.cnt, 0) + COALESCE(l.cnt, 0)
-        + COALESCE(d.cnt, 0) + COALESCE(t.cnt, 0) + COALESCE(k.cnt, 0)
-        + COALESCE(i.cnt, 0) + COALESCE(u.cnt, 0) + COALESCE(by.cnt, 0)
-        AS total_datoms
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 0), 0)::BIGINT  AS ref_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 1), 0)::BIGINT  AS boolean_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 2), 0)::BIGINT  AS long_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 3), 0)::BIGINT  AS double_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 4), 0)::BIGINT  AS instant_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 7), 0)::BIGINT  AS text_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 8), 0)::BIGINT  AS keyword_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 10), 0)::BIGINT AS uuid_datoms,
+    COALESCE((SELECT cnt FROM counts WHERE value_type_tag = 11), 0)::BIGINT AS bytes_datoms,
+    COALESCE((SELECT SUM(cnt) FROM counts), 0)::BIGINT                      AS total_datoms
 FROM mentat.stores s
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_ref_new WHERE store_id = s.store_id AND added = true) r ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_boolean_new WHERE store_id = s.store_id AND added = true) b ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_long_new WHERE store_id = s.store_id AND added = true) l ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_double_new WHERE store_id = s.store_id AND added = true) d ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_text_new WHERE store_id = s.store_id AND added = true) t ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_keyword_new WHERE store_id = s.store_id AND added = true) k ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_instant_new WHERE store_id = s.store_id AND added = true) i ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_uuid_new WHERE store_id = s.store_id AND added = true) u ON true
-LEFT JOIN LATERAL (SELECT count(*) AS cnt FROM mentat.datoms_bytes_new WHERE store_id = s.store_id AND added = true) by ON true
 ORDER BY s.store_name;

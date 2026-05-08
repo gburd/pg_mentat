@@ -107,7 +107,7 @@ fn all_datoms_union_sql(store_id_expr: &str, extra_where: &str) -> String {
     legs.iter()
         .map(|(table, tag, v_expr)| {
             format!(
-                "SELECT e, a, {tag} AS value_type_tag, {v_expr} AS v_text, tx \
+                "SELECT e, a, {tag}::SMALLINT AS value_type_tag, {v_expr} AS v_text, tx \
                  FROM {table} \
                  WHERE store_id = {sid} AND added = true{extra}",
                 tag = tag,

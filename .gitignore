@@ -175,3 +175,4 @@ benchmarks/results/*/
 __pycache__/
 *.pyc
 *.pyo
+.memelord/

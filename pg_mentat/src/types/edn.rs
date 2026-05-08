@@ -1,17 +1,24 @@
-use pgrx::prelude::*;
+//! EDN value validation helpers.
+//!
+//! The `Edn` struct is defined in `lib.rs` with `#[derive(PostgresType)]`.
+//! pgrx auto-generates `edn_in` / `edn_out` / `edn_send` / `edn_recv` from
+//! the struct's `Serialize` / `Deserialize` impls — do NOT declare them
+//! manually here (duplicate-symbol link error).
+//!
+//! Validation (size, depth) runs inside the serde `deserialize_edn` hook
+//! in `lib.rs`, which calls [`Edn::validate`] on every inbound value.
 
-// Edn is now defined in the mentat schema module in lib.rs
-// Import it here for use in impl blocks and functions
+// Edn is defined in the mentat schema module in lib.rs
 pub use crate::mentat::Edn;
 
 /// Maximum nesting depth for EDN structures to prevent stack overflow
-const MAX_EDN_NESTING: usize = 100;
+pub(crate) const MAX_EDN_NESTING: usize = 100;
 
 /// Maximum collection size to prevent memory exhaustion
-const MAX_COLLECTION_SIZE: usize = 1_000_000;
+pub(crate) const MAX_COLLECTION_SIZE: usize = 1_000_000;
 
 /// Maximum input size (10MB)
-const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_INPUT_SIZE: usize = 10 * 1024 * 1024;
 
 impl Edn {
     /// Create a new Edn from an EDN Value
@@ -133,49 +140,24 @@ impl Edn {
     }
 }
 
-/// Input function: Parse EDN text into Edn
-#[pg_extern(immutable, parallel_safe)]
-fn edn_in(input: &str) -> Result<Edn, Box<dyn std::error::Error>> {
-    // Validate input size
+/// Parse + validate an EDN text blob.
+///
+/// Used by the serde `deserialize_edn` hook in `lib.rs`. Keep this as the
+/// single entry point for parse-with-validation so the same limits apply
+/// to text input, binary input, and serde-deserialized input.
+pub(crate) fn parse_and_validate(input: &str) -> Result<Edn, String> {
     if input.len() > MAX_INPUT_SIZE {
-        return Err("EDN input too large (max 10MB)".into());
+        return Err(format!(
+            "EDN input too large ({} bytes, max {})",
+            input.len(),
+            MAX_INPUT_SIZE
+        ));
     }
-
-    // Parse EDN text using mentat's parser
-    let value_and_span = edn::parse::value(input)?;
-
-    // Extract the value (discard span information)
+    let value_and_span = edn::parse::value(input).map_err(|e| format!("EDN parse error: {e}"))?;
     let value = value_and_span.without_spans();
-
-    // Create Edn and validate
     let edn_value = Edn::new(value);
-    edn_value
-        .validate()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
+    edn_value.validate()?;
     Ok(edn_value)
-}
-
-/// Output function: Convert Edn to EDN text
-#[pg_extern(immutable, parallel_safe)]
-fn edn_out(value: Edn) -> String {
-    format!("{}", value.inner)
-}
-
-/// Binary send function: Serialize Edn for binary transmission
-/// Currently uses EDN text format. TODO: Implement CBOR serialization
-#[pg_extern(immutable, parallel_safe)]
-fn edn_send(value: Edn) -> Vec<u8> {
-    let text = format!("{}", value.inner);
-    text.into_bytes()
-}
-
-/// Binary receive function: Deserialize Edn from binary transmission
-/// Currently uses EDN text format. TODO: Implement CBOR deserialization
-#[pg_extern(immutable, parallel_safe)]
-fn edn_recv(data: Vec<u8>) -> Result<Edn, Box<dyn std::error::Error>> {
-    let text = String::from_utf8(data)?;
-    edn_in(&text)
 }
 
 #[cfg(test)]
@@ -183,8 +165,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_edn_value_validation() {
-        // Test nesting depth
+    fn test_edn_value_validation_nesting() {
         let mut deep_nested = String::from("[");
         for _ in 0..MAX_EDN_NESTING + 1 {
             deep_nested.push_str("[");
@@ -194,15 +175,20 @@ mod tests {
         }
         deep_nested.push_str("]");
 
-        let result = edn_in(&deep_nested);
-        assert!(result.is_err());
+        let result = parse_and_validate(&deep_nested);
+        assert!(result.is_err(), "expected nesting-depth error");
     }
 
     #[test]
-    fn test_edn_value_size() {
-        // Test input size limit
+    fn test_edn_value_size_limit() {
         let large_input = "a".repeat(MAX_INPUT_SIZE + 1);
-        let result = edn_in(&large_input);
-        assert!(result.is_err());
+        let result = parse_and_validate(&large_input);
+        assert!(result.is_err(), "expected size-limit error");
+    }
+
+    #[test]
+    fn test_edn_value_accepts_small_input() {
+        let result = parse_and_validate("{:a 1 :b [2 3 4]}");
+        assert!(result.is_ok());
     }
 }

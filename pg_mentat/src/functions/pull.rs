@@ -62,7 +62,7 @@ fn build_union_all_datoms_query(
 ) -> String {
     format!(
         "SELECT * FROM (\
-            SELECT {pfx}{ref_tag} AS value_type_tag, \
+            SELECT {pfx}{ref_tag}::SMALLINT AS value_type_tag, \
                    v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
                    NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                    NULL::TEXT AS v_keyword, \

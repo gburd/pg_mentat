@@ -117,6 +117,22 @@ fn keyword_to_unique(kw: &edn::symbols::Keyword) -> Option<&'static str> {
 }
 
 /// Helper to describe an EDN value type for error messages.
+/// Map a PostgreSQL schema name to a store name.
+///
+/// `mentat` (the default schema) → `default`. Any other schema is expected
+/// to be named `mentat_<store_name>`; the prefix is stripped. If the schema
+/// doesn't follow that convention we fall through to `default` — the worst
+/// case is over-invalidation, which is correct if not optimal.
+fn schema_to_store_name(schema: &str) -> &str {
+    if schema == "mentat" {
+        "default"
+    } else if let Some(name) = schema.strip_prefix("mentat_") {
+        name
+    } else {
+        "default"
+    }
+}
+
 fn value_type_name(value: &edn::Value) -> &'static str {
     match value {
         edn::Value::Nil => "nil",
@@ -649,7 +665,20 @@ fn execute_transaction_body(
         attempt += 1;
 
         match execute_transaction_inner(schema, edn_tx) {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                // Invalidate the per-store schema cache after every successful
+                // transaction. Transactions often assert new idents / value-types
+                // / cardinality rows, and stale cache entries produce
+                // `:db.error/attribute-not-found` on the very next call.
+                //
+                // This is coarse — we invalidate even for pure data writes that
+                // don't change the meta-schema. That's the correct default
+                // until we track whether a tx touched `mentat.schema` /
+                // `mentat.idents` and invalidate only then (tracked in ROADMAP).
+                let store_name = schema_to_store_name(schema);
+                crate::cache::invalidate_store_cache(store_name);
+                return Ok(result);
+            }
             Err(err) => {
                 if is_serialization_failure(err.as_ref()) && attempt < MAX_SERIALIZATION_RETRIES {
                     // Exponential backoff: 10ms, 20ms, 40ms, 80ms, 160ms
@@ -772,7 +801,7 @@ fn execute_transaction_inner(
                 // Resolve entity for stable tempid allocation.
                 // Store the allocated ID so Pass 2 reuses it.
                 let e = if let Some(id_val) =
-                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
+                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::namespaced("db", "id")))
                 {
                     resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else {
@@ -790,7 +819,7 @@ fn execute_transaction_inner(
 
                 for (attr_key, attr_value) in map {
                     if let edn::Value::Keyword(kw) = attr_key {
-                        if kw.name() == "db/id" {
+                        if is_db_id(kw) {
                             continue;
                         }
                     }
@@ -906,7 +935,7 @@ fn execute_transaction_inner(
                 // Reuse entity ID from Pass 1 if one was pre-allocated,
                 // otherwise allocate a new one (for non-schema map entities).
                 let e = if let Some(id_val) =
-                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::plain("db/id")))
+                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::namespaced("db", "id")))
                 {
                     resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else if let Some(&pre_allocated) = map_entity_ids.get(&entity_idx) {
@@ -924,7 +953,7 @@ fn execute_transaction_inner(
 
                 for (attr_key, attr_value) in map {
                     if let edn::Value::Keyword(kw) = attr_key {
-                        if kw.name() == "db/id" {
+                        if is_db_id(kw) {
                             continue;
                         }
                     }
@@ -1244,6 +1273,20 @@ fn insert_datoms(
 /// When an assertion targets a built-in schema attribute (:db/ident, :db/valueType, etc.),
 /// record the value in the SchemaBuilder for that entity so we can install the attribute
 /// definition before inserting datoms.
+/// Returns true if `kw` is the `:db/id` pseudo-attribute used to bind a
+/// tempid to an entity inside a map-form entity.
+///
+/// EDN parses `:db/id` as `Keyword::namespaced("db", "id")`. Older code in
+/// this file compared `kw.name() == "db/id"` and looked up the map with
+/// `Keyword::plain("db/id")` — both of those silently fail for the parsed
+/// keyword (namespace="db", name="id"), so `:db/id` was being treated as
+/// an unknown user attribute. That broke every `{:db/id ... :foo 1}`
+/// map-form transaction. Always go through this helper.
+#[inline]
+fn is_db_id(kw: &edn::symbols::Keyword) -> bool {
+    kw.namespace() == Some("db") && kw.name() == "id"
+}
+
 fn collect_schema_assertion(
     entity_id: i64,
     attr_entid: i64,
@@ -1763,7 +1806,7 @@ fn find_current_value_for_ea(
         SELECT 3, v::text, tx FROM mentat.datoms_double_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 4, EXTRACT(EPOCH FROM v)::bigint * 1000000 AS value, tx FROM mentat.datoms_instant_new
+        SELECT 4, (EXTRACT(EPOCH FROM v)::bigint * 1000000)::text AS value, tx FROM mentat.datoms_instant_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
         SELECT 7, v, tx FROM mentat.datoms_text_new

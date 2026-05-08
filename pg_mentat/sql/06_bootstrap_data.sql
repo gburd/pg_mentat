@@ -7,7 +7,8 @@
 INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
     ('db.part/db', 0, 10000, 100, FALSE),
     ('db.part/user', 10000, 1000000, 10000, FALSE),
-    ('db.part/tx', 1000000, 2000000, 1000001, FALSE);
+    ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+ON CONFLICT (name) DO NOTHING;
 
 -- Core schema attributes
 -- These correspond to mentat's built-in :db/* attributes
@@ -53,12 +54,14 @@ INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constra
     -- Partition entities
     (90, ':db.part/db', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
     (91, ':db.part/user', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
-    (92, ':db.part/tx', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE);
+    (92, ':db.part/tx', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE)
+ON CONFLICT (entid) DO NOTHING;
 
 -- Populate idents cache with core attributes
 INSERT INTO mentat.idents (ident, entid)
 SELECT ident, entid FROM mentat.schema
-WHERE entid < 100;
+WHERE entid < 100
+ON CONFLICT (ident) DO NOTHING;
 
 -- Advance sequences past bootstrap-allocated IDs.
 -- db.part/db bootstrap uses entids up to 92, so advance to 100.

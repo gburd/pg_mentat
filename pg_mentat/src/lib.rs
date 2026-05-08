@@ -15,7 +15,17 @@ pub extern "C-unwind" fn _PG_init() {
     monitoring::register_monitoring_gucs();
 }
 
-// Initialize the mentat schema during CREATE EXTENSION
+// Initialize the mentat schema during CREATE EXTENSION.
+//
+// The `#[pg_schema] mod mentat` further down in this file also emits
+// `CREATE SCHEMA IF NOT EXISTS mentat`, but pgrx orders it by dependency
+// graph and it lands AFTER this block — so we must create the schema
+// ourselves first. Using IF NOT EXISTS keeps it idempotent with the
+// later pgrx-generated statement.
+//
+// Important: do NOT set `schema = mentat` in pg_mentat.control alongside
+// this. That double-create is what produces
+// `ERROR: schema mentat is not a member of extension "pg_mentat"`.
 extension_sql!(
     r#"
     CREATE SCHEMA IF NOT EXISTS mentat;
@@ -111,6 +121,46 @@ extension_sql!(
         tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Store metadata: tracks named stores and their backing schemas.
+    -- The `default` row is required by functions/{store_management,entity,
+    -- time_travel,transact,virtual_tables}.rs which look up `store_id` by name.
+    --
+    -- NOTE: store_id is INT (SERIAL) rather than BIGINT because the Rust
+    -- code pervasively types it as i32. Widening to BIGINT requires a
+    -- cross-cutting i32→i64 change in pull.rs/transact.rs/query.rs/etc.
+    -- Tracked in docs/ROADMAP.md ("Widen store_id to i64").
+    CREATE TABLE IF NOT EXISTS mentat.stores (
+        store_id    SERIAL PRIMARY KEY,
+        store_name  TEXT UNIQUE NOT NULL,
+        schema_name TEXT UNIQUE NOT NULL,
+        description TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    INSERT INTO mentat.stores (store_id, store_name, schema_name, description)
+    VALUES (0, 'default', 'mentat', 'Default mentat store')
+    ON CONFLICT (store_name) DO NOTHING;
+
+    -- Subscription metadata (LISTEN/NOTIFY plumbing, used by functions/subscriptions.rs).
+    CREATE TABLE IF NOT EXISTS mentat.subscriptions (
+        id          BIGSERIAL PRIMARY KEY,
+        store_name  TEXT NOT NULL,
+        name        TEXT NOT NULL,
+        query       TEXT NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (store_name, name)
+    );
+
+    -- Materialized view metadata (used by functions/materialized_views.rs).
+    CREATE TABLE IF NOT EXISTS mentat.materialized_views (
+        id             BIGSERIAL PRIMARY KEY,
+        store_name     TEXT NOT NULL,
+        view_name      TEXT NOT NULL,
+        datalog_query  TEXT NOT NULL,
+        refresh_policy TEXT NOT NULL DEFAULT 'manual',
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (store_name, view_name)
+    );
+
     -- Core datom indexes (reduced from 22 to 8 for write throughput)
     -- EAVT: Entity-centric lookups (partial on added=TRUE)
     CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
@@ -196,6 +246,29 @@ extension_sql!(
 "#,
     name = "bootstrap_schema",
 );
+
+// Narrow per-type storage tables + dual-write trigger from the wide-row
+// mentat.datoms. Must run after the wide-row table exists (bootstrap_schema)
+// and before any data is inserted (bootstrap_data), so the trigger mirrors
+// even the very first bootstrap datoms into the narrow tables.
+extension_sql_file!(
+    "../sql/10_narrow_storage.sql",
+    name = "narrow_storage",
+    requires = ["bootstrap_schema"],
+);
+
+// Load the canonical bootstrap data (meta-attribute entids 10, 11, 12, 50, 70+)
+// from sql/06_bootstrap_data.sql. These entids MUST match the constants in
+// functions/transact.rs `mod bootstrap_entids` (DB_IDENT=10, DB_VALUE_TYPE=11,
+// DB_CARDINALITY=12, DB_TX_INSTANT=50). Do NOT change either side without
+// updating the other — mismatched entids silently break every schema-defining
+// mentat_transact call.
+extension_sql_file!(
+    "../sql/06_bootstrap_data.sql",
+    name = "bootstrap_data",
+    requires = ["bootstrap_schema", "narrow_storage"],
+);
+
 
 // Datom helper functions: convenience PL/pgSQL wrappers for common query patterns
 extension_sql!(
@@ -791,9 +864,11 @@ mod mentat {
     where
         D: Deserializer<'de>,
     {
+        use crate::types::edn as edn_type;
         let edn_text = String::deserialize(deserializer)?;
-        let value_and_span = edn::parse::value(&edn_text).map_err(serde::de::Error::custom)?;
-        Ok(value_and_span.without_spans())
+        // Single, shared parse+validate path (size, nesting depth, collection size).
+        let edn = edn_type::parse_and_validate(&edn_text).map_err(serde::de::Error::custom)?;
+        Ok(edn.into_inner())
     }
 
     /// Initialize the pg_mentat extension

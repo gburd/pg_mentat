@@ -1,7 +1,11 @@
-# pg_mentat extension
+# pg_mentat extension control file.
+#
+# The `mentat` schema is created by the extension's own SQL (generated from
+# `#[pg_schema] mod mentat` in src/lib.rs). Do NOT set `schema = mentat`
+# here — it collides with the generated CREATE SCHEMA and produces
+# `ERROR: schema mentat is not a member of extension "pg_mentat"`.
 comment = 'Datomic-compatible Datalog query engine for PostgreSQL'
 default_version = '1.0.0'
 module_pathname = '$libdir/pg_mentat'
 relocatable = false
-schema = mentat
 superuser = false
