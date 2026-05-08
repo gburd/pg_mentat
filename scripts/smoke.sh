@@ -71,8 +71,13 @@ else
     echo "smoke: local mode (PGHOST=${PGHOST} PGPORT=${PGPORT})"
 
     # Install the extension into the pgrx cluster. Requires pgrx already init'd.
+    #
+    # Honour a caller-provided CARGO_HOME (workaround: the nix devshell sets
+    # CARGO_HOME to a read-only store path, which breaks `cargo pgrx install`;
+    # local contributors typically override to $HOME/.cargo_pg_mentat).
     (
         cd "${REPO_ROOT}/pg_mentat"
+        CARGO_HOME="${CARGO_HOME:-${HOME}/.cargo_pg_mentat}" \
         cargo pgrx install \
             --no-default-features --features "${PG_VERSION}" \
             --pg-config "${PG_CONFIG}"
