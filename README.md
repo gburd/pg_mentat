@@ -173,7 +173,7 @@ SELECT mentat_query('
 ', '{"employee-name": "Dave"}');
 ```
 
-See [EXAMPLES.md](EXAMPLES.md) for comprehensive usage examples including e-commerce catalogs, social networks, and project management patterns.
+See [EXAMPLES.md](EXAMPLES.md) for worked examples including e-commerce catalogs, social networks, and project management patterns.
 
 ## Architecture
 
@@ -328,25 +328,26 @@ cargo pgrx test pg16
 ```
 pg_mentat/              PostgreSQL extension (pgrx) -- the core component
 clients/                Direct PostgreSQL client examples (Python, Node.js, Go, Rust)
-mentatd/                HTTP daemon (Axum) -- optional, for Datomic compatibility
-pg-mentat-client/       Clojure client library (uses mentatd)
+mentatd/                HTTP daemon (Axum) -- optional, for Datomic-style clients
+pg-mentat-client/       Clojure client stub (talks to mentatd; not a Datomic peer)
 edn/                    EDN parser (rust-peg)
 core/ + core-traits/    Fundamental types (ValueType, TypedValue)
-db/ + db-traits/        Core storage logic
-query-algebrizer/       Datalog to algebraic query compilation
-query-projector/        Query result projection
-query-pull/             Pull API implementation
-query-sql/              SQL generation
-sql/ + sql-traits/      SQL text generation and abstraction
-transaction/            Transaction processing
-benchmarks/             Performance benchmarks (including direct vs mentatd)
-tools/cli/              Command-line interface
-tools/pg_mentat_cli/    PostgreSQL-specific CLI
+db/ + db-traits/        Shared storage logic retained from upstream Mentat
+query-algebrizer/ +
+  query-algebrizer-traits/  Datalog-to-algebra compilation used by the parser
+transaction/            Transaction processing (legacy, not used by the extension)
+benchmarks/             Performance benchmarks
 ```
+
+Workspace pruning note: crates that were not consumed by `pg_mentat`
+or `mentatd` (including `tolstoy*`, `ffi`, `query-projector*`,
+`query-pull*`, `query-sql`, `sql*`, `public-traits`, and the `tools/`
+CLIs) were removed from the workspace during Phase 0 cleanup. See
+`docs/ROADMAP.md`.
 
 ## History
 
-pg_mentat is derived from [Mozilla Mentat](https://github.com/mozilla/mentat), an embedded Datalog database originally backed by SQLite. This project was started by Mozilla but is [no longer maintained by them](https://mail.mozilla.org/pipermail/firefox-dev/2018-September/006780.html). This fork replaces the storage layer with PostgreSQL, adds a Datomic-compatible HTTP daemon, and reimplements the query engine as a PostgreSQL extension for production use.
+pg_mentat is derived from [Mozilla Mentat](https://github.com/mozilla/mentat), an embedded Datalog database originally backed by SQLite. This project was started by Mozilla but is [no longer maintained by them](https://mail.mozilla.org/pipermail/firefox-dev/2018-September/006780.html). This fork replaces the storage layer with PostgreSQL, adds a Datomic-style HTTP daemon (`mentatd`), and reimplements the query engine as a PostgreSQL extension.
 
 ## Contributing
 

@@ -1,6 +1,17 @@
-[package]
+[workspace]
+resolver = "2"
+members = [
+  "edn",
+  "core-traits",
+  "core",
+  "pg_mentat",
+  "mentatd",
+]
+
+[workspace.package]
 edition = "2021"
 rust-version = "1.88"
+license = "Apache-2.0"
 authors = [
   "Richard Newman <rnewman@twinql.com>",
   "Nicholas Alexander <nalexander@mozilla.com>",
@@ -14,107 +25,8 @@ authors = [
   "Thom Chiovoloni <tchiovoloni@mozilla.com>",
   "Gregory Burd <greg@burd.me>",
 ]
-name = "mentat"
-version = "0.14.0"
-build = "build/version.rs"
 
-[features]
-default = ["bundled_sqlite3", "syncable"]
-bundled_sqlite3 = ["rusqlite/bundled"]
-sqlcipher = ["rusqlite/sqlcipher", "mentat_db/sqlcipher"]
-syncable = ["mentat_tolstoy", "tolstoy_traits", "mentat_db/syncable"]
-
-[workspace]
-members = [
-  "tools/cli", "tools/pg_mentat_cli",
-  "ffi", "core", "core-traits","db", "db-traits", "edn", "public-traits", "query-algebrizer",
-  "query-algebrizer-traits", "query-projector", "query-projector-traits","query-pull",
-  "query-sql", "sql", "sql-traits", "tolstoy-traits", "tolstoy", "transaction",
-  "pg_mentat", "mentatd"
-  ]
-
-[build-dependencies]
-rustc_version = "0.4"
-
-[dev-dependencies]
-assert_approx_eq = "1.1"
-
-#[dev-dependencies.cargo-husky]
-#version = "1"
-#default-features = false # Disable features which are enabled by default
-#features = ["run-for-all", "precommit-hook", "run-cargo-fmt", "run-cargo-test", "run-cargo-check", "run-cargo-clippy"]
-#cargo audit
-#cargo outdated
-
-[dependencies]
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "2.0.18"
-lazy_static = "1.5.0"
-time = { version = "0.3.47", features = ["serde"] }
-log = "0.4.29"
-uuid = { version = "1.21.0", features = ["v4", "serde"] }
-
-[dependencies.rusqlite]
-version = "0.38.0"
-features = ["limits", "bundled"]
-
-[dependencies.edn]
-path = "edn"
-
-[dependencies.core_traits]
-path = "core-traits"
-
-[dependencies.mentat_core]
-path = "core"
-
-[dependencies.mentat_sql]
-path = "sql"
-
-[dependencies.mentat_db]
-path = "db"
-
-[dependencies.db_traits]
-path = "db-traits"
-
-[dependencies.mentat_query_algebrizer]
-path = "query-algebrizer"
-
-[dependencies.query_algebrizer_traits]
-path = "query-algebrizer-traits"
-
-[dependencies.mentat_query_projector]
-path = "query-projector"
-
-[dependencies.query_projector_traits]
-path = "query-projector-traits"
-
-[dependencies.mentat_query_pull]
-path = "query-pull"
-
-[dependencies.query_pull_traits]
-path = "query-pull-traits"
-
-[dependencies.mentat_query_sql]
-path = "query-sql"
-
-[dependencies.sql_traits]
-path = "sql-traits"
-
-[dependencies.public_traits]
-path = "public-traits"
-
-[dependencies.mentat_transaction]
-path = "transaction"
-
-[dependencies.mentat_tolstoy]
-path = "tolstoy"
-optional = true
-
-[dependencies.tolstoy_traits]
-path = "tolstoy-traits"
-optional = true
-
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Panic prevention
 unwrap_used = "deny"
@@ -137,13 +49,3 @@ mem_forget = "deny"
 # Pedantic relaxations (too noisy)
 module_name_repetitions = "allow"
 similar_names = "allow"
-# Note: Test code (#[cfg(test)] and tests/) has additional relaxed lints for:
-# - unwrap_used, expect_used, panic (normal in tests)
-# - print_stdout (test output)
-# - too_many_lines, uninlined_format_args (test readability)
-# These are configured via #![cfg_attr(test, allow(...))] in test modules
-
-[profile.release]
-opt-level = 3
-debug = false
-lto = true

@@ -40,8 +40,6 @@ chrono = "0.4"
 edn = { path = "../edn", features = ["serde_support"] }
 core_traits = { path = "../core-traits" }
 mentat_core = { path = "../core" }
-db_traits = { path = "../db-traits" }
-mentat_db = { path = "../db" }
 
 [dev-dependencies]
 pgrx-tests = "0.17.0"
