@@ -1,6 +1,7 @@
 # pg_mentat Status
 
-_Last updated: Phase 0 cleanup pass._
+_Last updated: after the Phase 0 + partial Phase 1 engineering pass on
+`feat/phase-0-honesty-and-build`._
 
 This document states, as plainly as possible, what pg_mentat does today,
 what it does partially, and what it does not do. It exists to replace
@@ -20,8 +21,14 @@ via pgrx 0.17) installs the extension and produces:
 - A wide-row datom store at `mentat.datoms` with EAVT / AEVT / AVET /
   VAET covering indexes.
 - A narrow-row store introduced by `sql/10_narrow_storage.sql`
-  (`mentat.datoms_narrow` plus per-type value tables). See
-  "In-flight" below for what is not yet true of this table.
+  (nine `mentat.datoms_<type>_new` tables with `(store_id, e, a, tx)`
+  primary keys, covering INCLUDE-clause indexes, partial-`added`
+  indexes, fillfactor tuning, aggressive autovacuum, and a GIN
+  full-text index on `datoms_text_new`). The query engine reads from
+  these when the attribute's value type is known from the schema.
+  `CREATE STATISTICS (ndistinct, dependencies, mcv) ON (a, e)` teaches
+  the planner about the attribute/entity correlation. See "In-flight"
+  below for what is not yet true of this table.
 - Bootstrap data for built-in idents (`:db/ident`, `:db.type/*`,
   `:db.cardinality/*`, `:db.unique/*`, and friends).
 - The `mentat_transact`, `mentat_query`, `mentat_pull`,
@@ -30,25 +37,33 @@ via pgrx 0.17) installs the extension and produces:
   in `README.md`.
 
 In terms of smoke tests that pass end-to-end against a real PostgreSQL
-instance (via `cargo pgrx test pg16`):
+instance (`scripts/smoke.sh` / `.github/workflows/installcheck.yml`):
 
 - Schema install is idempotent-adjacent (`DROP EXTENSION` + `CREATE
   EXTENSION` round-trips on a clean database).
 - `mentat_transact` accepts EDN transactions for assertions, retractions,
-  `:db.fn/retractEntity`, and tempid resolution with lookup refs.
+  `:db.fn/retractEntity`, and tempid resolution with lookup refs. The
+  per-store schema cache is invalidated after every successful
+  transaction so newly asserted idents are visible to the next call.
 - `mentat_query` executes Datalog `:find` / `:where` / `:in` with
   patterns, joins across shared variables, scalar/tuple/collection/
   relation find-specs, the aggregates listed below, and the predicate
-  operators listed below.
+  operators listed below. Value-typed predicates (`[(>= ?age 25)]`)
+  correctly filter — an earlier bug made them compare against 0.
 - Rules without predicate bodies work, including recursive rules for
   transitive-closure style queries.
 - Pull (`mentat_pull`, `mentat_pull_many`) supports attribute lists,
   wildcards, recursive nested pulls on ref attributes, reverse lookups
-  (`:ns/_attr`), `:limit`, and `:default`.
+  (`:ns/_attr`), `:limit`, and `:default`. Ref-typed values whose
+  target has `:db/ident` render as the ident keyword (matching
+  Datomic's `d/entity` display); other refs render as `{":db/id": N}`.
+- `mentat_entity` returns the same Datomic-shaped ident-resolved view
+  as `mentat_pull '[*]'`.
+- `mentat_explain` returns the Datalog query, the generated SQL, and
+  the Postgres plan (including index usage) for debugging.
 - Time-travel input options (`asOf`, `since`, `history`) apply to
   `mentat_query` and change which datoms are visible.
 - Cardinality-many attributes are stored with set semantics.
-
 Aggregates implemented: `count`, `sum`, `avg`, `min`, `max` (see
 `pg_mentat/src/functions/query.rs` around the `unsupported-aggregate`
 error message).
@@ -95,9 +110,15 @@ answers.
   coarsely (effectively: on any transaction that touches `:db/ident` or
   `:db.install/attribute`). Fine-grained per-attribute invalidation is
   not implemented.
-- **`mentat_explain`.** Returns PostgreSQL `EXPLAIN` output for the
-  compiled SQL. It does not yet expose a Datalog-level plan (clause
+- **`mentat_explain`.** Returns the Datalog query, the generated SQL,
+  and the Postgres `EXPLAIN (VERBOSE, FORMAT TEXT)` output (including
+  index usage). It does not yet expose a Datalog-level plan (clause
   reordering, join strategy, index choice).
+- **Planner hints.** `mentat.enable_optimizer_hints` defaults to OFF.
+  Per-query `SET LOCAL enable_seqscan = off` is available as an escape
+  hatch (`SET mentat.enable_optimizer_hints = on`) but no longer the
+  default behaviour — the narrow-table indexes + extended statistics
+  usually make the planner pick the right plan on its own.
 
 ## What is not implemented
 
@@ -120,15 +141,22 @@ treat them as missing rather than broken.
 - **Predicates in rule bodies beyond the listed operators.** Anything
   other than `<`/`>`/`<=`/`>=`/`=`/`!=` and `*`/`+`/`-`/`/` is rejected
   (`:db.error/unsupported-rule-fn`, `:db.error/unsupported-rule-body`).
-- **`ground`, `get-else`, `tuple`.** Despite being mentioned in the
-  older README feature table, these where-functions are not
+- **`ground`.** Returns a specific
+  `:db.error/unsupported-where-fn ground is not yet implemented`
+  error that points callers at the `:in ?x ... inputs` workaround.
+  A naive implementation was tried and reverted — it silently returned
+  wrong results because the binding did not propagate into pattern-value
+  positions. Correct implementation is Phase 3.
+- **`get-else`, `tuple`, `missing?`, `untuple`, `vector`.** Not
   implemented. The README's "Predicates and functions" row is being
   corrected as part of this Phase 0 pass.
 - **Attribute predicates** (`[(attribute ?a :db/unique)]` style). Not
   wired.
 - **`d/entity` API.** `mentat_entity` returns a JSON blob of all
-  attributes for an entity ID. It is not a lazy entity-map navigator
-  with transparent ref traversal.
+  attributes for an entity ID, now with ref values resolved to their
+  `:db/ident` keyword when available. It is not yet a lazy entity-map
+  navigator with transparent ref traversal and programmatic attribute
+  access.
 
 ## Known limitations
 
@@ -140,12 +168,14 @@ treat them as missing rather than broken.
   repeated here because it is load-bearing.
 - **Schema cache invalidation is coarse.** A schema edit clears more
   cached parses than strictly necessary.
-- **No published load-test results above 1K datoms.** The old
+- **No published load-test results above 100K datoms.** The old
   `benchmarks/LOAD_TEST_RESULTS.md` and
   `benchmarks/results/BASELINE_SUMMARY.md` asserted TPS numbers with no
   CSVs, flamegraphs, or reproducible harness. Both have been deleted in
-  this pass. Phase 2 in `docs/ROADMAP.md` commits to one real benchmark
-  (10M datoms, CSV + flamegraph) before any performance claim returns
+  this pass. `benchmarks/BENCHMARKS.md` documents the current honest
+  micro-benchmark (up to 333K datoms on a developer laptop). Phase 2 in
+  `docs/ROADMAP.md` commits to the full 10M-datom benchmark (CSV +
+  flamegraph) before any performance claim returns
   to the README.
 - **pgrx-tests coverage.** `cargo pgrx test pg16` runs, but many of the
   test files under `pg_mentat/src/*_tests.rs` are end-to-end SQL round
