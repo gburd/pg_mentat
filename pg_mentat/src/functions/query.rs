@@ -2214,6 +2214,23 @@ fn build_where_fn_binding(
 ) -> Result<Option<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     let op = wf.operator.0.as_str();
 
+    // Known-unsupported: `ground` with scalar binding. A naive implementation
+    // (just record the binding in extra_var_bindings) does NOT flow the value
+    // into pattern-value positions — `[(ground 30) ?target] [?e :person/age
+    // ?target]` still matches every ?target because the pattern join treats
+    // ?target as a fresh variable column, not a constraint. Implementing
+    // ground correctly requires substituting the bound value at pattern
+    // build time. Tracked as Phase 3 in docs/ROADMAP.md. Fail loud so users
+    // don't get silently-wrong results.
+    if op == "ground" {
+        return Err(":db.error/unsupported-where-fn ground is not yet implemented. \
+                    A scalar binding like [(ground 42) ?x] requires substituting \
+                    the value into every subsequent pattern and predicate that \
+                    references ?x, which is Phase 3 work. Workaround: bind via \
+                    :in instead, e.g. :in ?x ... and pass the value in inputs."
+            .into());
+    }
+
     let sql_op = match op {
         "*" => "*",
         "+" => "+",

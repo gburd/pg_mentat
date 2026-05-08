@@ -59,24 +59,25 @@ Query shapes:
 
 2. **`scan` is the slowest per-datom.** Cost growth is roughly linear:
    3k datoms → 8ms; 33k → 32ms; 333k → 235ms. That's about 0.7 μs per
-   returned row for the full scan family — dominated by EDN encoding of
-   the result JSON, not by storage access. Datomic-style queries that
-   return 100 000 strings cost roughly the same in Datomic.
+   returned row for the full scan family. Verified with `mentat_explain`:
+   the generator already reads from a single narrow table when the
+   attribute's value type is known from the schema cache, so this is
+   decode + JSON-encode cost, not UNION overhead.
 
 3. **`predicate` is consistently faster than `scan`** because the
    planner uses the AEVT covering index and the INCLUDE v clause. The
-   10x decoding cost is still there but on fewer tuples (50% of the
+   decode + encode cost is still there but on fewer tuples (50% of the
    population with the `>= 50` predicate).
 
-4. **There is a UNION-ALL overhead.** Every Datalog query currently
-   reads through a UNION of all 9 narrow per-type tables because the
-   query generator does not (yet) prune to the types the query actually
-   touches. For a query that only references `:person/name` (string),
-   we still open the `datoms_ref_new`, `datoms_long_new`, etc. tables
-   via the UNION, though each returns 0 rows via the store_id filter.
-   Closing this is a tractable Phase 1 item: teach the generator to
-   only include UNION arms whose type appears in the bound attributes.
-
+4. **Opportunities the numbers suggest:**
+   - The `SELECT DISTINCT CASE value_type_tag WHEN 0 THEN ... WHEN 11 THEN ... END`
+     projection evaluates all 9 branches even when the single-table
+     subquery can only produce one tag. Replacing it with a type-specific
+     projection when `typed_info` is known would drop one CASE evaluation
+     per row — small but measurable at 333k rows.
+   - There is no columnar batching: every tuple goes through SPI
+     individually. Larger result sets (1M+) will likely want a binary
+     COPY path.
 ## Caveats — what these numbers are NOT
 
 - Not a production benchmark. One laptop, one configuration, one query
