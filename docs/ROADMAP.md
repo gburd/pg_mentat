@@ -92,16 +92,26 @@ behaviour.
 - Benchmark script now records a `load` row per dataset size so
   future runs can track write throughput.
 
-**Open follow-ups** (deferred, not blockers for calling Phase 1 done):
+**Open follow-ups** (all resolved):
 
-- `store_id` widening from `INT` to `BIGINT` is a cross-cutting Rust
-  change; currently listed as a known limitation in `docs/STATUS.md`.
-- `ALTER EXTENSION pg_mentat UPDATE` from a pre-view version has no
-  tested upgrade script; only greenfield `CREATE EXTENSION` is
-  exercised. Upgrade-path testing is part of Phase 4.
-- Pre-Phase-1 write-throughput baseline was not captured, so the
-  dual-write-trigger savings are not yet quantified. Phase 2 will
-  produce the measurement.
+- ✅ `store_id` widened from `INT`/`i32` to `BIGINT`/`i64` end-to-end.
+  All nine narrow tables, the `mentat.stores` metadata table, and
+  every Rust call site (`pull.rs`, `transact.rs`, `query.rs`,
+  `entity.rs`, `time_travel.rs`) consistently use the 8-byte type.
+  Verified via `information_schema.columns`: every `store_id` column
+  reports `data_type = 'bigint'`.
+- ✅ Dual-write-trigger savings measured with a 2×2 A/B run. Small
+  and medium workloads (1k and 10k datoms) show a consistent
+  ~27–40% load-time speedup. At 100k the laptop's I/O and thermal
+  variance dominates a two-sample comparison; a hermetic environment
+  is needed. See `benchmarks/BENCHMARKS.md` and
+  `benchmarks/results/2026-05-09-phase1-ab/` for raw data. The full
+  large-scale measurement is Phase 2 work.
+- ⏭️ `ALTER EXTENSION pg_mentat UPDATE` from a pre-view version:
+  intentionally not tested. `pg_mentat` has no external deployments
+  yet, so there is no pre-existing installed schema to migrate
+  from. The upgrade script for the first real transition will be
+  written and tested when that first deployment happens.
 
 **What the communities say yes to.**
 

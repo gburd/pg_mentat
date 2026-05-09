@@ -1787,7 +1787,7 @@ fn validate_datom_constraints(
 /// Helper function to query all type-specific tables for an (e, a) pair.
 /// Returns the most recent value (by tx) if found.
 fn find_current_value_for_ea(
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     attr_id: i64,
 ) -> Result<Option<TypedValue>, Box<dyn std::error::Error + Send + Sync>> {
@@ -2214,7 +2214,7 @@ fn format_typed_value(v: &TypedValue) -> String {
 /// The `schema` parameter is the quoted PostgreSQL schema name.
 /// Get store_id from store name via stores metadata table.
 /// Returns 0 for "default" store, or the assigned store_id for other stores.
-fn get_store_id_from_schema(schema: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+fn get_store_id_from_schema(schema: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     // Extract store name from schema (mentat -> default, mentat_foo -> foo)
     let store_name = if schema == "mentat" {
         "default"
@@ -2227,7 +2227,7 @@ fn get_store_id_from_schema(schema: &str) -> Result<i32, Box<dyn std::error::Err
         }.into());
     };
 
-    let store_id: Option<i32> = Spi::get_one_with_args(
+    let store_id: Option<i64> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
     )?;

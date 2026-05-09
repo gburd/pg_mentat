@@ -19,7 +19,7 @@ fn resolve_schema_prefix(store_name: &str) -> String {
 ///
 /// The `mentat` schema maps to the `"default"` store; any `mentat_<name>`
 /// schema maps to `<name>`.  The id is fetched from `mentat.stores`.
-fn get_store_id_for_schema(schema: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+fn get_store_id_for_schema(schema: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     let store_name = if schema == "mentat" {
         "default"
     } else if let Some(name) = schema.strip_prefix("mentat_") {
@@ -32,7 +32,7 @@ fn get_store_id_for_schema(schema: &str) -> Result<i32, Box<dyn std::error::Erro
         .into());
     };
 
-    let store_id: Option<i32> = Spi::get_one_with_args(
+    let store_id: Option<i64> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
     )?;

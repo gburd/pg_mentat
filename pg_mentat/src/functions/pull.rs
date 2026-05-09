@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Get store_id from a PostgreSQL schema name (e.g. "mentat" -> 0, "mentat_foo" -> lookup).
 /// This mirrors the logic in transact.rs but is local to pull.
-fn get_store_id_from_schema(schema: &str) -> Result<i32, PullError> {
+fn get_store_id_from_schema(schema: &str) -> Result<i64, PullError> {
     let store_name = if schema == "mentat" {
         "default"
     } else if let Some(name) = schema.strip_prefix("mentat_") {
@@ -26,7 +26,7 @@ fn get_store_id_from_schema(schema: &str) -> Result<i32, PullError> {
         .into());
     };
 
-    let store_id: Option<i32> = Spi::get_one_with_args(
+    let store_id: Option<i64> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
     )?;
@@ -55,7 +55,7 @@ fn get_store_id_from_schema(schema: &str) -> Result<i32, PullError> {
 /// `extra_select_prefix` allows prepending columns (e.g., "e, " for multi-entity queries).
 /// `where_clause` is the filter applied to each sub-select (excluding store_id which is always added).
 fn build_union_all_datoms_query(
-    store_id: i32,
+    store_id: i64,
     extra_select_prefix: &str,
     where_clause: &str,
     order_clause: &str,
@@ -427,7 +427,7 @@ pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<Jso
 /// batched query for referenced component entities.
 fn pull_many_batched(
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     specs: &[PullAttrSpec],
     entity_ids: &[i64],
 ) -> Result<JsonB, PullError> {
@@ -925,7 +925,7 @@ fn execute_pull(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     specs: &[PullAttrSpec],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -1122,7 +1122,7 @@ fn pull_forward_attributes_batched(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     attrs: &[ForwardAttrSpec<'_>],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -1260,7 +1260,7 @@ fn pull_reverse_attributes_batched(
     client: &SpiClient<'_>,
     _schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     attrs: &[ReverseAttrSpec<'_>],
     result_map: &mut serde_json::Map<String, serde_json::Value>,
@@ -1335,7 +1335,7 @@ fn pull_wildcard(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     result_map: &mut serde_json::Map<String, serde_json::Value>,
     override_idents: &HashSet<String>,
@@ -1437,7 +1437,7 @@ fn pull_forward_map_spec(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     ident: &str,
     sub_pattern: &[PullAttrSpec],
@@ -1515,7 +1515,7 @@ fn pull_reverse_map_spec(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1571,7 +1571,7 @@ fn pull_recursive(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     display_ident: &str,
     forward_ident: &str,
@@ -1696,7 +1696,7 @@ fn pull_recursive(
 fn query_forward_refs(
     client: &SpiClient<'_>,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     ident: &str,
     limit: Option<&LimitSpec>,
@@ -1732,7 +1732,7 @@ fn query_forward_refs(
 fn query_reverse_refs(
     client: &SpiClient<'_>,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     forward_ident: &str,
     limit: Option<&LimitSpec>,
@@ -1773,7 +1773,7 @@ fn query_reverse_refs(
 fn query_forward_refs_batched(
     client: &SpiClient<'_>,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_ids: &[i64],
     ident: &str,
     limit: Option<&LimitSpec>,
@@ -1822,7 +1822,7 @@ fn pull_all_attributes_for_recursive(
     client: &SpiClient<'_>,
     schema: &SchemaCache,
     db_schema: &str,
-    store_id: i32,
+    store_id: i64,
     entity_id: i64,
     recursive_forward_ident: &str,
     result_map: &mut serde_json::Map<String, serde_json::Value>,

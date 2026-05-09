@@ -71,6 +71,37 @@ physical table), and 1 fewer CHECK constraint evaluation. Until the
 A/B is measured, the claim is bounded to "reads are unchanged and the
 code does measurably less work per insert."
 
+## Phase 1 A/B: dual-write trigger ON vs OFF
+
+Two runs at each commit, using `git worktree` against pre-Phase-1
+`94d7a8c` and post-Phase-1 `695b278`. Full raw data, per-run CSVs,
+and a README in `benchmarks/results/2026-05-09-phase1-ab/`.
+
+| scale   | pre-P1 run1 | pre-P1 run2 | post-P1 run1 | post-P1 run2 | post-P1 avg vs pre-P1 avg |
+|--------:|------------:|------------:|-------------:|-------------:|:---|
+| 1k      |   3 458 ms  |   6 447 ms  |    2 979 ms  |    3 001 ms  | ~40% faster |
+| 10k     |  36 882 ms  |  56 709 ms  |   33 748 ms  |   34 196 ms  | ~27% faster |
+| 100k    | 371 221 ms  | 313 769 ms  |  301 422 ms  |  415 601 ms  | **laptop variance dominates; not separable** |
+
+At 1k and 10k the directional signal is consistent across both
+pairs of runs: removing the dual-write trigger, the 9-column CHECK
+constraint, and the eight wide-row indexes removes per-transaction
+overhead that shows cleanly when startup + txn cost dominate
+per-row cost.
+
+At 100k the load takes 5-7 minutes per run and laptop I/O /
+thermal variance moves the number by more than the Phase-1
+effect. Pre-P1 run 2 (313s) is actually faster than post-P1 run 2
+(416s). With only two samples per condition the 100k A/B cannot
+statistically separate the trigger cost from machine noise.
+
+**Conclusion: Phase 1 produces a measurable write speedup at
+transactional workloads (small-to-medium bulk loads) on this
+laptop. At larger scales the machine is no longer a reliable
+environment for the measurement.** A hermetic benchmark box with
+multiple repetitions is the right tool for the 100k+ story; that's
+Phase 2 work.
+
 Query shapes:
 
 ```datalog

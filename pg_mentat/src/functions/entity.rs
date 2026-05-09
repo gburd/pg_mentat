@@ -49,7 +49,7 @@ pub fn entity(store: &str, entity_id: i64) -> Result<JsonB, Box<dyn std::error::
     entity_map.insert(":db/id".to_string(), json!(entity_id));
 
     // Look up store_id from the store name
-    let store_id: i32 = Spi::get_one_with_args(
+    let store_id: i64 = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store)],
     )?

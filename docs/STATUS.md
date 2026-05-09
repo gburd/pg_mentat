@@ -110,9 +110,9 @@ answers.
   (`[?x ...]`), tuple bindings (`[?x ?y]`), and relation bindings
   (`[[?x ?y]]`) are not implemented end-to-end in the extension
   function surface; see "Not implemented" below.
-- **Store IDs.** Tables carry a `store_id` column, but it is declared
-  `INT` (32-bit) in `sql/10_narrow_storage.sql`. The surface API treats
-  it as if it were wide. Mixing many stores is untested at scale.
+- **Store IDs.** Tables carry a `store_id BIGINT` column and the
+  Rust side uses `i64` end-to-end. Multi-store is schematically
+  supported but still untested at scale.
 - **Schema-cache invalidation.** Schema edits invalidate the cache
   coarsely (effectively: on any transaction that touches `:db/ident` or
   `:db.install/attribute`). Fine-grained per-attribute invalidation is
@@ -171,8 +171,6 @@ treat them as missing rather than broken.
   PostgreSQL like any other transaction. Heavy concurrent writers
   contend on the transaction-log allocation path and on the datom
   indexes. There is no sharded writer.
-- **`store_id` is `INT` (4 bytes), not `BIGINT`.** Documented above;
-  repeated here because it is load-bearing.
 - **Schema cache invalidation is coarse.** A schema edit clears more
   cached parses than strictly necessary.
 - **No published load-test results above 100K datoms.** The old
@@ -191,9 +189,13 @@ treat them as missing rather than broken.
 - **No logical-replication testing.** Behaviour of `mentat.datoms`
   under `pglogical` / native logical replication has not been
   verified.
-- **No `pg_upgrade` testing.** `ALTER EXTENSION pg_mentat UPDATE` has
-  one stub upgrade script (`upgrade--1.0.0--1.1.0.sql`); multi-step
-  upgrade paths are untested.
+- **No tested `ALTER EXTENSION pg_mentat UPDATE` path.** Greenfield
+  `CREATE EXTENSION` is exercised by CI; upgrading from an older
+  installed version is not. This is deliberate: `pg_mentat` has no
+  external deployments yet, so there is no pre-existing schema to
+  migrate from. When the first deployment happens, the upgrade
+  script for that specific transition will be written and tested
+  then.
 
 ## In-flight
 

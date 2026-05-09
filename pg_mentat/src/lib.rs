@@ -99,12 +99,11 @@ extension_sql!(
     -- The `default` row is required by functions/{store_management,entity,
     -- time_travel,transact,virtual_tables}.rs which look up `store_id` by name.
     --
-    -- NOTE: store_id is INT (SERIAL) rather than BIGINT because the Rust
-    -- code pervasively types it as i32. Widening to BIGINT requires a
-    -- cross-cutting i32→i64 change in pull.rs/transact.rs/query.rs/etc.
-    -- Tracked in docs/ROADMAP.md ("Widen store_id to i64").
+    -- store_id is BIGINT (BIGSERIAL). Matches the BIGINT store_id on every
+    -- narrow table in sql/10_narrow_storage.sql and the i64 store_id that
+    -- Rust code uses throughout.
     CREATE TABLE IF NOT EXISTS mentat.stores (
-        store_id    SERIAL PRIMARY KEY,
+        store_id    BIGSERIAL PRIMARY KEY,
         store_name  TEXT UNIQUE NOT NULL,
         schema_name TEXT UNIQUE NOT NULL,
         description TEXT,

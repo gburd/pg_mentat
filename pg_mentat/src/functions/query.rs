@@ -175,7 +175,7 @@ impl<'a> SqlBuilder<'a> {
 ///
 /// The result is cached in a thread-local to avoid repeated SPI lookups within
 /// the same backend session.
-fn resolve_store_id(schema_prefix: &str) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+fn resolve_store_id(schema_prefix: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     // Extract schema name: "mentat." -> "mentat", "\"mentat_foo\"." -> "mentat_foo"
     let schema = schema_prefix.trim_end_matches('.');
     let schema = schema.trim_matches('"');
@@ -191,7 +191,7 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i32, Box<dyn std::error::Erro
         }.into());
     };
 
-    let store_id: Option<i32> = Spi::get_one_with_args(
+    let store_id: Option<i64> = Spi::get_one_with_args(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
     )?;
