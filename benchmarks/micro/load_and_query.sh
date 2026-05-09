@@ -112,6 +112,10 @@ PY
         (SELECT COUNT(*) FROM mentat.datoms_instant_new)")
 
     echo "benchmark: N=${N} datoms=${NDATOMS} load_time=${LOAD_MS}ms"
+    # Record the load time alongside the query timings. 'load' is a single
+    # wall-clock measurement of the bulk-insert phase; p95 is N/A so we
+    # write the same value twice so the CSV shape stays regular.
+    echo "${N},${NDATOMS},load,${LOAD_MS},${LOAD_MS}" >> "${CSV}"
 
     read P50 P95 < <(time_query "mentat_query('[:find ?n :where [?e :person/name ?n]]', '{}'::jsonb)")
     echo "  scan       p50=${P50}ms p95=${P95}ms"

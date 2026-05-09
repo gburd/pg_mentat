@@ -48,48 +48,22 @@ extension_sql!(
     EXCEPTION WHEN duplicate_object THEN null;
     END $$;
 
-    -- Datoms table partitioned by value_type_tag for partition pruning
-    CREATE TABLE IF NOT EXISTS mentat.datoms (
-        e BIGINT NOT NULL,
-        a BIGINT NOT NULL,
-        value_type_tag SMALLINT NOT NULL,
-        v_ref BIGINT,
-        v_bool BOOLEAN,
-        v_long BIGINT,
-        v_double DOUBLE PRECISION,
-        v_text TEXT,
-        v_keyword TEXT,
-        v_instant TIMESTAMPTZ,
-        v_uuid UUID,
-        v_bytes BYTEA,
-        tx BIGINT NOT NULL,
-        added BOOLEAN NOT NULL DEFAULT TRUE,
-
-        -- Ensure exactly one value column is populated per row
-        CONSTRAINT chk_datom_value CHECK (
-            (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
-           + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
-        )
-    ) PARTITION BY LIST (value_type_tag);
-
-    -- Create partitions for each value type
-    CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
-    CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
+    -- Datoms storage.
+    --
+    -- PHASE 1 COMPLETE: the wide-row table is gone. The real data lives in
+    -- the nine narrow per-type tables (mentat.datoms_<type>_new) created
+    -- by sql/10_narrow_storage.sql. `mentat.datoms` here is now a VIEW
+    -- over those tables with INSTEAD OF triggers so any code that still
+    -- issues `INSERT INTO mentat.datoms (...)` or
+    -- `DELETE FROM mentat.datoms WHERE ...` keeps working unchanged; it
+    -- just gets routed to the appropriate narrow table.
+    --
+    -- The view is defined in sql/10_narrow_storage.sql alongside its
+    -- backing tables, so that all the storage plumbing lives in one file
+    -- and so the view's dependency on the narrow tables is explicit.
+    --
+    -- Callers of `mentat.datoms` are expected to migrate off of it over
+    -- time; the view is a compat shim, not a long-term API.
 
     CREATE TABLE IF NOT EXISTS mentat.schema (
         entid BIGINT PRIMARY KEY,
@@ -161,35 +135,16 @@ extension_sql!(
         UNIQUE (store_name, view_name)
     );
 
-    -- Core datom indexes (reduced from 22 to 8 for write throughput)
-    -- EAVT: Entity-centric lookups (partial on added=TRUE)
-    CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
-    -- AEVT: Attribute-centric scans (partial on added=TRUE)
-    CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
-    -- TX: Transaction history lookups
-    CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
-    -- VAET: Reverse ref lookups (refs only)
-    CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE added = TRUE AND value_type_tag = 0;
+    -- Core datom indexes
+    --
+    -- PHASE 1 COMPLETE: the EAVT/AEVT/VAET/AVET indexes now live on the
+    -- narrow per-type tables in sql/10_narrow_storage.sql (with INCLUDE
+    -- clauses for index-only scans and partial-`added` predicates to keep
+    -- them lean). The wide-row indexes below are dropped.
 
-    -- Type-specific AVET indexes (only high-frequency types)
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE added = TRUE AND value_type_tag = 0;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE added = TRUE AND value_type_tag = 2;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE added = TRUE AND value_type_tag = 7;
-    CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE added = TRUE AND value_type_tag = 8;
-
-    -- Configure autovacuum for high-churn temporal workloads
-    -- Vacuum at 5% dead tuples (vs default 20%) to prevent index bloat from retractions
-    -- Storage parameters must be set on leaf partitions, not parent partitioned table
-    ALTER TABLE mentat.datoms_ref SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_bool SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_long SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_double SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_instant SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_text SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_keyword SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_uuid SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_bytes SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-    ALTER TABLE mentat.datoms_default SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+    -- Configure autovacuum on the transactions table (narrow-table autovacuum
+    -- tuning lives in sql/10_narrow_storage.sql).
+    ALTER TABLE mentat.transactions SET (autovacuum_vacuum_scale_factor = 0.1);
 
     -- Full-text search support table
     CREATE TABLE IF NOT EXISTS mentat.fulltext (

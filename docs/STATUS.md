@@ -18,17 +18,24 @@ wins and this document is the bug.
 via pgrx 0.17) installs the extension and produces:
 
 - The `mentat` schema.
-- A wide-row datom store at `mentat.datoms` with EAVT / AEVT / AVET /
-  VAET covering indexes.
-- A narrow-row store introduced by `sql/10_narrow_storage.sql`
-  (nine `mentat.datoms_<type>_new` tables with `(store_id, e, a, tx)`
-  primary keys, covering INCLUDE-clause indexes, partial-`added`
-  indexes, fillfactor tuning, aggressive autovacuum, and a GIN
-  full-text index on `datoms_text_new`). The query engine reads from
-  these when the attribute's value type is known from the schema.
-  `CREATE STATISTICS (ndistinct, dependencies, mcv) ON (a, e)` teaches
-  the planner about the attribute/entity correlation. See "In-flight"
-  below for what is not yet true of this table.
+- **Nine narrow per-type storage tables** (`mentat.datoms_<type>_new`)
+  installed by `sql/10_narrow_storage.sql`. Each has `(store_id, e, a,
+  tx)` primary key, one non-NULL `v` column of the native type,
+  covering EAVT / AEVT indexes with INCLUDE-clause for index-only
+  scans, partial-`added` predicates, fillfactor tuning, aggressive
+  autovacuum (5% scale factor, 2% analyze scale factor), a GIN
+  fulltext index on `datoms_text_new`, and
+  `CREATE STATISTICS (ndistinct, dependencies, mcv) ON (a, e)` so the
+  planner knows about the attribute/entity correlation. This is where
+  actual datom data lives.
+- **A `mentat.datoms` compatibility VIEW** over those nine tables with
+  INSTEAD OF INSERT / INSTEAD OF DELETE triggers. The view reproduces
+  the old wide-row column shape
+  (`e, a, value_type_tag, v_ref, v_bool, ..., tx, added`) so pre-Phase-1
+  callers (tests, legacy PL/pgSQL helpers) keep working. The wide-row
+  TABLE, its ten partitions, the CHECK constraint summing the
+  nine nullable value columns, and the `dual_write_datoms_trigger`
+  are GONE as of Phase 1.
 - Bootstrap data for built-in idents (`:db/ident`, `:db.type/*`,
   `:db.cardinality/*`, `:db.unique/*`, and friends).
 - The `mentat_transact`, `mentat_query`, `mentat_pull`,
@@ -190,13 +197,20 @@ treat them as missing rather than broken.
 
 ## In-flight
 
-- **Storage unification.** `sql/10_narrow_storage.sql` installs narrow
-  per-type value tables alongside the wide `mentat.datoms` table. The
-  current intent is that `mentat_transact` dual-writes both and that
-  `mentat_query` reads from the narrow tables; once parity is verified
-  on a real dataset, the wide table and the dual-write trigger are to
-  be dropped. This is Phase 1 on the roadmap.
 - **Workspace prune.** The root `Cargo.toml` has been trimmed to the
   crates actually consumed by `pg_mentat` and `mentatd` (`edn`,
   `core-traits`, `core`, `db-traits`, `db`, `pg_mentat`, `mentatd`).
   Removed crates are listed in the Phase 0 commit message.
+
+## Done (previously in-flight)
+
+- **Storage unification (Phase 1).** `sql/10_narrow_storage.sql`
+  installs the narrow per-type tables. The wide-row `mentat.datoms`
+  TABLE has been dropped; `mentat.datoms` is now a compatibility VIEW
+  over the narrow tables with INSTEAD OF INSERT / DELETE triggers.
+  Data lives in exactly one place (the narrow tables). The dual-write
+  trigger is gone. Smoke test `scripts/smoke.sh` verifies the view
+  shape and both triggers on every install. See
+  `benchmarks/BENCHMARKS.md` for the read-path delta (noise); write
+  improvement is expected but not yet measured against a pre-Phase-1
+  baseline.

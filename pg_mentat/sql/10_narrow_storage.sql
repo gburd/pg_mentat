@@ -1,17 +1,13 @@
 -- Narrow per-type storage tables.
 --
--- The production storage model is one table per value type, each with a
--- single non-NULL value column. This is what the query engine in
--- functions/query.rs, functions/transact.rs, and parts of functions/pull.rs
--- actually reads and writes. The wide-row `mentat.datoms` table (defined in
--- the inline bootstrap in lib.rs) is still populated by bootstrap.rs,
--- storage.rs, and helpers.rs; the `dual_write_datoms` trigger mirrors each
--- insert into the correct narrow table so both paths see the same data.
+-- After Phase 1 these are the ONLY place actual datom data lives. The
+-- old wide-row `mentat.datoms` table is now a VIEW over these tables
+-- (defined at the bottom of this file) with INSTEAD OF INSERT/DELETE
+-- triggers for compatibility with callers that still write to it.
 --
--- The long-term plan (see docs/ROADMAP.md, "Storage unification") is to move
--- all legacy write sites onto the narrow tables directly and drop the
--- wide-row table. Until then, the trigger is the load-bearing piece that
--- makes CREATE EXTENSION produce a consistent, immediately-usable database.
+-- Each table has one non-NULL value column (`v`), matching the value's
+-- native PG type. Covering indexes with INCLUDE clauses enable
+-- index-only scans for EAVT / AEVT access patterns.
 
 -- ---------------------------------------------------------------------------
 -- Nine narrow per-type tables
@@ -132,7 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_aevt
 CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_tx
     ON mentat.datoms_instant_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
--- keyword: VAET matters (idents resolve keywords \u2194 entity-ids)
+-- keyword: VAET matters (idents resolve keywords <-> entity-ids)
 CREATE INDEX IF NOT EXISTS idx_datoms_keyword_new_eavt
     ON mentat.datoms_keyword_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_keyword_new_aevt
@@ -171,20 +167,66 @@ ALTER TABLE mentat.datoms_text_new    SET (autovacuum_vacuum_scale_factor = 0.05
 ALTER TABLE mentat.datoms_keyword_new SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
 
 -- ---------------------------------------------------------------------------
--- Dual-write bridge.
+-- mentat.datoms VIEW + INSTEAD OF triggers
 --
--- Legacy writers (bootstrap.rs, storage.rs, pull.rs test helpers, etc.)
--- still INSERT into the wide-row mentat.datoms table. This trigger copies
--- each insert into the matching narrow table so queries see it.
+-- Phase 1 result: the wide-row mentat.datoms TABLE is gone. In its place
+-- is a VIEW over the nine narrow tables that reproduces the old column
+-- shape (e, a, value_type_tag, v_ref, v_bool, ..., tx, added) so that
+-- existing readers keep working. Two INSTEAD OF triggers route INSERT
+-- and DELETE to the appropriate narrow table, so existing writers keep
+-- working too. The view is a backwards-compatibility shim, not a
+-- long-term API: new code should read and write the narrow tables
+-- directly, via the query engine in functions/query.rs or the transact
+-- pipeline in functions/transact.rs.
 --
--- When the remaining legacy writers are ported to write the narrow tables
--- directly (tracked in docs/ROADMAP.md), this trigger and the wide-row
--- mentat.datoms table can be dropped.
+-- Value type tags (must match functions/query.rs::type_tag and
+-- functions/transact.rs):
+--    0 = ref       1 = boolean   2 = long      3 = double
+--    4 = instant   7 = string    8 = keyword   10 = uuid
+--   11 = bytes
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION mentat.dual_write_datoms()
+CREATE OR REPLACE VIEW mentat.datoms AS
+    SELECT e, a,  0::SMALLINT AS value_type_tag,
+           v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long,
+           NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text,
+           NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant,
+           NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, added
+    FROM mentat.datoms_ref_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 1::SMALLINT, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, added
+    FROM mentat.datoms_boolean_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 2::SMALLINT, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, added
+    FROM mentat.datoms_long_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 3::SMALLINT, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, added
+    FROM mentat.datoms_double_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 4::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, added
+    FROM mentat.datoms_instant_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 7::SMALLINT, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, added
+    FROM mentat.datoms_text_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 8::SMALLINT, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, added
+    FROM mentat.datoms_keyword_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 10::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, added
+    FROM mentat.datoms_uuid_new WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 11::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, added
+    FROM mentat.datoms_bytes_new WHERE store_id = 0;
+
+-- INSTEAD OF INSERT: route to the correct narrow table by value_type_tag.
+-- Default store_id to 0 (the wide-row shim has no notion of multi-store;
+-- the narrow-table writers in transact.rs handle stores directly).
+CREATE OR REPLACE FUNCTION mentat.datoms_view_insert()
 RETURNS TRIGGER AS $$
 BEGIN
+    IF NEW.tx IS NULL OR NEW.added IS NULL THEN
+        RAISE EXCEPTION 'mentat.datoms INSERT requires tx and added to be non-NULL';
+    END IF;
     CASE NEW.value_type_tag
         WHEN 0  THEN INSERT INTO mentat.datoms_ref_new     (store_id, e, a, v, tx, added) VALUES (0, NEW.e, NEW.a, NEW.v_ref,     NEW.tx, NEW.added) ON CONFLICT DO NOTHING;
         WHEN 1  THEN INSERT INTO mentat.datoms_boolean_new (store_id, e, a, v, tx, added) VALUES (0, NEW.e, NEW.a, NEW.v_bool,    NEW.tx, NEW.added) ON CONFLICT DO NOTHING;
@@ -195,52 +237,62 @@ BEGIN
         WHEN 8  THEN INSERT INTO mentat.datoms_keyword_new (store_id, e, a, v, tx, added) VALUES (0, NEW.e, NEW.a, NEW.v_keyword, NEW.tx, NEW.added) ON CONFLICT DO NOTHING;
         WHEN 10 THEN INSERT INTO mentat.datoms_uuid_new    (store_id, e, a, v, tx, added) VALUES (0, NEW.e, NEW.a, NEW.v_uuid,    NEW.tx, NEW.added) ON CONFLICT DO NOTHING;
         WHEN 11 THEN INSERT INTO mentat.datoms_bytes_new   (store_id, e, a, v, tx, added) VALUES (0, NEW.e, NEW.a, NEW.v_bytes,   NEW.tx, NEW.added) ON CONFLICT DO NOTHING;
+        ELSE RAISE EXCEPTION 'mentat.datoms INSERT: unknown value_type_tag %', NEW.value_type_tag;
     END CASE;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS dual_write_datoms_trigger ON mentat.datoms;
-CREATE TRIGGER dual_write_datoms_trigger
-    AFTER INSERT ON mentat.datoms
-    FOR EACH ROW EXECUTE FUNCTION mentat.dual_write_datoms();
+DROP TRIGGER IF EXISTS datoms_view_insert ON mentat.datoms;
+CREATE TRIGGER datoms_view_insert
+    INSTEAD OF INSERT ON mentat.datoms
+    FOR EACH ROW EXECUTE FUNCTION mentat.datoms_view_insert();
+
+-- INSTEAD OF DELETE: fan out the DELETE across all narrow tables.
+-- The test code uses `DELETE FROM mentat.datoms WHERE e IN (...)` to
+-- clear fixtures; most uses are e-based and the narrow tables all have
+-- `e` as the second PK column, so the DELETE is cheap on each table.
+CREATE OR REPLACE FUNCTION mentat.datoms_view_delete()
+RETURNS TRIGGER AS $$
+BEGIN
+    CASE OLD.value_type_tag
+        WHEN 0  THEN DELETE FROM mentat.datoms_ref_new     WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 1  THEN DELETE FROM mentat.datoms_boolean_new WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 2  THEN DELETE FROM mentat.datoms_long_new    WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 3  THEN DELETE FROM mentat.datoms_double_new  WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 4  THEN DELETE FROM mentat.datoms_instant_new WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 7  THEN DELETE FROM mentat.datoms_text_new    WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 8  THEN DELETE FROM mentat.datoms_keyword_new WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 10 THEN DELETE FROM mentat.datoms_uuid_new    WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        WHEN 11 THEN DELETE FROM mentat.datoms_bytes_new   WHERE store_id = 0 AND e = OLD.e AND a = OLD.a AND tx = OLD.tx;
+        ELSE NULL;
+    END CASE;
+    RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS datoms_view_delete ON mentat.datoms;
+CREATE TRIGGER datoms_view_delete
+    INSTEAD OF DELETE ON mentat.datoms
+    FOR EACH ROW EXECUTE FUNCTION mentat.datoms_view_delete();
 
 -- ---------------------------------------------------------------------------
 -- Extended statistics for the planner.
 --
 -- For Datalog workloads the planner's default assumption (columns are
--- independent) is wrong for narrow datom tables: `a` (attribute) and `e`
--- (entity) are highly correlated via cardinality, and most user attributes
--- exhibit strong ndistinct skew (10 companies might have 10M employees).
--- These CREATE STATISTICS declarations teach the planner about those
--- correlations so it picks the right index without us having to force
--- `enable_seqscan = off`.
---
--- Only the high-traffic tables get statistics; the low-volume boolean /
--- uuid / bytes tables rarely need nudging.
+-- independent) is wrong: `a` (attribute) and `e` (entity) are correlated
+-- via cardinality, and user attributes exhibit strong ndistinct skew.
+-- These statistics teach the planner about those correlations so it picks
+-- the right index without having to force `enable_seqscan = off`.
 -- ---------------------------------------------------------------------------
 
 CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_ref_new_ae
-    (ndistinct, dependencies, mcv)
-    ON a, e FROM mentat.datoms_ref_new;
-
+    (ndistinct, dependencies, mcv)  ON a, e FROM mentat.datoms_ref_new;
 CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_long_new_ae
-    (ndistinct, dependencies, mcv)
-    ON a, e FROM mentat.datoms_long_new;
-
+    (ndistinct, dependencies, mcv)  ON a, e FROM mentat.datoms_long_new;
 CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_text_new_ae
-    (ndistinct, dependencies, mcv)
-    ON a, e FROM mentat.datoms_text_new;
-
+    (ndistinct, dependencies, mcv)  ON a, e FROM mentat.datoms_text_new;
 CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_keyword_new_ae
-    (ndistinct, dependencies, mcv)
-    ON a, e FROM mentat.datoms_keyword_new;
-
+    (ndistinct, dependencies, mcv)  ON a, e FROM mentat.datoms_keyword_new;
 CREATE STATISTICS IF NOT EXISTS mentat.stats_datoms_instant_new_ae
-    (ndistinct, dependencies, mcv)
-    ON a, e FROM mentat.datoms_instant_new;
-
--- Statistics become useful after ANALYZE. Users should run
---   ANALYZE mentat.datoms_ref_new, mentat.datoms_long_new, ...
--- after any bulk load. The aggressive autovacuum scale factor above
--- (analyze at 2% dead tuples) keeps ongoing workloads covered.
+    (ndistinct, dependencies, mcv)  ON a, e FROM mentat.datoms_instant_new;

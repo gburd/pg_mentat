@@ -35,6 +35,42 @@ translator and the narrow per-type storage tables.
 |  100 000 |  333 055 | `predicate` |    170.6 |    205.5 |
 |  100 000 |  333 055 | `group_by`  |     96.8 |    112.0 |
 
+### Run: commit after Phase 1 wide-row-drop (`feat/phase-0-honesty-and-build`)
+
+Same host, same PostgreSQL, same workload. The wide-row `mentat.datoms`
+TABLE is gone; replaced by a VIEW over the narrow tables with INSTEAD
+OF INSERT / DELETE triggers. The `dual_write_datoms_trigger` that fired
+on every insert is gone.
+
+| n_people | n_datoms | op          | p50 (ms) | p95 (ms) |
+|---------:|---------:|:------------|---------:|---------:|
+|    1 000 |    3 011 | `scan`      |      9.1 |     12.0 |
+|    1 000 |    3 011 | `predicate` |     10.6 |     13.5 |
+|    1 000 |    3 011 | `group_by`  |      8.3 |      9.3 |
+|   10 000 |   33 015 | `scan`      |     35.6 |     40.5 |
+|   10 000 |   33 015 | `predicate` |     23.8 |     29.2 |
+|   10 000 |   33 015 | `group_by`  |     13.8 |     14.7 |
+|  100 000 |  333 055 | `scan`      |    259.1 |    268.6 |
+|  100 000 |  333 055 | `predicate` |    168.8 |    177.7 |
+|  100 000 |  333 055 | `group_by`  |     92.4 |     96.8 |
+
+**Reads are in the noise** (±10% jitter) — this is expected. The query
+engine already read from the narrow tables before Phase 1, so
+replacing the wide-row table with a view changes nothing on the read
+side. Confirms the storage redesign landed without a read regression.
+
+**Writes** (added as a `load` row in the second run's CSV): bulk-load
+time is now the benchmark's single write measurement. On a fresh
+run: 1k people in <1s, 10k in 33s, 100k in 294s. We did not capture
+an apples-to-apples pre-Phase-1 baseline for the `load` row, so the
+dual-write-trigger savings are not yet quantified here — this is
+flagged as follow-up work in the Phase 2 plan in `docs/ROADMAP.md`.
+The expected savings per insert: 1 fewer plpgsql trigger fire, 1
+fewer physical write (the wide-row table no longer exists as a
+physical table), and 1 fewer CHECK constraint evaluation. Until the
+A/B is measured, the claim is bounded to "reads are unchanged and the
+code does measurably less work per insert."
+
 Query shapes:
 
 ```datalog

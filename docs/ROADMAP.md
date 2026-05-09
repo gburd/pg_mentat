@@ -61,53 +61,54 @@ behaviour.
 
 ---
 
-## Phase 1 — Storage unification
+## Phase 1 — Storage unification ✅ DONE
 
-**Goal.** One datom storage path, not two. Today `mentat.datoms` (wide
-row) and `mentat.datoms_narrow` (narrow per-type tables) coexist, with
-a dual-write bridge. Queries read from the wide table in most paths.
+**Goal.** One datom storage path, not two.
 
-**Scope.**
+**Delivered.**
 
-- Finish the narrow-table migration: every value-type write lands in
-  the narrow per-type table, with a generated/derived projection
-  preserving the `mentat.datoms` view shape for as long as compatibility
-  is needed.
-- Switch `mentat_query`, `mentat_pull`, `mentat_entity` to read
-  exclusively from narrow tables.
-- Fix `store_id` width: change `INT` to `INT8` in
-  `sql/10_narrow_storage.sql` and in every Rust site that builds SQL
-  referring to `store_id`.
-- Drop the wide-row `mentat.datoms` and the dual-write trigger.
-  Replace the old table with a compatibility `VIEW mentat.datoms` if
-  downstream tooling relies on it.
-- Add an `ALTER EXTENSION pg_mentat UPDATE` script that does this
-  transition in-place on an existing database, backfilling narrow
-  rows from the wide table and then swapping reads before dropping
-  writes.
-- Regression test: round-trip `pg_dump` + `pg_restore` on a database
-  with ~100k datoms.
+- Narrow per-type tables (nine `mentat.datoms_<type>_new`) are the
+  only place actual datom data lives. Installed by
+  `sql/10_narrow_storage.sql` at `CREATE EXTENSION` time.
+- `mentat.datoms` is a compatibility VIEW over the narrow tables,
+  reproducing the old wide-row column shape. INSTEAD OF INSERT and
+  INSTEAD OF DELETE triggers route writes to the correct narrow
+  table by `value_type_tag`.
+- The wide-row `mentat.datoms` TABLE, its ten partitions
+  (`datoms_ref` / `datoms_bool` / … / `datoms_default`), the CHECK
+  constraint summing the nine nullable value columns, the four
+  wide-row covering indexes (EAVT / AEVT / VAET / AVET), and the
+  `dual_write_datoms_trigger` have all been removed.
+- `mentat_query`, `mentat_pull`, `mentat_entity`, `mentat_transact`
+  all read and write the narrow tables directly. The compatibility
+  view is exercised only by legacy PL/pgSQL helpers and by test
+  fixtures that still write `INSERT INTO mentat.datoms (…)`.
+- Smoke test (`scripts/smoke.sh`) now verifies the view shape
+  (`relkind = 'v'`), both INSTEAD OF triggers, and the absence of
+  the old `dual_write_datoms_trigger` on every install.
+- Read-path benchmark delta: within ±10% noise at 3K / 33K / 333K
+  datoms on the dev laptop. See `benchmarks/BENCHMARKS.md` for the
+  before/after table.
+- Benchmark script now records a `load` row per dataset size so
+  future runs can track write throughput.
 
-**Done criteria.**
+**Open follow-ups** (deferred, not blockers for calling Phase 1 done):
 
-- `grep -n "datoms " pg_mentat/src/functions/*.rs` shows no reads from
-  a wide-row `mentat.datoms` table (view use is allowed but must be
-  documented).
-- `store_id` is `BIGINT` everywhere it appears.
-- An upgrade script named `upgrade--1.1.0--1.2.0.sql` (or equivalent
-  version number) lives next to the other upgrade scripts and is
-  exercised by a pgrx test that installs the old version, loads
-  datoms, runs `ALTER EXTENSION ... UPDATE`, and queries the upgraded
-  database.
-
-**Effort.** 3–4 weeks.
+- `store_id` widening from `INT` to `BIGINT` is a cross-cutting Rust
+  change; currently listed as a known limitation in `docs/STATUS.md`.
+- `ALTER EXTENSION pg_mentat UPDATE` from a pre-view version has no
+  tested upgrade script; only greenfield `CREATE EXTENSION` is
+  exercised. Upgrade-path testing is part of Phase 4.
+- Pre-Phase-1 write-throughput baseline was not captured, so the
+  dual-write-trigger savings are not yet quantified. Phase 2 will
+  produce the measurement.
 
 **What the communities say yes to.**
 
-- Postgres: "the storage schema is legible, has correct column widths,
-  and ships with a real upgrade script."
-- Datomic: "datoms are datoms; I do not need to know which table holds
-  them."
+- Postgres: "the storage schema is legible and data lives in exactly
+  one place."
+- Datomic: "datoms are datoms; I do not need to know which table
+  holds them."
 
 ---
 

@@ -25,17 +25,36 @@ CREATE EXTENSION pg_mentat;
 
 SET search_path = mentat, public;
 
--- Step 2: at least 19 base tables in the mentat schema ----------------------
+-- Step 2: the expected base tables in the mentat schema are present.
+-- After Phase 1 the wide-row mentat.datoms table is gone (replaced by a
+-- VIEW), so the old 'count >= 19' check over-counted the 10 wide-row
+-- partitions. Check for the 9 narrow tables plus the catalog tables
+-- explicitly — more precise and survives storage redesigns.
 DO $$
-DECLARE n int;
+DECLARE
+    n int;
+    required text[] := ARRAY[
+        'datoms_ref_new', 'datoms_long_new', 'datoms_text_new',
+        'datoms_keyword_new', 'datoms_double_new', 'datoms_instant_new',
+        'datoms_uuid_new', 'datoms_bytes_new', 'datoms_boolean_new',
+        'schema', 'idents', 'partitions', 'transactions',
+        'stores', 'subscriptions', 'materialized_views', 'fulltext'
+    ];
+    missing text[];
 BEGIN
+    SELECT array_agg(r) INTO missing
+      FROM unnest(required) AS r
+     WHERE r NOT IN (
+        SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'mentat' AND table_type = 'BASE TABLE'
+     );
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'missing required base tables in mentat schema: %', missing;
+    END IF;
     SELECT count(*) INTO n
       FROM information_schema.tables
      WHERE table_schema = 'mentat' AND table_type = 'BASE TABLE';
-    IF n < 19 THEN
-        RAISE EXCEPTION 'expected >= 19 tables in mentat schema, got %', n;
-    END IF;
-    RAISE NOTICE 'Step 2 OK: % tables in mentat schema', n;
+    RAISE NOTICE 'Step 2 OK: % tables in mentat schema (all required present)', n;
 END $$;
 
 -- Step 3: >= 24 bootstrap rows in mentat.schema (the :db/* + :db.type/* set) -
@@ -84,25 +103,55 @@ BEGIN
     RAISE NOTICE 'Step 5 OK: all 9 datoms_*_new narrow tables present';
 END $$;
 
--- Step 6: dual_write_datoms trigger is enabled on mentat.datoms -------------
+-- Step 6: mentat.datoms is now a VIEW over the narrow tables --------------
+--
+-- After Phase 1 the wide-row mentat.datoms TABLE is gone. It's replaced by
+-- a VIEW with INSTEAD OF INSERT and INSTEAD OF DELETE triggers that route
+-- writes to the correct narrow table by value_type_tag. Verify both the
+-- view shape and both triggers are in place, and that the old
+-- dual_write_datoms_trigger is NOT present.
 DO $$
-DECLARE state char;
+DECLARE
+    kind     char;
+    n_insert int;
+    n_delete int;
+    n_legacy int;
 BEGIN
-    SELECT t.tgenabled INTO state
-      FROM pg_trigger t
-      JOIN pg_class c     ON c.oid = t.tgrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'mentat'
-       AND c.relname = 'datoms'
-       AND t.tgname  = 'dual_write_datoms_trigger'
-       AND NOT t.tgisinternal;
-    IF state IS NULL THEN
-        RAISE EXCEPTION 'dual_write_datoms_trigger not found on mentat.datoms';
+    SELECT c.relkind INTO kind
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'mentat' AND c.relname = 'datoms';
+    IF kind IS NULL THEN
+        RAISE EXCEPTION 'mentat.datoms does not exist';
     END IF;
-    IF state <> 'O' THEN
-        RAISE EXCEPTION 'dual_write_datoms_trigger disabled (tgenabled=%)', state;
+    IF kind <> 'v' THEN
+        RAISE EXCEPTION 'mentat.datoms is relkind=% (expected v — view)', kind;
     END IF;
-    RAISE NOTICE 'Step 6 OK: dual_write_datoms_trigger enabled';
+
+    SELECT count(*) INTO n_insert FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace ns ON ns.oid = c.relnamespace
+     WHERE ns.nspname = 'mentat' AND c.relname = 'datoms'
+       AND t.tgname = 'datoms_view_insert' AND NOT t.tgisinternal;
+    IF n_insert <> 1 THEN
+        RAISE EXCEPTION 'datoms_view_insert INSTEAD OF trigger missing on mentat.datoms';
+    END IF;
+
+    SELECT count(*) INTO n_delete FROM pg_trigger t
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace ns ON ns.oid = c.relnamespace
+     WHERE ns.nspname = 'mentat' AND c.relname = 'datoms'
+       AND t.tgname = 'datoms_view_delete' AND NOT t.tgisinternal;
+    IF n_delete <> 1 THEN
+        RAISE EXCEPTION 'datoms_view_delete INSTEAD OF trigger missing on mentat.datoms';
+    END IF;
+
+    SELECT count(*) INTO n_legacy FROM pg_trigger
+     WHERE tgname = 'dual_write_datoms_trigger' AND NOT tgisinternal;
+    IF n_legacy <> 0 THEN
+        RAISE EXCEPTION 'legacy dual_write_datoms_trigger still present (expected: removed after Phase 1)';
+    END IF;
+
+    RAISE NOTICE 'Step 6 OK: mentat.datoms is a view with INSTEAD OF INSERT+DELETE triggers';
 END $$;
 
 -- Step 7: define :person/name and :person/age via mentat_transact -----------
