@@ -13,7 +13,7 @@ use pgrx::JsonB;
 use serde_json::json;
 use lru::LruCache;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
 
 // ============================================================================
@@ -1726,14 +1726,76 @@ fn build_sql_from_datalog(
         }
     }
 
-    // Handle fulltext where-functions
+    // Handle where-functions: fulltext, arithmetic, and ground.
     let mut fts_joins: Vec<FtsJoin> = Vec::new();
     let mut extra_var_bindings: HashMap<String, String> = HashMap::new();
+    let mut ground_bindings: HashMap<String, serde_json::Value> = HashMap::new();
+
     for (fts_idx, wf) in where_fns.iter().enumerate() {
         let op_name = wf.operator.0.as_str();
         if op_name == "fulltext" {
             let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix, &store_id_param)?;
             fts_joins.push(fj);
+        } else if op_name == "ground" {
+            // ground injects a constant value as if it were an :in binding,
+            // so the pattern compiler constrains the variable at build time.
+            let bound_var = match &wf.binding {
+                Binding::BindScalar(v) => format!("{}", v),
+                _ => return Err(
+                    ":db.error/unsupported-where-fn ground only supports scalar binding \
+                     [(ground val) ?var]. Collection/tuple/relation ground is not yet supported."
+                        .into(),
+                ),
+            };
+            if wf.args.is_empty() {
+                return Err(
+                    ":db.error/fn-arity ground requires exactly 1 argument. \
+                     Example: [(ground 42) ?x]"
+                        .into(),
+                );
+            }
+            let ground_value = match &wf.args[0] {
+                FnArg::EntidOrInteger(i) => serde_json::Value::Number((*i).into()),
+                FnArg::Constant(NonIntegerConstant::Text(s)) => {
+                    serde_json::Value::String(s.as_ref().to_string())
+                }
+                FnArg::Constant(NonIntegerConstant::Float(f)) => {
+                    json!(f.into_inner())
+                }
+                FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
+                    serde_json::Value::Bool(*b)
+                }
+                FnArg::IdentOrKeyword(kw) => {
+                    // Keywords are stored with leading colon stripped in Mentat
+                    serde_json::Value::String(format!(":{}", keyword_to_ident(kw)))
+                }
+                _ => {
+                    return Err(
+                        ":db.error/unsupported-where-fn ground argument must be a constant \
+                         (integer, string, float, boolean, or keyword)."
+                            .into(),
+                    );
+                }
+            };
+            // Also make ground vars available as SELECT expressions for cases
+            // where the variable appears only in :find, not in any pattern.
+            let select_expr = match &ground_value {
+                serde_json::Value::Number(n) => format!("{}::TEXT", n),
+                serde_json::Value::String(s) if s.starts_with(':') => {
+                    let p = builder.bind_text(s[1..].to_string());
+                    format!("(':' || {})::TEXT", p)
+                }
+                serde_json::Value::String(s) => {
+                    let p = builder.bind_text(s.clone());
+                    format!("{}::TEXT", p)
+                }
+                serde_json::Value::Bool(b) => {
+                    format!("'{}'::TEXT", if *b { "true" } else { "false" })
+                }
+                _ => "NULL::TEXT".to_string(),
+            };
+            extra_var_bindings.insert(bound_var.clone(), select_expr);
+            ground_bindings.insert(bound_var, ground_value);
         } else {
             // Arithmetic binding functions: [(* ?age 2) ?double-age]
             if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
@@ -1741,13 +1803,23 @@ fn build_sql_from_datalog(
             } else {
                 return Err(format!(
                     ":db.error/unsupported-where-fn Where-function '{}' is not supported. \
-                     Supported functions: fulltext, *, +, -, /",
+                     Supported functions: fulltext, ground, *, +, -, /",
                     op_name
                 )
                 .into());
             }
         }
     }
+
+    // Merge ground bindings into a combined input_bindings map so that
+    // pattern compilation constrains ground variables at build time.
+    let effective_bindings = if ground_bindings.is_empty() {
+        input_bindings.clone()
+    } else {
+        let mut merged = input_bindings.clone();
+        merged.extend(ground_bindings);
+        merged
+    };
 
     // Build CTEs from rule definitions and rule invocations
     let mut cte_prefix = String::new();
@@ -1775,7 +1847,7 @@ fn build_sql_from_datalog(
             builder,
             temporal,
             &rule_cte_info,
-            input_bindings,
+            &effective_bindings,
             schema_prefix,
             &store_id_param,
         )?
@@ -1884,15 +1956,21 @@ fn build_sql_from_datalog(
             let arm_store_id_param = arm_builder.bind_bigint(store_id as i64);
 
             for (idx, wf) in arm_where_fns.iter().enumerate() {
-                if wf.operator.0.as_str() == "fulltext" {
+                let op_name = wf.operator.0.as_str();
+                if op_name == "fulltext" {
                     let fts_idx = fts_joins.len() + idx;
                     let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix, &arm_store_id_param)?;
                     arm_fts_joins.push(fts_join);
+                } else if matches!(op_name, "*" | "+" | "-" | "/") {
+                    // Arithmetic binding functions work the same as in the main query
+                    if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
+                        arm_extra_var_bindings.insert(var_name, expr);
+                    }
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Only fulltext and predicates are currently supported.",
-                        wf.operator.0.as_str()
+                         Supported: fulltext, *, +, -, /.",
+                        op_name
                     ).into());
                 }
             }
@@ -1908,7 +1986,7 @@ fn build_sql_from_datalog(
                 &mut arm_builder,
                 temporal,
                 &rule_cte_info,
-                input_bindings,
+                &effective_bindings,
                 schema_prefix,
                 &arm_store_id_param,
             )?;
@@ -2208,21 +2286,10 @@ fn build_where_fn_binding(
 ) -> Result<Option<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     let op = wf.operator.0.as_str();
 
-    // Known-unsupported: `ground` with scalar binding. A naive implementation
-    // (just record the binding in extra_var_bindings) does NOT flow the value
-    // into pattern-value positions — `[(ground 30) ?target] [?e :person/age
-    // ?target]` still matches every ?target because the pattern join treats
-    // ?target as a fresh variable column, not a constraint. Implementing
-    // ground correctly requires substituting the bound value at pattern
-    // build time. Tracked as Phase 3 in docs/ROADMAP.md. Fail loud so users
-    // don't get silently-wrong results.
+    // `ground` is handled at the dispatch level (not here) because it needs
+    // to inject into input_bindings before pattern compilation.
     if op == "ground" {
-        return Err(":db.error/unsupported-where-fn ground is not yet implemented. \
-                    A scalar binding like [(ground 42) ?x] requires substituting \
-                    the value into every subsequent pattern and predicate that \
-                    references ?x, which is Phase 3 work. Workaround: bind via \
-                    :in instead, e.g. :in ?x ... and pass the value in inputs."
-            .into());
+        return Ok(None);
     }
 
     let sql_op = match op {
@@ -2946,28 +3013,49 @@ fn build_not_exists_subquery(
     store_id_param: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Groundedness validation: collect all variables mentioned in the NOT
-    // clause and verify each one is bound in the outer scope.
-    let mut not_vars: Vec<String> = Vec::new();
+    // clause and verify each one is either bound in the outer scope or bound
+    // locally by a pattern within the NOT clause itself.
+    let mut all_not_vars: Vec<String> = Vec::new();
+    let mut locally_bound_vars: HashSet<String> = HashSet::new();
     for clause in &not_join.clauses {
-        if let WhereClause::Pattern(p) = clause {
-            if let PatternNonValuePlace::Variable(v) = &p.entity {
-                not_vars.push(format!("{}", v));
+        match clause {
+            WhereClause::Pattern(p) => {
+                if let PatternNonValuePlace::Variable(v) = &p.entity {
+                    let name = format!("{}", v);
+                    all_not_vars.push(name.clone());
+                    locally_bound_vars.insert(name);
+                }
+                if let PatternNonValuePlace::Variable(v) = &p.attribute {
+                    all_not_vars.push(format!("{}", v));
+                }
+                if let PatternValuePlace::Variable(v) = &p.value {
+                    let name = format!("{}", v);
+                    all_not_vars.push(name.clone());
+                    locally_bound_vars.insert(name);
+                }
+                if let PatternNonValuePlace::Variable(v) = &p.tx {
+                    let name = format!("{}", v);
+                    all_not_vars.push(name.clone());
+                    locally_bound_vars.insert(name);
+                }
             }
-            if let PatternNonValuePlace::Variable(v) = &p.attribute {
-                not_vars.push(format!("{}", v));
+            WhereClause::Pred(pred) => {
+                for parg in &pred.args {
+                    if let FnArg::Variable(v) = parg {
+                        all_not_vars.push(format!("{}", v));
+                    }
+                }
             }
-            if let PatternValuePlace::Variable(v) = &p.value {
-                not_vars.push(format!("{}", v));
-            }
-            if let PatternNonValuePlace::Variable(v) = &p.tx {
-                not_vars.push(format!("{}", v));
-            }
+            _ => {}
         }
     }
 
-    let unbound: Vec<&String> = not_vars
+    let unbound: Vec<&String> = all_not_vars
         .iter()
-        .filter(|v| !outer_var_to_alias.contains_key(v.as_str()))
+        .filter(|v| {
+            !outer_var_to_alias.contains_key(v.as_str())
+                && !locally_bound_vars.contains(v.as_str())
+        })
         .collect();
 
     if !unbound.is_empty() {
@@ -2977,8 +3065,8 @@ fn build_not_exists_subquery(
         unique_unbound.dedup();
         return Err(format!(
             ":db.error/unbound-variable-in-not Variables {} in (not ...) clause are not bound \
-             in the outer query. Every variable in a NOT clause must appear in a :where pattern \
-             before the NOT clause. Unbound variables in NOT produce semantically unsound results.",
+             in the outer query or by patterns within the NOT clause. Every variable in a NOT \
+             clause must be bound somewhere. Unbound variables produce semantically unsound results.",
             unique_unbound.join(", ")
         )
         .into());
@@ -2986,6 +3074,13 @@ fn build_not_exists_subquery(
 
     let mut sub_joins = Vec::new();
     let mut sub_where = Vec::new();
+    // Local variable-to-alias map for variables bound within the NOT clause.
+    // Used by predicates inside the NOT to reference locally-bound values.
+    let mut not_var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
+    // Also include outer-bound variables so predicates can reference correlated vars.
+    for (k, v) in outer_var_to_alias {
+        not_var_to_alias.insert(k.clone(), v.clone());
+    }
 
     for (idx, clause) in not_join.clauses.iter().enumerate() {
         match clause {
@@ -3131,11 +3226,41 @@ fn build_not_exists_subquery(
                 } else {
                     sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
                 }
+
+                // Track locally-bound variables for predicates within this NOT clause.
+                // Entity-position variables are mapped to (alias, "e").
+                if let PatternNonValuePlace::Variable(v) = &p.entity {
+                    let var_name = format!("{}", v);
+                    if !outer_var_to_alias.contains_key(&var_name) {
+                        not_var_to_alias.insert(var_name, (alias.clone(), "e"));
+                    }
+                }
+                // Value-position variables are mapped to (alias, "v").
+                if let PatternValuePlace::Variable(v) = &p.value {
+                    let var_name = format!("{}", v);
+                    if !outer_var_to_alias.contains_key(&var_name) {
+                        not_var_to_alias.insert(var_name, (alias.clone(), "v"));
+                    }
+                }
+                // Tx-position variables are mapped to (alias, "tx").
+                if let PatternNonValuePlace::Variable(v) = &p.tx {
+                    let var_name = format!("{}", v);
+                    if !outer_var_to_alias.contains_key(&var_name) {
+                        not_var_to_alias.insert(var_name, (alias, "tx"));
+                    }
+                }
+            }
+            WhereClause::Pred(pred) => {
+                // Predicates inside NOT add WHERE conditions to the subquery.
+                // Variables referenced by the predicate must be bound either by
+                // patterns within this NOT clause or by the outer query.
+                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, builder)?;
+                sub_where.push(pred_sql);
             }
             _ => {
-                return Err(":db.error/unsupported-query Only pattern clauses (e.g. [?e :attr ?v]) \
-                            are supported inside (not ...) / (not-join ...). Predicates and \
-                            function calls inside NOT are not yet supported.".into());
+                return Err(":db.error/unsupported-query Only pattern clauses and predicates \
+                            are supported inside (not ...) / (not-join ...). Function calls \
+                            and rule invocations inside NOT are not yet supported.".into());
             }
         }
     }
