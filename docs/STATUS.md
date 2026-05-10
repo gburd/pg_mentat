@@ -173,15 +173,12 @@ treat them as missing rather than broken.
   indexes. There is no sharded writer.
 - **Schema cache invalidation is coarse.** A schema edit clears more
   cached parses than strictly necessary.
-- **No published load-test results above 100K datoms.** The old
-  `benchmarks/LOAD_TEST_RESULTS.md` and
-  `benchmarks/results/BASELINE_SUMMARY.md` asserted TPS numbers with no
-  CSVs, flamegraphs, or reproducible harness. Both have been deleted in
-  this pass. `benchmarks/BENCHMARKS.md` documents the current honest
-  micro-benchmark (up to 333K datoms on a developer laptop). Phase 2 in
-  `docs/ROADMAP.md` commits to the full 10M-datom benchmark (CSV +
-  flamegraph) before any performance claim returns
-  to the README.
+- **No published load-test results above 100K datoms.** The initial
+  Phase 2 benchmark (`docs/benchmarks/phase2.md`) covers 120K datoms
+  on a developer laptop with 4 query shapes and an EAV baseline.
+  Mentat overhead is 1.7x–3.6x vs raw EAV SQL depending on query
+  shape. The full 10M-datom hermetic benchmark (dedicated host, CSV +
+  flamegraph, scaling curves) remains open work per `docs/ROADMAP.md`.
 - **pgrx-tests coverage.** `cargo pgrx test pg16` runs, but many of the
   test files under `pg_mentat/src/*_tests.rs` are end-to-end SQL round
   trips, not unit tests of internal functions. Coverage of the
@@ -206,6 +203,19 @@ treat them as missing rather than broken.
 
 ## Done (previously in-flight)
 
+- **Phase 2 benchmark harness.** `benchmarks/phase2/run.sh` generates
+  a deterministic dataset, loads into both pg_mentat and a plain-EAV
+  baseline, runs 4 query shapes x 30 repetitions, and writes
+  timestamped CSV + EXPLAIN plans. Results:
+  [`docs/benchmarks/phase2.md`](benchmarks/phase2.md). Overhead
+  ranges from 1.7x (predicate joins) to 3.6x (point lookups) vs raw
+  EAV at 120K datoms. The hermetic 10M-datom run remains open.
+- **Beta hardening.** Four code-quality fixes shipped: (1) predicate
+  constants parameterized via `SqlBuilder::bind_*` (eliminates the
+  last SQL-injection surface), (2) type-tag constants extracted to a
+  single shared module, (3) LRU eviction (cap=256) on the prepared
+  statement cache, (4) `parking_lot::RwLock` replaces
+  `std::sync::RwLock` in the schema cache (no lock poisoning).
 - **Storage unification (Phase 1).** `sql/10_narrow_storage.sql`
   installs the narrow per-type tables. The wide-row `mentat.datoms`
   TABLE has been dropped; `mentat.datoms` is now a compatibility VIEW
