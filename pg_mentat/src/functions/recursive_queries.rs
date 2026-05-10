@@ -530,7 +530,7 @@ mod tests {
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
-mod pg_tests {
+mod recursive_query_tests {
     use super::*;
 
     #[pg_test]

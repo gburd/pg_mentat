@@ -1,0 +1,65 @@
+;; Phase 2 schema — a minimal issue tracker.
+;;
+;; This models what a real web app has: users with unique emails,
+;; issues with titles, references to assignees and reporters, a
+;; keyword-valued state enum, a long-valued priority, and timestamps.
+;; Designed to exercise every value type we have an index on:
+;;   :db.type/string  (long-ish text)
+;;   :db.type/keyword (enum)
+;;   :db.type/long    (priority, int predicate target)
+;;   :db.type/ref     (assignee, reporter, labels)
+;;   :db.type/instant (created_at)
+
+[
+  ;; Users
+  {:db/ident        :user/email
+   :db/valueType    :db.type/string
+   :db/cardinality  :db.cardinality/one
+   :db/unique       :db.unique/identity
+   :db/index        true}
+
+  {:db/ident        :user/name
+   :db/valueType    :db.type/string
+   :db/cardinality  :db.cardinality/one}
+
+  ;; Issues
+  {:db/ident        :issue/title
+   :db/valueType    :db.type/string
+   :db/cardinality  :db.cardinality/one}
+
+  {:db/ident        :issue/state
+   :db/valueType    :db.type/keyword
+   :db/cardinality  :db.cardinality/one
+   :db/index        true}
+
+  {:db/ident        :issue/priority
+   :db/valueType    :db.type/long
+   :db/cardinality  :db.cardinality/one
+   :db/index        true}
+
+  {:db/ident        :issue/assignee
+   :db/valueType    :db.type/ref
+   :db/cardinality  :db.cardinality/one
+   :db/index        true}
+
+  {:db/ident        :issue/reporter
+   :db/valueType    :db.type/ref
+   :db/cardinality  :db.cardinality/one
+   :db/index        true}
+
+  {:db/ident        :issue/created-at
+   :db/valueType    :db.type/instant
+   :db/cardinality  :db.cardinality/one
+   :db/index        true}
+
+  {:db/ident        :issue/label
+   :db/valueType    :db.type/ref
+   :db/cardinality  :db.cardinality/many
+   :db/index        true}
+
+  ;; Labels are just entities with a name
+  {:db/ident        :label/name
+   :db/valueType    :db.type/string
+   :db/cardinality  :db.cardinality/one
+   :db/unique       :db.unique/identity}
+]

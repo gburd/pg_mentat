@@ -1210,8 +1210,7 @@ mod tests {
         Ok(())
     }
 
-    /// Bootstrap the core Mentat schema.
-    #[pg_extern]
+    /// Bootstrap the core Mentat schema (test helper).
     fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error>> {
         Spi::run(
             r#"

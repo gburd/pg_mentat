@@ -74,7 +74,7 @@ mod batch_operation_tests {
     }
 
     #[pg_test]
-    fn test_batch_50_entities() {
+    fn test_batch_ops_50_entities() {
         setup();
         setup_batch_schema();
 
@@ -434,7 +434,7 @@ mod batch_operation_tests {
     // ========================================================================
 
     #[pg_test]
-    fn test_empty_transaction() {
+    fn test_batch_empty_transaction() {
         setup();
         let _result = Spi::get_one::<String>("SELECT mentat_transact('[]'::TEXT)");
     }

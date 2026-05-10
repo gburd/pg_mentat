@@ -1226,7 +1226,7 @@ mod typed_value_tests {
 
     /// Test pull with wildcard pattern
     #[pg_test]
-    fn test_pull_wildcard() {
+    fn test_typed_value_pull_wildcard() {
         setup();
         Spi::run(
             "SELECT mentat_transact('[
@@ -1347,7 +1347,7 @@ mod typed_value_tests {
 
     /// Test that empty transaction is handled gracefully
     #[pg_test]
-    fn test_empty_transaction() {
+    fn test_typed_value_empty_transaction() {
         setup();
         // Empty vector should not cause errors
         let result = Spi::get_one::<String>("SELECT mentat_transact('[]'::TEXT)");
@@ -1432,7 +1432,7 @@ mod typed_value_tests {
     /// Core regression test: retract one value from a multi-valued attribute,
     /// verify only that specific value is removed and others remain.
     #[pg_test]
-    fn test_cardinality_many_retract_single_value() {
+    fn test_typed_cardinality_many_retract_single_value() {
         setup();
 
         // Define a cardinality-many keyword attribute

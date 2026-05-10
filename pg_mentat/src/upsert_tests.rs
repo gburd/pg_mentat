@@ -187,7 +187,7 @@ mod upsert_tests {
         for i in 0..10 {
             upsert_ops.push(format!(
                 "{{:db/id \"u{i}\" :up/uid \"BATCH-{i}\" :up/val {}}}",
-                i = i, 100 + i
+                100 + i
             ));
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", upsert_ops.join("\n"))).expect("upsert");

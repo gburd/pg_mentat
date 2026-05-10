@@ -231,18 +231,7 @@ fn execute_schema_op() -> Result<JsonValue, Box<dyn std::error::Error + Send + S
     }))
 }
 
-/// Type tags matching encode_value in transact.rs.
-mod type_tag {
-    pub const REF: i16 = 0;
-    pub const BOOLEAN: i16 = 1;
-    pub const LONG: i16 = 2;
-    pub const DOUBLE: i16 = 3;
-    pub const INSTANT: i16 = 4;
-    pub const STRING: i16 = 7;
-    pub const KEYWORD: i16 = 8;
-    pub const UUID: i16 = 10;
-    pub const BYTES: i16 = 11;
-}
+use crate::types::constants::type_tag;
 
 /// Export entities to EDN format
 ///

@@ -45,7 +45,7 @@ mod find_spec_exhaustive_tests {
     // ========================================================================
 
     #[pg_test]
-    fn test_fs_scalar_string() {
+    fn test_fse_scalar_string() {
         setup(); setup_fs_schema(); setup_fs_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :fs/name ?n] [?e :fs/name \"person-0\"]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -55,7 +55,7 @@ mod find_spec_exhaustive_tests {
     }
 
     #[pg_test]
-    fn test_fs_scalar_long() {
+    fn test_fse_scalar_long() {
         setup(); setup_fs_schema(); setup_fs_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :fs/name \"person-5\"] [?e :fs/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -65,7 +65,7 @@ mod find_spec_exhaustive_tests {
     }
 
     #[pg_test]
-    fn test_fs_scalar_double() {
+    fn test_fse_scalar_double() {
         setup(); setup_fs_schema(); setup_fs_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?d . :where [?e :fs/name \"person-4\"] [?e :fs/dbl ?d]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -116,7 +116,7 @@ mod find_spec_exhaustive_tests {
     }
 
     #[pg_test]
-    fn test_fs_scalar_no_match() {
+    fn test_fse_scalar_no_match() {
         setup(); setup_fs_schema(); setup_fs_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :fs/name ?n] [?e :fs/name \"nonexistent\"]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -347,7 +347,7 @@ mod find_spec_exhaustive_tests {
     }
 
     #[pg_test]
-    fn test_fs_tuple_no_match() {
+    fn test_fse_tuple_no_match() {
         setup(); setup_fs_schema(); setup_fs_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ?v] :where [?e :fs/name \"nonexistent\"] [?e :fs/name ?n] [?e :fs/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",

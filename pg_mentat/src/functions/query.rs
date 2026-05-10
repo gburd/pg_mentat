@@ -11,8 +11,10 @@ use pgrx::prelude::*;
 use pgrx::spi::OwnedPreparedStatement;
 use pgrx::JsonB;
 use serde_json::json;
+use lru::LruCache;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 // ============================================================================
 // Prepared Statement Cache
@@ -24,14 +26,25 @@ struct CacheEntry {
     hits: u64,
 }
 
-/// Thread-local prepared statement cache.
-///
-/// Uses the generated SQL string as the cache key. Since PostgreSQL backends
-/// are single-threaded, a `RefCell` is sufficient (no `Mutex` needed).
-/// `OwnedPreparedStatement` uses `SPI_keepplan` to persist the plan in
-/// `TopMemoryContext`, so it survives across SPI connection lifetimes.
+/// Maximum number of prepared statements to cache per backend.
+/// After this limit, the least-recently-used plan is evicted.
+const STMT_CACHE_CAPACITY: usize = 256;
+
+// Thread-local prepared statement cache.
+//
+// Uses the generated SQL string as the cache key. Since PostgreSQL backends
+// are single-threaded, a `RefCell` is sufficient (no `Mutex` needed).
+// `OwnedPreparedStatement` uses `SPI_keepplan` to persist the plan in
+// `TopMemoryContext`, so it survives across SPI connection lifetimes.
+//
+// Bounded by `STMT_CACHE_CAPACITY` via LRU eviction to prevent unbounded
+// memory growth in long-running backends under connection poolers.
 thread_local! {
-    static STMT_CACHE: RefCell<HashMap<String, CacheEntry>> = RefCell::new(HashMap::new());
+    static STMT_CACHE: RefCell<LruCache<String, CacheEntry>> =
+        RefCell::new(LruCache::new(
+            // SAFETY: constant is non-zero
+            NonZeroUsize::new(STMT_CACHE_CAPACITY).unwrap_or(NonZeroUsize::MIN)
+        ));
 }
 
 /// Clear the prepared statement cache.
@@ -85,9 +98,10 @@ fn execute_cached_query<'a>(
     let result = client.select(&prepared, None, params)?;
 
     // Keep the plan (moves it to TopMemoryContext) and cache it.
+    // LRU eviction ensures we never exceed STMT_CACHE_CAPACITY entries.
     let owned = prepared.keep();
     STMT_CACHE.with(|cache| {
-        cache.borrow_mut().insert(
+        cache.borrow_mut().put(
             sql.to_string(),
             CacheEntry {
                 stmt: owned,
@@ -99,27 +113,7 @@ fn execute_cached_query<'a>(
     Ok(result)
 }
 
-/// Value type tags matching the encoding used in transact.rs and pull.rs:
-///   0 = ref      (i64 entity ID, little-endian)
-///   1 = boolean   (single byte: 0=false, 1=true)
-///   2 = long      (i64 little-endian)
-///   3 = double    (f64 little-endian)
-///   4 = instant   (i64 microseconds since epoch, little-endian)
-///   7 = string    (UTF-8 bytes)
-///   8 = keyword   (UTF-8 bytes, stored without leading colon)
-///  10 = uuid      (16 bytes, big-endian)
-///  11 = bytes     (raw binary)
-mod type_tag {
-    pub const REF: i16 = 0;
-    pub const BOOLEAN: i16 = 1;
-    pub const LONG: i16 = 2;
-    pub const DOUBLE: i16 = 3;
-    pub const INSTANT: i16 = 4;
-    pub const STRING: i16 = 7;
-    pub const KEYWORD: i16 = 8;
-    pub const UUID: i16 = 10;
-    pub const BYTES: i16 = 11;
-}
+use crate::types::constants::type_tag;
 
 /// State accumulated during SQL generation: the parameterized query string
 /// and the bound parameter values for safe execution via SPI.
@@ -1169,7 +1163,7 @@ pub fn mentat_stmt_cache_stats() -> JsonB {
                 })
             })
             .collect();
-        let total_hits: u64 = cache.values().map(|e| e.hits).sum();
+        let total_hits: u64 = cache.iter().map(|(_, e)| e.hits).sum();
         json!({
             "size": cache.len(),
             "total_hits": total_hits,
@@ -2704,7 +2698,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle predicate clauses
     for pred in predicates {
-        let pred_sql = build_predicate_clause(pred, &var_to_alias)?;
+        let pred_sql = build_predicate_clause(pred, &var_to_alias, builder)?;
         where_clauses.push(pred_sql);
     }
 
@@ -3166,6 +3160,7 @@ fn build_not_exists_subquery(
 fn build_predicate_clause(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
 
@@ -3192,8 +3187,8 @@ fn build_predicate_clause(
         ).into());
     }
 
-    let left = pred_arg_to_sql(&pred.args[0], var_to_alias)?;
-    let right = pred_arg_to_sql(&pred.args[1], var_to_alias)?;
+    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, builder)?;
+    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, builder)?;
 
     // For value column comparisons, we need to cast the decoded value to numeric
     // so that comparisons work correctly on the underlying values
@@ -3206,6 +3201,7 @@ fn build_predicate_clause(
 fn pred_arg_to_sql(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
         FnArg::Variable(v) => {
@@ -3242,15 +3238,13 @@ fn pred_arg_to_sql(
                 ).into())
             }
         }
-        FnArg::EntidOrInteger(i) => Ok(format!("{}", i)),
-        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("{}", f.into_inner())),
+        FnArg::EntidOrInteger(i) => Ok(builder.bind_bigint(*i)),
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(builder.bind_double(f.into_inner())),
         FnArg::Constant(NonIntegerConstant::Text(s)) => {
-            // SECURITY: Escape single quotes to prevent SQL injection
-            let escaped = s.as_ref().replace('\'', "''");
-            Ok(format!("'{}'", escaped))
+            Ok(builder.bind_text(s.as_ref().to_string()))
         }
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
-            Ok(format!("{}", if *b { 1 } else { 0 }))
+            Ok(if *b { "1".to_string() } else { "0".to_string() })
         }
         _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type. \
                   Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
@@ -3376,6 +3370,7 @@ fn build_rule_ctes(
 fn build_predicate_clause_for_rule(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
 
@@ -3402,8 +3397,8 @@ fn build_predicate_clause_for_rule(
         ).into());
     }
 
-    let left = pred_arg_to_sql_for_rule(&pred.args[0], var_to_alias)?;
-    let right = pred_arg_to_sql_for_rule(&pred.args[1], var_to_alias)?;
+    let left = pred_arg_to_sql_for_rule(&pred.args[0], var_to_alias, builder)?;
+    let right = pred_arg_to_sql_for_rule(&pred.args[1], var_to_alias, builder)?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
 }
@@ -3485,6 +3480,7 @@ fn resolve_var_refs_for_rule(
 fn pred_arg_to_sql_for_rule(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
         FnArg::Variable(v) => {
@@ -3518,15 +3514,13 @@ fn pred_arg_to_sql_for_rule(
                 ).into())
             }
         }
-        FnArg::EntidOrInteger(i) => Ok(format!("{}", i)),
-        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(format!("{}", f.into_inner())),
+        FnArg::EntidOrInteger(i) => Ok(builder.bind_bigint(*i)),
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(builder.bind_double(f.into_inner())),
         FnArg::Constant(NonIntegerConstant::Text(s)) => {
-            // SECURITY: Escape single quotes to prevent SQL injection
-            let escaped = s.as_ref().replace('\'', "''");
-            Ok(format!("'{}'", escaped))
+            Ok(builder.bind_text(s.as_ref().to_string()))
         }
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
-            Ok(format!("{}", if *b { 1 } else { 0 }))
+            Ok(if *b { "1".to_string() } else { "0".to_string() })
         }
         _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type in rule. \
                   Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
@@ -3741,7 +3735,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
             }
             WhereClause::Pred(pred) => {
                 // Handle predicates in rule bodies
-                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias)?;
+                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias, builder)?;
                 where_parts.push(pred_sql);
             }
             WhereClause::WhereFn(wf) => {

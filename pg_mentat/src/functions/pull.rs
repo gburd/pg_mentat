@@ -200,18 +200,7 @@ impl SchemaCache {
     }
 }
 
-/// Type tags matching encode_value in transact.rs.
-mod type_tag {
-    pub const REF: i16 = 0;
-    pub const BOOLEAN: i16 = 1;
-    pub const LONG: i16 = 2;
-    pub const DOUBLE: i16 = 3;
-    pub const INSTANT: i16 = 4;
-    pub const STRING: i16 = 7;
-    pub const KEYWORD: i16 = 8;
-    pub const UUID: i16 = 10;
-    pub const BYTES: i16 = 11;
-}
+use crate::types::constants::type_tag;
 
 /// Default limit for cardinality-many results (Datomic default is 1000).
 const DEFAULT_MANY_LIMIT: usize = 1000;
@@ -3068,7 +3057,7 @@ mod tests {
             assert_eq!(
                 self_obj.get(":db/id"),
                 Some(&json!(10000)),
-                "Self-reference should be a {:db/id} stub"
+                "Self-reference should be a {{:db/id}} stub"
             );
         }
 

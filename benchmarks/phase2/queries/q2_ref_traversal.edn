@@ -1,0 +1,7 @@
+;; Q2 ref traversal: issues assigned to the first user, with title + state
+[:find ?i ?title ?state
+ :where
+ [?u :user/email "user100000@example.com"]
+ [?i :issue/assignee ?u]
+ [?i :issue/title ?title]
+ [?i :issue/state ?state]]

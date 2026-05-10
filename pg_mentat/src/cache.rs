@@ -2,7 +2,7 @@ use crate::functions::store_management::get_schema_for_store;
 use pgrx::spi::Spi;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 /// Attribute metadata cache entry
 #[derive(Clone, Debug, PartialEq)]
@@ -66,18 +66,9 @@ impl SchemaCache {
             );
             let rows = client.select(&query, None, &[])?;
 
-            let mut attrs = self
-                .attrs_by_id
-                .write()
-                .expect("RwLock poisoned - schema cache corrupted");
-            let mut idents = self
-                .idents_to_entid
-                .write()
-                .expect("RwLock poisoned - ident cache corrupted");
-            let mut entids = self
-                .entids_to_ident
-                .write()
-                .expect("RwLock poisoned - ident cache corrupted");
+            let mut attrs = self.attrs_by_id.write();
+            let mut idents = self.idents_to_entid.write();
+            let mut entids = self.entids_to_ident.write();
 
             for row in rows {
                 let entid: i64 = match row.get(1) {
@@ -126,14 +117,8 @@ impl SchemaCache {
             let query = format!("SELECT ident, entid FROM {}.idents", schema);
             let rows = client.select(&query, None, &[])?;
 
-            let mut idents = self
-                .idents_to_entid
-                .write()
-                .expect("RwLock poisoned - ident cache corrupted");
-            let mut entids = self
-                .entids_to_ident
-                .write()
-                .expect("RwLock poisoned - ident cache corrupted");
+            let mut idents = self.idents_to_entid.write();
+            let mut entids = self.entids_to_ident.write();
 
             for row in rows {
                 let ident: String = match row.get(1) {
@@ -170,10 +155,7 @@ impl SchemaCache {
     pub fn get_attribute(&self, attr_id: i64) -> Option<AttributeInfo> {
         self.ensure_warm();
 
-        let cache = self
-            .attrs_by_id
-            .read()
-            .expect("RwLock poisoned - schema cache corrupted");
+        let cache = self.attrs_by_id.read();
         cache.get(&attr_id).cloned()
     }
 
@@ -184,10 +166,7 @@ impl SchemaCache {
     pub fn resolve_ident(&self, ident: &str) -> Option<i64> {
         self.ensure_warm();
 
-        let cache = self
-            .idents_to_entid
-            .read()
-            .expect("RwLock poisoned - ident cache corrupted");
+        let cache = self.idents_to_entid.read();
         cache.get(ident).copied()
     }
 
@@ -195,10 +174,7 @@ impl SchemaCache {
     pub fn get_ident(&self, entid: i64) -> Option<String> {
         self.ensure_warm();
 
-        let cache = self
-            .entids_to_ident
-            .read()
-            .expect("RwLock poisoned - ident cache corrupted");
+        let cache = self.entids_to_ident.read();
         cache.get(&entid).cloned()
     }
 
@@ -206,17 +182,11 @@ impl SchemaCache {
     pub fn get_attribute_by_ident(&self, ident: &str) -> Option<AttributeInfo> {
         self.ensure_warm();
 
-        let ident_map = self
-            .idents_to_entid
-            .read()
-            .expect("RwLock poisoned - ident cache corrupted");
+        let ident_map = self.idents_to_entid.read();
         let entid = ident_map.get(ident).copied()?;
         drop(ident_map);
 
-        let cache = self
-            .attrs_by_id
-            .read()
-            .expect("RwLock poisoned - schema cache corrupted");
+        let cache = self.attrs_by_id.read();
         cache.get(&entid).cloned()
     }
 
@@ -229,18 +199,9 @@ impl SchemaCache {
     ///
     /// The next access will trigger a fresh bulk load from the database.
     pub fn invalidate(&self) {
-        let mut attrs = self
-            .attrs_by_id
-            .write()
-            .expect("RwLock poisoned - schema cache corrupted");
-        let mut idents = self
-            .idents_to_entid
-            .write()
-            .expect("RwLock poisoned - ident cache corrupted");
-        let mut entids = self
-            .entids_to_ident
-            .write()
-            .expect("RwLock poisoned - ident cache corrupted");
+        let mut attrs = self.attrs_by_id.write();
+        let mut idents = self.idents_to_entid.write();
+        let mut entids = self.entids_to_ident.write();
         attrs.clear();
         idents.clear();
         entids.clear();
@@ -267,14 +228,14 @@ impl StoreCacheMap {
     fn get_or_create(&self, store_name: &str) -> &'static SchemaCache {
         // Fast path: read lock
         {
-            let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+            let caches = self.caches.read();
             if let Some(cache) = caches.get(store_name) {
                 return cache;
             }
         }
 
         // Slow path: write lock, create new cache
-        let mut caches = self.caches.write().expect("StoreCacheMap RwLock poisoned");
+        let mut caches = self.caches.write();
         // Double-check after acquiring write lock
         if let Some(cache) = caches.get(store_name) {
             return cache;
@@ -288,7 +249,7 @@ impl StoreCacheMap {
 
     /// Invalidate the cache for a specific store.
     fn invalidate_store(&self, store_name: &str) {
-        let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+        let caches = self.caches.read();
         if let Some(cache) = caches.get(store_name) {
             cache.invalidate();
         }
@@ -296,7 +257,7 @@ impl StoreCacheMap {
 
     /// Invalidate all store caches.
     fn invalidate_all(&self) {
-        let caches = self.caches.read().expect("StoreCacheMap RwLock poisoned");
+        let caches = self.caches.read();
         for cache in caches.values() {
             cache.invalidate();
         }
@@ -304,8 +265,8 @@ impl StoreCacheMap {
 }
 
 /// Global store cache map instance
-static STORE_CACHES: once_cell::sync::Lazy<StoreCacheMap> =
-    once_cell::sync::Lazy::new(StoreCacheMap::new);
+static STORE_CACHES: std::sync::LazyLock<StoreCacheMap> =
+    std::sync::LazyLock::new(StoreCacheMap::new);
 
 /// Get the schema cache for the default store.
 ///

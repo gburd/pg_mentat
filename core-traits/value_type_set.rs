@@ -32,7 +32,7 @@ impl<T: ::enumset::EnumSetType + Clone> EnumSetExtensions<T> for EnumSet<T> {
 
     /// Return a clone of `self` with `y` added.
     fn with(&self, y: T) -> EnumSet<T> {
-        let mut o = self.clone();
+        let mut o = *self;
         o.insert(y);
         o
     }
