@@ -95,6 +95,17 @@ extension_sql!(
         tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    -- Cross-backend cache invalidation: generation counter per store.
+    -- Bumped on schema-affecting transactions; other backends check on access
+    -- and reload their SchemaCache if stale.
+    CREATE TABLE IF NOT EXISTS mentat.cache_generation (
+        store_name TEXT PRIMARY KEY,
+        gen BIGINT NOT NULL DEFAULT 1
+    );
+    INSERT INTO mentat.cache_generation (store_name, gen)
+    VALUES ('default', 1)
+    ON CONFLICT DO NOTHING;
+
     -- Store metadata: tracks named stores and their backing schemas.
     -- The `default` row is required by functions/{store_management,entity,
     -- time_travel,transact,virtual_tables}.rs which look up `store_id` by name.
@@ -659,6 +670,19 @@ extension_sql!(
 
 mod cache;
 pub mod monitoring;
+
+/// Ensure the pg_mentat extension SQL DDL is loaded in the current database.
+///
+/// pgrx test mode loads the shared library but does not automatically execute
+/// extension_sql! blocks. Call this from `#[pg_test]` functions (or a shared
+/// setup fixture) to create the extension DDL so that schema tables, sequences,
+/// and bootstrap data are available.
+#[cfg(any(test, feature = "pg_test"))]
+pub fn ensure_extension_loaded() {
+    use pgrx::spi::Spi;
+    Spi::run("CREATE EXTENSION IF NOT EXISTS pg_mentat CASCADE").ok();
+}
+
 #[cfg(any(test, feature = "pg_test"))]
 mod cache_tests;
 #[cfg(any(test, feature = "pg_test"))]

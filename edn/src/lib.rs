@@ -572,7 +572,7 @@ peg::parser!(pub grammar parse() for str {
 
     rule query_part() -> query::QueryPart
         = __ ":find" fs:find_spec() { query::QueryPart::FindSpec(fs) }
-        / __ ":in" in_vars:variable()+ { query::QueryPart::InVars(in_vars) }
+        / __ ":in" in_bindings:binding()+ { query::QueryPart::InBindings(in_bindings) }
         / __ ":limit" l:limit() { query::QueryPart::Limit(l) }
         / __ ":offset" o:offset() { query::QueryPart::Offset(o) }
         / __ ":order" os:order()+ { query::QueryPart::Order(os) }

@@ -994,6 +994,7 @@ pub struct ParsedQuery {
     pub default_source: SrcVar,
     pub with: Vec<Variable>,
     pub in_vars: Vec<Variable>,
+    pub in_bindings: Vec<Binding>,
     pub in_sources: BTreeSet<SrcVar>,
     pub limit: Limit,
     pub offset: Offset,
@@ -1006,7 +1007,9 @@ pub struct ParsedQuery {
 pub(crate) enum QueryPart {
     FindSpec(FindSpec),
     WithVars(Vec<Variable>),
+    #[allow(dead_code)] // Kept for backward compat; parser now emits InBindings
     InVars(Vec<Variable>),
+    InBindings(Vec<Binding>),
     Limit(Limit),
     Offset(Offset),
     WhereClauses(Vec<WhereClause>),
@@ -1028,6 +1031,7 @@ impl ParsedQuery {
         let mut find_spec: Option<FindSpec> = None;
         let mut with: Option<Vec<Variable>> = None;
         let mut in_vars: Option<Vec<Variable>> = None;
+        let mut in_bindings: Option<Vec<Binding>> = None;
         let mut limit: Option<Limit> = None;
         let mut offset: Option<Offset> = None;
         let mut where_clauses: Option<Vec<WhereClause>> = None;
@@ -1054,6 +1058,12 @@ impl ParsedQuery {
                         return Err("find query has repeated :in");
                     }
                     in_vars = Some(x)
+                }
+                QueryPart::InBindings(x) => {
+                    if in_bindings.is_some() {
+                        return Err("find query has repeated :in");
+                    }
+                    in_bindings = Some(x)
                 }
                 QueryPart::Limit(x) => {
                     if limit.is_some() {
@@ -1091,11 +1101,28 @@ impl ParsedQuery {
             }
         }
 
+        // If we got InBindings, derive in_vars from the scalar bindings
+        // for backward compatibility with existing code that uses in_vars.
+        let final_in_bindings = in_bindings.unwrap_or_default();
+        let final_in_vars = if in_vars.is_some() {
+            in_vars.unwrap_or_default()
+        } else {
+            // Extract scalar variables from binding forms
+            final_in_bindings
+                .iter()
+                .filter_map(|b| match b {
+                    Binding::BindScalar(v) => Some(v.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+
         Ok(ParsedQuery {
             find_spec: find_spec.ok_or("expected :find")?,
             default_source: SrcVar::DefaultSrc,
             with: with.unwrap_or_default(),
-            in_vars: in_vars.unwrap_or_default(),
+            in_vars: final_in_vars,
+            in_bindings: final_in_bindings,
             in_sources: BTreeSet::default(),
             limit: limit.unwrap_or(Limit::Unlimited),
             offset: offset.unwrap_or(Offset::Unlimited),

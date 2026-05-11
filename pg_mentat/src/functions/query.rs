@@ -634,11 +634,28 @@ fn parse_pagination_options(inputs: &serde_json::Value) -> PaginationOption {
     opts
 }
 
+/// Enriched input binding parsed from `:in` clause + JSON inputs.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum InputBinding {
+    /// Scalar: a single variable bound to a single value.
+    Scalar { var: String, value: serde_json::Value },
+    /// Collection: a single variable bound to multiple values (IN clause).
+    Collection { var: String, values: Vec<serde_json::Value> },
+    /// Tuple: multiple variables bound simultaneously to a single tuple.
+    Tuple { vars: Vec<String>, values: Vec<serde_json::Value> },
+    /// Relation: multiple variables bound to multiple tuples (VALUES join).
+    Relation { vars: Vec<String>, rows: Vec<Vec<serde_json::Value>> },
+}
+
 /// Parse :in clause input bindings from the inputs JSON parameter.
 ///
 /// Matches the "inputs" JSON array positionally against the parsed query's
 /// :in variables. For example, given `:in ?name ?age` and
 /// `{"inputs": ["Alice", 30]}`, returns `{"?name": "Alice", "?age": 30}`.
+///
+/// Also handles collection bindings `[?x ...]`, tuple bindings `[?x ?y]`,
+/// and relation bindings `[[?x ?y]]`.
 fn parse_input_bindings(
     in_vars: &[edn::query::Variable],
     inputs_json: &serde_json::Value,
@@ -657,6 +674,96 @@ fn parse_input_bindings(
         }
     }
     bindings
+}
+
+/// Parse enriched input bindings using the full binding forms from the parser.
+///
+/// This handles all four binding types: BindScalar, BindColl, BindTuple, BindRel.
+/// The `inputs` JSON array is consumed positionally — one element per binding form.
+fn parse_input_bindings_v2(
+    in_bindings: &[edn::query::Binding],
+    inputs_json: &serde_json::Value,
+) -> Vec<InputBinding> {
+    use edn::query::Binding;
+
+    let mut result = Vec::new();
+    let inputs_arr = inputs_json
+        .as_object()
+        .and_then(|obj| obj.get("inputs"))
+        .and_then(|v| v.as_array());
+
+    let inputs = match inputs_arr {
+        Some(arr) => arr,
+        None => return result,
+    };
+
+    for (i, binding) in in_bindings.iter().enumerate() {
+        let val = match inputs.get(i) {
+            Some(v) => v,
+            None => continue,
+        };
+
+        match binding {
+            Binding::BindScalar(var) => {
+                result.push(InputBinding::Scalar {
+                    var: format!("{}", var),
+                    value: val.clone(),
+                });
+            }
+            Binding::BindColl(var) => {
+                // The input value should be a JSON array of values
+                let values = match val.as_array() {
+                    Some(arr) => arr.clone(),
+                    None => vec![val.clone()],
+                };
+                result.push(InputBinding::Collection {
+                    var: format!("{}", var),
+                    values,
+                });
+            }
+            Binding::BindTuple(vars_or_placeholders) => {
+                // The input value should be a JSON array (one tuple)
+                let tuple_vals = match val.as_array() {
+                    Some(arr) => arr.clone(),
+                    None => vec![val.clone()],
+                };
+                let vars: Vec<String> = vars_or_placeholders
+                    .iter()
+                    .map(|vp| match vp {
+                        edn::query::VariableOrPlaceholder::Variable(v) => format!("{}", v),
+                        edn::query::VariableOrPlaceholder::Placeholder => "_".to_string(),
+                    })
+                    .collect();
+                result.push(InputBinding::Tuple {
+                    vars,
+                    values: tuple_vals,
+                });
+            }
+            Binding::BindRel(vars_or_placeholders) => {
+                // The input value should be a JSON array of arrays (rows)
+                let rows: Vec<Vec<serde_json::Value>> = match val.as_array() {
+                    Some(arr) => arr
+                        .iter()
+                        .map(|row| match row.as_array() {
+                            Some(r) => r.clone(),
+                            None => vec![row.clone()],
+                        })
+                        .collect(),
+                    None => vec![vec![val.clone()]],
+                };
+                let vars: Vec<String> = vars_or_placeholders
+                    .iter()
+                    .map(|vp| match vp {
+                        edn::query::VariableOrPlaceholder::Variable(v) => format!("{}", v),
+                        edn::query::VariableOrPlaceholder::Placeholder => "_".to_string(),
+                    })
+                    .collect();
+                result.push(InputBinding::Relation { vars, rows });
+            }
+        }
+    }
+
+    result
 }
 
 /// Bind an :in clause variable to a WHERE constraint on a datom value column.
@@ -871,17 +978,19 @@ pub(crate) fn mentat_query_internal(
 
     let temporal = parse_temporal_options(&inputs.0);
     let input_bindings = parse_input_bindings(&parsed_query.in_vars, &inputs.0);
+    let enriched = parse_input_bindings_v2(&parsed_query.in_bindings, &inputs.0);
     let has_aggregates = find_spec_has_aggregates(&parsed_query.find_spec);
     let find_vars = extract_find_variables(&parsed_query.find_spec);
     let pagination = parse_pagination_options(&inputs.0);
 
     let mut builder = SqlBuilder::new();
-    let (mut sql_query, complexity, _datalog_plan) = build_sql_from_datalog(
+    let (mut sql_query, complexity, _datalog_plan) = build_sql_from_datalog_enriched(
         &parsed_query,
         &find_vars,
         &mut builder,
         &temporal,
         &input_bindings,
+        &enriched,
         schema_prefix,
     )?;
 
@@ -1755,6 +1864,21 @@ fn build_sql_from_datalog(
     input_bindings: &HashMap<String, serde_json::Value>,
     schema_prefix: &str,
 ) -> Result<(String, QueryComplexity, DatalogPlan), Box<dyn std::error::Error + Send + Sync>> {
+    // Wrapper that passes empty enriched bindings for backward compat.
+    // Callers that need collection/tuple/relation bindings should call
+    // build_sql_from_datalog_enriched directly.
+    build_sql_from_datalog_enriched(parsed, find_vars, builder, temporal, input_bindings, &[], schema_prefix)
+}
+
+fn build_sql_from_datalog_enriched(
+    parsed: &ParsedQuery,
+    find_vars: &[String],
+    builder: &mut SqlBuilder<'_>,
+    temporal: &TemporalOption,
+    input_bindings: &HashMap<String, serde_json::Value>,
+    enriched_input_bindings: &[InputBinding],
+    schema_prefix: &str,
+) -> Result<(String, QueryComplexity, DatalogPlan), Box<dyn std::error::Error + Send + Sync>> {
     // Resolve store_id and bind it as a parameter for type-specific table queries.
     let store_id = resolve_store_id(schema_prefix)?;
     let store_id_param = builder.bind_bigint(store_id as i64);
@@ -1876,6 +2000,10 @@ fn build_sql_from_datalog(
         merged
     };
 
+    // Enriched :in bindings (collection, tuple, relation) are passed from the
+    // caller. Scalar bindings flow through the effective_bindings HashMap.
+    let enriched_bindings = enriched_input_bindings;
+
     // Build CTEs from rule definitions and rule invocations
     let mut cte_prefix = String::new();
     let mut rule_cte_info: Option<RuleCteInfo> = None;
@@ -1903,6 +2031,7 @@ fn build_sql_from_datalog(
             temporal,
             &rule_cte_info,
             &effective_bindings,
+            &enriched_bindings,
             schema_prefix,
             &store_id_param,
         )?
@@ -2042,6 +2171,7 @@ fn build_sql_from_datalog(
                 temporal,
                 &rule_cte_info,
                 &effective_bindings,
+                &enriched_bindings,
                 schema_prefix,
                 &arm_store_id_param,
             )?;
@@ -2633,6 +2763,171 @@ fn remap_param_indices(sql: &str, offset: usize) -> String {
 }
 
 // ============================================================================
+// Collection and Relation binding helpers
+// ============================================================================
+
+/// Build an IN clause for a collection binding `[?x ...]`.
+///
+/// Generates: `alias.v_long IN ($1, $2, $3)` (or appropriate typed column).
+fn build_collection_in_clause(
+    alias: &str,
+    col: &str,
+    values: &[serde_json::Value],
+    builder: &mut SqlBuilder<'_>,
+    _schema_prefix: &str,
+) -> Option<String> {
+    if values.is_empty() {
+        return Some("FALSE".to_string()); // Empty collection matches nothing
+    }
+
+    match col {
+        "v" => {
+            // Determine the type from the first value and build typed IN clause
+            let first = &values[0];
+            if first.is_i64() || first.is_u64() {
+                let params: Vec<String> = values
+                    .iter()
+                    .filter_map(|v| v.as_i64().map(|i| builder.bind_bigint(i)))
+                    .collect();
+                if params.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "{alias}.v_long IN ({})",
+                    params.join(", ")
+                ))
+            } else if first.is_f64() {
+                let params: Vec<String> = values
+                    .iter()
+                    .filter_map(|v| v.as_f64().map(|f| builder.bind_double(f)))
+                    .collect();
+                if params.is_empty() {
+                    return None;
+                }
+                Some(format!(
+                    "{alias}.v_double IN ({})",
+                    params.join(", ")
+                ))
+            } else if first.is_string() {
+                // Determine if keywords or strings
+                let first_str = first.as_str().unwrap_or("");
+                if first_str.starts_with(':') {
+                    let params: Vec<String> = values
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| {
+                            let stripped = s.strip_prefix(':').unwrap_or(s);
+                            builder.bind_text(stripped.to_string())
+                        })
+                        .collect();
+                    if params.is_empty() {
+                        return None;
+                    }
+                    Some(format!(
+                        "{alias}.v_keyword IN ({})",
+                        params.join(", ")
+                    ))
+                } else {
+                    let params: Vec<String> = values
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| builder.bind_text(s.to_string()))
+                        .collect();
+                    if params.is_empty() {
+                        return None;
+                    }
+                    Some(format!(
+                        "{alias}.v_text IN ({})",
+                        params.join(", ")
+                    ))
+                }
+            } else {
+                None
+            }
+        }
+        "e" | "tx" => {
+            let params: Vec<String> = values
+                .iter()
+                .filter_map(|v| v.as_i64().map(|i| builder.bind_bigint(i)))
+                .collect();
+            if params.is_empty() {
+                return None;
+            }
+            Some(format!("{alias}.{col} IN ({})", params.join(", ")))
+        }
+        _ => None,
+    }
+}
+
+/// Build a VALUES join for a relation binding `[[?x ?y]]`.
+///
+/// Generates:
+/// ```sql
+/// INNER JOIN (VALUES ($1::BIGINT, $2::BIGINT), ($3::BIGINT, $4::BIGINT))
+///   AS _in_rel(c0, c1) ON alias_x.e = _in_rel.c0 AND alias_y.e = _in_rel.c1
+/// ```
+fn build_relation_values_join(
+    vars: &[String],
+    rows: &[Vec<serde_json::Value>],
+    var_to_alias: &HashMap<String, (String, &'static str)>,
+    builder: &mut SqlBuilder<'_>,
+    _schema_prefix: &str,
+    joins: &mut Vec<String>,
+) -> Option<String> {
+    if rows.is_empty() || vars.is_empty() {
+        return Some("FALSE".to_string());
+    }
+
+    // Build VALUES rows
+    let mut value_rows = Vec::new();
+    for row in rows {
+        let mut row_params = Vec::new();
+        for val in row {
+            if let Some(i) = val.as_i64() {
+                row_params.push(format!("{}::BIGINT", builder.bind_bigint(i)));
+            } else if let Some(f) = val.as_f64() {
+                row_params.push(format!("{}::DOUBLE PRECISION", builder.bind_double(f)));
+            } else if let Some(s) = val.as_str() {
+                row_params.push(format!("{}::TEXT", builder.bind_text(s.to_string())));
+            } else {
+                row_params.push("NULL".to_string());
+            }
+        }
+        value_rows.push(format!("({})", row_params.join(", ")));
+    }
+
+    // Column names for the VALUES alias
+    let col_names: Vec<String> = (0..vars.len()).map(|i| format!("c{}", i)).collect();
+    let values_alias = "_in_rel";
+
+    // Build the JOIN clause
+    let join_sql = format!(
+        "INNER JOIN (VALUES {}) AS {}({})",
+        value_rows.join(", "),
+        values_alias,
+        col_names.join(", ")
+    );
+    joins.push(join_sql);
+
+    // Build ON conditions
+    let mut on_parts = Vec::new();
+    for (i, var) in vars.iter().enumerate() {
+        if var == "_" {
+            continue;
+        }
+        if let Some((alias, col)) = var_to_alias.get(var.as_str()) {
+            on_parts.push(format!("{}.{} = {}.c{}", alias, col, values_alias, i));
+        }
+    }
+
+    if on_parts.is_empty() {
+        None
+    } else {
+        Some(on_parts.join(" AND "))
+    }
+}
+
+// ============================================================================
 // Extended pattern query builder (supports NOT, predicates, aggregates, FTS, temporal)
 // ============================================================================
 
@@ -2649,6 +2944,7 @@ fn build_extended_pattern_query(
     temporal: &TemporalOption,
     rule_cte_info: &Option<RuleCteInfo>,
     input_bindings: &HashMap<String, serde_json::Value>,
+    enriched_bindings: &[InputBinding],
     schema_prefix: &str,
     store_id_param: &str,
 ) -> Result<
@@ -2896,7 +3192,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         where_clauses.extend(fj.where_parts.iter().cloned());
     }
 
-    // Apply :in clause input bindings as WHERE constraints
+    // Apply :in clause input bindings as WHERE constraints (scalar from HashMap)
     for (var_name, value) in input_bindings {
         if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
             let constraint = match *col {
@@ -2924,6 +3220,62 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             };
             if let Some(c) = constraint {
                 where_clauses.push(c);
+            }
+        }
+    }
+
+    // Apply enriched :in bindings (collection, tuple, relation)
+    for binding in enriched_bindings {
+        match binding {
+            InputBinding::Scalar { .. } => {
+                // Already handled above via the scalar HashMap path
+            }
+            InputBinding::Collection { var, values } => {
+                // Generate IN clause: alias.v_long IN ($1, $2, $3) etc.
+                if let Some((alias, col)) = var_to_alias.get(var.as_str()) {
+                    let in_clause = build_collection_in_clause(
+                        alias, col, values, builder, schema_prefix,
+                    );
+                    if let Some(c) = in_clause {
+                        where_clauses.push(c);
+                    }
+                }
+            }
+            InputBinding::Tuple { vars, values } => {
+                // Bind multiple variables simultaneously
+                for (i, var) in vars.iter().enumerate() {
+                    if var == "_" {
+                        continue; // Skip placeholders
+                    }
+                    if let Some(val) = values.get(i) {
+                        if let Some((alias, col)) = var_to_alias.get(var.as_str()) {
+                            let constraint = match *col {
+                                "v" => bind_input_value(alias, val, builder, schema_prefix),
+                                "e" => bind_input_entity(alias, val, builder, schema_prefix),
+                                "a" => val.as_i64().map(|i| {
+                                    let param = builder.bind_bigint(i);
+                                    format!("{alias}.a = {param}")
+                                }),
+                                "tx" => val.as_i64().map(|i| {
+                                    let param = builder.bind_bigint(i);
+                                    format!("{alias}.tx = {param}")
+                                }),
+                                _ => None,
+                            };
+                            if let Some(c) = constraint {
+                                where_clauses.push(c);
+                            }
+                        }
+                    }
+                }
+            }
+            InputBinding::Relation { vars, rows } => {
+                // Generate a VALUES join for relation bindings
+                if let Some(values_join) = build_relation_values_join(
+                    vars, rows, &var_to_alias, builder, schema_prefix, &mut joins,
+                ) {
+                    where_clauses.push(values_join);
+                }
             }
         }
     }

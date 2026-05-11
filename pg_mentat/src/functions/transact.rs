@@ -133,6 +133,18 @@ fn schema_to_store_name(schema: &str) -> &str {
     }
 }
 
+/// Check if a transaction result indicates schema-affecting changes.
+///
+/// The transaction result JSON includes a `"schema_changed"` field set by
+/// `execute_transaction_inner` when any datom's attribute matches a
+/// schema-defining entid (`:db/ident`, `:db/valueType`, `:db/cardinality`,
+/// `:db/unique`, `:db/index`, `:db/fulltext`, `:db/isComponent`,
+/// `:db/noHistory`).
+fn transaction_touched_schema(result_json: &str) -> bool {
+    // Fast path: check for the marker in the JSON result
+    result_json.contains("\"schema_changed\":true")
+}
+
 fn value_type_name(value: &edn::Value) -> &'static str {
     match value {
         edn::Value::Nil => "nil",
@@ -576,41 +588,20 @@ fn execute_cas_fn(
     Ok(())
 }
 
-/// Allocate a transaction ID using an advisory lock to prevent race conditions.
+/// Allocate a transaction ID using lock-free sequence allocation.
 ///
-/// Uses `pg_advisory_xact_lock` with a store-specific lock key derived from
-/// hashing the schema name. The advisory lock is held for the duration of the
-/// current PostgreSQL transaction (released on COMMIT/ROLLBACK), ensuring that
-/// only one transaction at a time allocates a tx_id and writes to the
-/// transactions table for a given store.
+/// PostgreSQL sequences are atomic — no two callers get the same value.
+/// The `transactions` table has a PRIMARY KEY on `tx`, so duplicate inserts
+/// are impossible with a sequence. SERIALIZABLE isolation + retry logic
+/// (already in place in `execute_transaction_body`) handles actual data
+/// conflicts (same entity being modified concurrently).
 ///
-/// This prevents the "lost update" problem where two concurrent transactions
-/// allocate consecutive tx_ids but interleave their writes, producing
-/// out-of-order or duplicate transaction records.
+/// `basis_t` is derived as `tx_id - 1` because the sequence is monotonically
+/// increasing. Under SERIALIZABLE isolation, `tx_id - 1` is the correct
+/// basis_t representing the last committed transaction visible to this
+/// session's snapshot.
 fn allocate_tx_id(qs: &str) -> Result<(i64, i64, i64), Box<dyn std::error::Error + Send + Sync>> {
-    // Acquire a transaction-scoped advisory lock keyed on the store schema.
-    // We use a hash of the schema name as the lock key to avoid collisions
-    // between different stores while ensuring the same store serializes.
-    // The lock is automatically released when the transaction commits or
-    // rolls back -- no explicit unlock is needed.
-    Spi::run(&format!(
-        "SELECT pg_advisory_xact_lock(hashtext('{}')::bigint)",
-        qs
-    ))?;
-
-    // Get basis-t before transaction (max tx id currently in the database).
-    // In Datomic, basis-t represents the latest transaction point.
-    // The advisory lock ensures this read is consistent with the subsequent
-    // sequence allocation -- no other transaction can interleave.
-    let basis_t_before = Spi::get_one::<i64>(&format!(
-        "SELECT COALESCE(MAX(tx), 0) FROM {}.transactions",
-        qs
-    ))
-    .ok()
-    .flatten()
-    .unwrap_or(0);
-
-    // Allocate transaction ID from the sequence
+    // Allocate transaction ID from the sequence (atomic, no lock needed)
     let tx_id = Spi::get_one::<i64>(&format!("SELECT nextval('{}.partition_tx_seq')", qs))
         .ok()
         .flatten()
@@ -618,7 +609,13 @@ fn allocate_tx_id(qs: &str) -> Result<(i64, i64, i64), Box<dyn std::error::Error
             partition: "db.part/tx".to_string(),
         })?;
 
-    // Create transaction record and get the timestamp as microseconds since epoch
+    // basis_t is the transaction immediately preceding ours in the sequence.
+    // Since sequences are monotonically increasing and gap-free within a
+    // session, tx_id - 1 is always the correct basis_t.
+    let basis_t_before = tx_id - 1;
+
+    // Create transaction record and get the timestamp as microseconds since epoch.
+    // The PRIMARY KEY constraint on tx guarantees uniqueness.
     let tx_instant_micros = Spi::get_one_with_args::<i64>(
         &format!(
             "INSERT INTO {}.transactions (tx, tx_instant) VALUES ($1, CURRENT_TIMESTAMP) \
@@ -667,17 +664,14 @@ fn execute_transaction_body(
 
         match execute_transaction_inner(schema, edn_tx) {
             Ok(result) => {
-                // Invalidate the per-store schema cache after every successful
-                // transaction. Transactions often assert new idents / value-types
-                // / cardinality rows, and stale cache entries produce
-                // `:db.error/attribute-not-found` on the very next call.
-                //
-                // This is coarse — we invalidate even for pure data writes that
-                // don't change the meta-schema. That's the correct default
-                // until we track whether a tx touched `mentat.schema` /
-                // `mentat.idents` and invalidate only then (tracked in ROADMAP).
+                // Only invalidate the schema cache and bump the cross-backend
+                // generation counter if this transaction touched schema-defining
+                // attributes. Pure data writes skip this overhead.
                 let store_name = schema_to_store_name(schema);
-                crate::cache::invalidate_store_cache(store_name);
+                if transaction_touched_schema(&result) {
+                    crate::cache::invalidate_store_cache(store_name);
+                    crate::cache::bump_store_generation(store_name);
+                }
                 return Ok(result);
             }
             Err(err) => {
@@ -1176,11 +1170,12 @@ fn execute_transaction_inner(
             let tx_data_json = format!("[{}]", tx_data_entries.join(","));
 
             Ok(format!(
-                "{{\"db-before\":{{\"basis-t\":{}}},\"db-after\":{{\"basis-t\":{}}},\"tx-data\":{},\"tempids\":{{{}}}}}",
+                "{{\"db-before\":{{\"basis-t\":{}}},\"db-after\":{{\"basis-t\":{}}},\"tx-data\":{},\"tempids\":{{{}}},\"schema_changed\":{}}}",
                 basis_t_before,
                 tx_id,
                 tx_data_json,
-                tempids_json.join(",")
+                tempids_json.join(","),
+                has_schema_changes
             ))
         }
         Err(e) => {

@@ -1,7 +1,7 @@
 use crate::functions::store_management::get_schema_for_store;
 use pgrx::spi::Spi;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use parking_lot::RwLock;
 
 /// Attribute metadata cache entry
@@ -24,8 +24,14 @@ pub struct AttributeInfo {
 pub struct SchemaCache {
     /// The PostgreSQL schema name this cache loads from (e.g. "mentat", "mentat_my_store").
     db_schema: String,
+    /// The logical store name (e.g. "default", "my_store") for generation lookups.
+    store_name: String,
     /// True once the initial bulk load has completed.
     warmed: AtomicBool,
+    /// Last known cache generation (from mentat.cache_generation table).
+    /// Used for cross-backend invalidation: if the remote gen exceeds this,
+    /// we know another backend modified the schema and must reload.
+    local_gen: AtomicI64,
     /// Map from attribute entid to attribute metadata
     attrs_by_id: RwLock<HashMap<i64, AttributeInfo>>,
     /// Map from ident string (e.g., ":person/name") to entid
@@ -35,10 +41,12 @@ pub struct SchemaCache {
 }
 
 impl SchemaCache {
-    pub fn new(db_schema: String) -> Self {
+    pub fn new(db_schema: String, store_name: String) -> Self {
         Self {
             db_schema,
+            store_name,
             warmed: AtomicBool::new(false),
+            local_gen: AtomicI64::new(0),
             attrs_by_id: RwLock::new(HashMap::new()),
             idents_to_entid: RwLock::new(HashMap::new()),
             entids_to_ident: RwLock::new(HashMap::new()),
@@ -138,12 +146,41 @@ impl SchemaCache {
             Ok::<_, pgrx::spi::SpiError>(())
         });
 
+        // Record the current generation so we can detect future bumps
+        let gen = Spi::get_one::<i64>(&format!(
+            "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
+            self.store_name
+        ))
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+        self.local_gen.store(gen, Ordering::Release);
+
         self.warmed.store(true, Ordering::Release);
     }
 
-    /// Ensure the cache is warmed, then return true if already warm.
-    fn ensure_warm(&self) {
+    /// Ensure the cache is fresh: warm it if never loaded, or reload if a
+    /// remote backend has bumped the generation counter (cross-backend
+    /// invalidation).
+    fn ensure_fresh(&self) {
+        // If never warmed, warm unconditionally
         if !self.warmed.load(Ordering::Acquire) {
+            self.warm();
+            return;
+        }
+        // Check remote generation (cheap: 1-row table, always in shared_buffers).
+        // If the remote gen exceeds our local gen, another backend modified the
+        // schema and we must reload.
+        let remote_gen = Spi::get_one::<i64>(&format!(
+            "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
+            self.store_name
+        ))
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+
+        if remote_gen > self.local_gen.load(Ordering::Acquire) {
+            self.invalidate();
             self.warm();
         }
     }
@@ -153,7 +190,7 @@ impl SchemaCache {
     /// On first call, bulk-loads all schema data.  Subsequent calls are pure
     /// HashMap lookups behind a read lock.
     pub fn get_attribute(&self, attr_id: i64) -> Option<AttributeInfo> {
-        self.ensure_warm();
+        self.ensure_fresh();
 
         let cache = self.attrs_by_id.read();
         cache.get(&attr_id).cloned()
@@ -164,7 +201,7 @@ impl SchemaCache {
     /// On first call, bulk-loads all schema data.  Subsequent calls are pure
     /// HashMap lookups behind a read lock.
     pub fn resolve_ident(&self, ident: &str) -> Option<i64> {
-        self.ensure_warm();
+        self.ensure_fresh();
 
         let cache = self.idents_to_entid.read();
         cache.get(ident).copied()
@@ -172,7 +209,7 @@ impl SchemaCache {
 
     /// Look up ident by entid.
     pub fn get_ident(&self, entid: i64) -> Option<String> {
-        self.ensure_warm();
+        self.ensure_fresh();
 
         let cache = self.entids_to_ident.read();
         cache.get(&entid).cloned()
@@ -180,7 +217,7 @@ impl SchemaCache {
 
     /// Look up attribute metadata by ident string.
     pub fn get_attribute_by_ident(&self, ident: &str) -> Option<AttributeInfo> {
-        self.ensure_warm();
+        self.ensure_fresh();
 
         let ident_map = self.idents_to_entid.read();
         let entid = ident_map.get(ident).copied()?;
@@ -242,7 +279,7 @@ impl StoreCacheMap {
         }
 
         let db_schema = get_schema_for_store(store_name);
-        let cache = Box::leak(Box::new(SchemaCache::new(db_schema)));
+        let cache = Box::leak(Box::new(SchemaCache::new(db_schema, store_name.to_string())));
         caches.insert(store_name.to_string(), cache);
         cache
     }
@@ -297,4 +334,16 @@ pub fn invalidate_store_cache(store_name: &str) {
 #[allow(dead_code)] // Public API for future multi-store invalidation
 pub fn invalidate_all_caches() {
     STORE_CACHES.invalidate_all();
+}
+
+/// Bump the generation counter for a store in the shared `cache_generation` table.
+///
+/// Called after a transaction modifies schema-defining attributes (`:db/valueType`,
+/// `:db/cardinality`, `:db/unique`, `:db/ident`, `:db.install/attribute`).
+/// Other backends will detect this bump on their next cache access and reload.
+pub fn bump_store_generation(store_name: &str) {
+    let _ = Spi::run(&format!(
+        "UPDATE mentat.cache_generation SET gen = gen + 1 WHERE store_name = '{}'",
+        store_name
+    ));
 }

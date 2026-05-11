@@ -261,9 +261,19 @@ impl AppState {
 const MAX_BODY_SIZE: usize = 16 * 1024 * 1024;
 
 pub fn create_router(state: AppState) -> Router {
-    // Authenticated routes: require API key when configured
+    // Authenticated routes: require API key when configured.
+    // Datomic-compatible endpoint aliases route through the same handler;
+    // the operation is determined by the request body, not the path.
     let api_routes = Router::new()
         .route("/", post(handle_request))
+        .route("/api/query", post(handle_request))
+        .route("/api/transact", post(handle_request))
+        .route("/api/pull", post(handle_request))
+        .route("/api/db-stats", post(handle_request))
+        .route("/api/datoms", post(handle_request))
+        .route("/api/list-dbs", post(handle_request))
+        .route("/api/create-db", post(handle_request))
+        .route("/api/delete-db", post(handle_request))
         .route("/stream/query", post(crate::stream::handle_stream_query));
 
     // Public routes: health and metrics are always accessible
@@ -280,8 +290,15 @@ pub fn create_router(state: AppState) -> Router {
         api_routes
     };
 
+    // CORS layer for browser-based Datomic JS clients
+    let cors = tower_http::cors::CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers(tower_http::cors::Any);
+
     api_routes
         .merge(public_routes)
+        .layer(cors)
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY_SIZE))
         .with_state(state)
 }
@@ -369,11 +386,12 @@ async fn handle_request(
 
     // Timing: Header processing
     let header_start = Instant::now();
-    // Detect input format from Content-Type header
+    // Detect input format from Content-Type header.
+    // Default to Transit+JSON for Datomic client library compatibility.
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/edn");
+        .unwrap_or("application/transit+json");
     let input_format = detect_input_format(content_type);
     let header_time = header_start.elapsed();
 

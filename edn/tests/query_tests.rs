@@ -343,3 +343,84 @@ fn can_parse_exotic_whitespace() {
         )
     );
 }
+
+// ============================================================================
+// Phase D: Collection :in binding tests
+// ============================================================================
+
+use edn::query::{Binding, VariableOrPlaceholder};
+
+#[test]
+fn can_parse_in_scalar_binding() {
+    let s = "[:find ?name :in ?age :where [?e :person/age ?age] [?e :person/name ?name]]";
+    let p = parse_query(s).unwrap();
+    assert_eq!(p.in_bindings.len(), 1);
+    assert_eq!(
+        p.in_bindings[0],
+        Binding::BindScalar(Variable::from_valid_name("?age"))
+    );
+    // Backward compat: in_vars populated from scalar bindings
+    assert_eq!(p.in_vars.len(), 1);
+    assert_eq!(p.in_vars[0], Variable::from_valid_name("?age"));
+}
+
+#[test]
+fn can_parse_in_collection_binding() {
+    let s = "[:find ?name :in [?age ...] :where [?e :person/age ?age] [?e :person/name ?name]]";
+    let p = parse_query(s).unwrap();
+    assert_eq!(p.in_bindings.len(), 1);
+    assert_eq!(
+        p.in_bindings[0],
+        Binding::BindColl(Variable::from_valid_name("?age"))
+    );
+    // Collection bindings are not scalars, so in_vars should be empty
+    assert_eq!(p.in_vars.len(), 0);
+}
+
+#[test]
+fn can_parse_in_tuple_binding() {
+    let s = "[:find ?name :in [?first ?last] :where [?e :person/first ?first] [?e :person/last ?last] [?e :person/name ?name]]";
+    let p = parse_query(s).unwrap();
+    assert_eq!(p.in_bindings.len(), 1);
+    assert_eq!(
+        p.in_bindings[0],
+        Binding::BindTuple(vec![
+            VariableOrPlaceholder::Variable(Variable::from_valid_name("?first")),
+            VariableOrPlaceholder::Variable(Variable::from_valid_name("?last")),
+        ])
+    );
+    assert_eq!(p.in_vars.len(), 0);
+}
+
+#[test]
+fn can_parse_in_relation_binding() {
+    let s = "[:find ?name :in [[?attr ?val]] :where [?e ?attr ?val] [?e :person/name ?name]]";
+    let p = parse_query(s).unwrap();
+    assert_eq!(p.in_bindings.len(), 1);
+    assert_eq!(
+        p.in_bindings[0],
+        Binding::BindRel(vec![
+            VariableOrPlaceholder::Variable(Variable::from_valid_name("?attr")),
+            VariableOrPlaceholder::Variable(Variable::from_valid_name("?val")),
+        ])
+    );
+    assert_eq!(p.in_vars.len(), 0);
+}
+
+#[test]
+fn can_parse_in_multiple_bindings_mixed() {
+    let s = "[:find ?name :in ?db [?age ...] :where [?e :person/age ?age] [?e :person/name ?name]]";
+    let p = parse_query(s).unwrap();
+    assert_eq!(p.in_bindings.len(), 2);
+    assert_eq!(
+        p.in_bindings[0],
+        Binding::BindScalar(Variable::from_valid_name("?db"))
+    );
+    assert_eq!(
+        p.in_bindings[1],
+        Binding::BindColl(Variable::from_valid_name("?age"))
+    );
+    // Only scalar bindings populate in_vars
+    assert_eq!(p.in_vars.len(), 1);
+    assert_eq!(p.in_vars[0], Variable::from_valid_name("?db"));
+}
