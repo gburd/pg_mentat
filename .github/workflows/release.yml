@@ -1,0 +1,135 @@
+# .github/workflows/release.yml
+#
+# Build and publish release artifacts when a version tag (v*) is pushed.
+# Produces per-PG-version tarballs containing the compiled extension
+# (.so, .control, .sql) and attaches them to a GitHub Release.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PGRX_VERSION: "0.17.0"
+  RUST_TOOLCHAIN: "1.88.0"
+
+jobs:
+  build:
+    name: Build pg${{ matrix.pg_version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pg_version: [15, 16, 17]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.pg_version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-${{ matrix.pg_version }} \
+              postgresql-server-dev-${{ matrix.pg_version }} \
+              postgresql-client-${{ matrix.pg_version }} \
+              libpq-dev build-essential pkg-config libclang-dev clang
+
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: release-pg${{ matrix.pg_version }}-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: release-pg${{ matrix.pg_version }}-${{ runner.os }}-
+
+      - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init (system PG${{ matrix.pg_version }})
+        run: |
+          cargo pgrx init --pg${{ matrix.pg_version }} \
+            $(command -v /usr/lib/postgresql/${{ matrix.pg_version }}/bin/pg_config || which pg_config)
+
+      - name: cargo pgrx package
+        working-directory: pg_mentat
+        run: |
+          cargo pgrx package --no-default-features \
+            --features pg${{ matrix.pg_version }} \
+            --pg-config /usr/lib/postgresql/${{ matrix.pg_version }}/bin/pg_config
+
+      - name: Create release tarball
+        run: |
+          PACKAGE_DIR="pg_mentat/target/release/pg_mentat-pg${{ matrix.pg_version }}"
+          # pgrx package outputs to target/release/pg_mentat-pg<ver>
+          # Find the actual output directory
+          PGRX_OUT=$(find pg_mentat/target -type d -name "pg_mentat-pg${{ matrix.pg_version }}" 2>/dev/null | head -1)
+          if [ -z "$PGRX_OUT" ]; then
+            # Fallback: pgrx 0.17 uses a different layout
+            PGRX_OUT=$(find pg_mentat/target -path "*/release/*" -name "*.so" -exec dirname {} \; | head -1)
+          fi
+
+          # Assemble the tarball contents
+          STAGING="pg_mentat-pg${{ matrix.pg_version }}"
+          mkdir -p "${STAGING}"
+
+          # Copy extension files from pgrx package output
+          find pg_mentat/target -name "pg_mentat.so" -path "*release*" -exec cp {} "${STAGING}/" \;
+          find pg_mentat/target -name "pg_mentat.control" -exec cp {} "${STAGING}/" \; 2>/dev/null || \
+            cp pg_mentat/pg_mentat.control "${STAGING}/"
+          find pg_mentat/target -name "pg_mentat--*.sql" -exec cp {} "${STAGING}/" \; 2>/dev/null || true
+
+          # Include the control file from source if not found in target
+          if [ ! -f "${STAGING}/pg_mentat.control" ]; then
+            cp pg_mentat/pg_mentat.control "${STAGING}/"
+          fi
+
+          tar czf "pg_mentat-pg${{ matrix.pg_version }}.tar.gz" "${STAGING}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pg_mentat-pg${{ matrix.pg_version }}
+          path: pg_mentat-pg${{ matrix.pg_version }}.tar.gz
+          retention-days: 5
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Gather tarballs
+        run: |
+          mkdir -p release-assets
+          find artifacts -name "*.tar.gz" -exec mv {} release-assets/ \;
+          ls -la release-assets/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-assets/*.tar.gz
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

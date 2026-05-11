@@ -140,7 +140,7 @@ fn build_union_all_datoms_query(
 
 /// Cached schema information for an attribute, loaded in bulk.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // All fields populated during load; not all read yet
+#[expect(dead_code, reason = "All fields populated during load; not all read yet")]
 struct SchemaAttrInfo {
     entid: i64,
     ident: String,
@@ -182,7 +182,7 @@ impl SchemaCache {
         Ok(SchemaCache { by_ident, ident_by_entid })
     }
 
-    #[allow(dead_code)] // Public API for attribute lookup by ident
+    #[expect(dead_code, reason = "Public API for attribute lookup by ident")]
     fn get(&self, ident: &str) -> Option<&SchemaAttrInfo> {
         self.by_ident.get(ident)
     }
@@ -1760,7 +1760,7 @@ fn query_reverse_refs(
 ///
 /// This eliminates the N+1 problem when following refs across many entities,
 /// e.g., for map specs in `pull_many`.
-#[allow(dead_code)]
+#[expect(dead_code)]
 fn query_forward_refs_batched(
     client: &SpiClient<'_>,
     db_schema: &str,
@@ -1996,6 +1996,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_simple_pattern() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed = edn::parse::value("[:person/name :person/age]")
             .map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2016,6 +2017,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_wildcard_pattern() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed =
             edn::parse::value("[*]").map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2030,6 +2032,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_reverse_lookup() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed = edn::parse::value("[:person/_friends]")
             .map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2056,6 +2059,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_map_spec() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed = edn::parse::value("[{:person/friends [:person/name]}]")
             .map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2078,6 +2082,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_recursive_unbounded() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed = edn::parse::value("[{:person/friends ...}]")
             .map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2097,6 +2102,7 @@ mod tests {
 
     #[pg_test]
     fn test_parse_recursive_bounded() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let parsed = edn::parse::value("[{:person/friends 3}]")
             .map_err(|e| -> PullError { format!("{e}").into() })?;
         let items = match parsed.without_spans() {
@@ -2116,6 +2122,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_to_json() {
+        crate::ensure_extension_loaded();
         assert_eq!(edn_to_json(&edn::Value::Integer(42)), json!(42));
         assert_eq!(edn_to_json(&edn::Value::Boolean(true)), json!(true));
         assert_eq!(
@@ -2127,6 +2134,7 @@ mod tests {
 
     #[pg_test]
     fn test_insert_value_cardinality_one() {
+        crate::ensure_extension_loaded();
         let mut map = serde_json::Map::new();
         insert_value(&mut map, ":name", json!("Alice"), "one");
         assert_eq!(map.get(":name"), Some(&json!("Alice")));
@@ -2137,6 +2145,7 @@ mod tests {
 
     #[pg_test]
     fn test_insert_value_cardinality_many() {
+        crate::ensure_extension_loaded();
         let mut map = serde_json::Map::new();
         insert_value(&mut map, ":tags", json!("a"), "many");
         assert_eq!(map.get(":tags"), Some(&json!(["a"])));
@@ -2152,6 +2161,7 @@ mod tests {
     /// 3. Works at various recursion depths
     #[pg_test]
     fn test_recursive_pull_cycle_detection() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         // Initialize schema with person/friend attribute
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
@@ -2274,6 +2284,7 @@ mod tests {
     /// Test that cycle detection works with cardinality-many attributes.
     #[pg_test]
     fn test_recursive_pull_many_cycles() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         // Initialize schema
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
@@ -2358,6 +2369,7 @@ mod tests {
     /// fully expanded with all their attributes, not returned as bare {:db/id N}.
     #[pg_test]
     fn test_component_auto_pull() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2451,6 +2463,7 @@ mod tests {
     /// Test mentat_pull_many: batched pull of multiple entities.
     #[pg_test]
     fn test_pull_many_basic() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2530,6 +2543,7 @@ mod tests {
     /// Test mentat_pull_many with empty entity list.
     #[pg_test]
     fn test_pull_many_empty() -> Result<(), PullError> {
+        crate::ensure_extension_loaded();
         let result = mentat_pull_many("[:person/name]", vec![])?;
         let arr = result.0.as_array().expect("should be array");
         assert!(arr.is_empty(), "empty input should produce empty output");
@@ -2543,6 +2557,7 @@ mod tests {
     /// attribute is included alongside the recursive :person/friend traversal.
     #[pg_test]
     fn test_recursive_pull_with_mixed_attrs() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2638,6 +2653,7 @@ mod tests {
     /// Should stop at depth 2, so D should not appear.
     #[pg_test]
     fn test_recursive_bounded_depth() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2729,6 +2745,7 @@ mod tests {
     /// Pattern: `{:person/_friend ...}` follows reverse refs recursively.
     #[pg_test]
     fn test_reverse_recursive_pull() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2816,6 +2833,7 @@ mod tests {
     /// Pattern: `{:person/friend ...}` should at each level include addresses as expanded components.
     #[pg_test]
     fn test_component_within_recursive_pull() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2916,6 +2934,7 @@ mod tests {
     /// by falling back to per-entity pulls.
     #[pg_test]
     fn test_pull_many_with_map_spec() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (
@@ -2995,6 +3014,7 @@ mod tests {
     /// Test that self-referencing entity (points to itself) terminates.
     #[pg_test]
     fn test_recursive_self_reference() -> spi::Result<()> {
+        crate::ensure_extension_loaded();
         Spi::run(
             "CREATE SCHEMA IF NOT EXISTS mentat;
              CREATE TABLE IF NOT EXISTS mentat.schema (

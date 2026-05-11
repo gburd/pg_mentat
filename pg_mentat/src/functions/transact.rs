@@ -23,7 +23,7 @@ mod bootstrap_entids {
     pub const DB_COMPONENT: i64 = 16;
     pub const DB_NO_HISTORY: i64 = 17;
     pub const DB_IS_COMPONENT: i64 = 18;
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub const DB_DOC: i64 = 19;
     pub const DB_TX_INSTANT: i64 = 50;
 }
@@ -167,7 +167,7 @@ fn value_type_name(value: &edn::Value) -> &'static str {
 }
 
 /// Retrieve available attribute idents from the cache for use in error messages.
-#[allow(dead_code)] // Used by error reporting paths not yet wired
+#[expect(dead_code, reason = "Used by error reporting paths not yet wired")]
 fn get_available_attributes_hint() -> String {
     let available = error::get_available_attributes();
     if available.is_empty() {
@@ -2455,7 +2455,7 @@ fn insert_typed_datom(
 }
 
 /// Get the column name for a TypedValue.
-#[allow(dead_code)] // Utility for future direct-insert optimization
+#[expect(dead_code, reason = "Utility for future direct-insert optimization")]
 fn typed_value_column(v: &TypedValue) -> &'static str {
     match v {
         TypedValue::Ref(_) => "v_ref",

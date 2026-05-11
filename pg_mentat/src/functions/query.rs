@@ -139,7 +139,7 @@ impl<'a> SqlBuilder<'a> {
     }
 
     /// Add a BYTEA parameter and return the placeholder string ($N).
-    #[allow(dead_code)] // Reserved for bytes-type predicate support
+    #[expect(dead_code, reason = "Reserved for bytes-type predicate support")]
     fn bind_bytea(&mut self, value: Vec<u8>) -> String {
         self.params.push(DatumWithOid::from(value));
         format!("${}", self.params.len())
@@ -692,7 +692,7 @@ fn parse_pagination_options(inputs: &serde_json::Value) -> PaginationOption {
 
 /// Enriched input binding parsed from `:in` clause + JSON inputs.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 enum InputBinding {
     /// Scalar: a single variable bound to a single value.
     Scalar { var: String, value: serde_json::Value },

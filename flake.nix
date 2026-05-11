@@ -175,7 +175,7 @@
           # Or use the dev shell for interactive builds: nix develop
           pg_mentat = pkgs.stdenv.mkDerivation {
             pname = "pg_mentat";
-            version = "0.1.0";
+            version = "1.2.1";
 
             src = ./.;
 

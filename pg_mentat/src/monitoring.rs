@@ -284,7 +284,7 @@ pub fn mentat_index_health(
     Box<dyn std::error::Error + Send + Sync>,
 > {
     let rows = Spi::connect(|client| {
-        let query = r#"
+        let query = r"
             SELECT
                 i.schemaname || '.' || i.relname AS table_name,
                 i.indexrelname AS index_name,
@@ -305,7 +305,7 @@ pub fn mentat_index_health(
             JOIN pg_stat_user_tables t ON t.relid = i.relid
             WHERE i.schemaname = 'mentat'
             ORDER BY pg_relation_size(i.indexrelid) DESC
-        "#;
+        ";
 
         let result = client.select(query, None, &[])?;
         let mut rows = Vec::new();
@@ -445,7 +445,7 @@ pub fn mentat_health_check() -> Result<pgrx::JsonB, Box<dyn std::error::Error + 
 /// and usage statistics. It's created during `CREATE EXTENSION` and
 /// can be refreshed at any time.
 pub fn index_health_view_sql() -> &'static str {
-    r#"
+    r"
     CREATE OR REPLACE VIEW mentat.index_health AS
     SELECT
         i.schemaname || '.' || i.relname AS table_name,
@@ -472,7 +472,7 @@ pub fn index_health_view_sql() -> &'static str {
     JOIN pg_stat_user_tables t ON t.relid = i.relid
     WHERE i.schemaname = 'mentat'
     ORDER BY pg_relation_size(i.indexrelid) DESC
-    "#
+    "
 }
 
 /// Generate the SQL to create the `mentat.table_health` view.
@@ -480,7 +480,7 @@ pub fn index_health_view_sql() -> &'static str {
 /// Shows table-level statistics including row counts, dead tuples,
 /// sizes, and maintenance timestamps.
 pub fn table_health_view_sql() -> &'static str {
-    r#"
+    r"
     CREATE OR REPLACE VIEW mentat.table_health AS
     SELECT
         schemaname || '.' || relname AS table_name,
@@ -507,5 +507,5 @@ pub fn table_health_view_sql() -> &'static str {
     FROM pg_stat_user_tables
     WHERE schemaname = 'mentat'
     ORDER BY pg_total_relation_size(relid) DESC
-    "#
+    "
 }

@@ -295,7 +295,7 @@ impl From<Keyword> for PatternNonValuePlace {
 
 impl PatternNonValuePlace {
     // I think we'll want move variants, so let's leave these here for now.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn into_pattern_value_place(self) -> PatternValuePlace {
         match self {
             PatternNonValuePlace::Placeholder => PatternValuePlace::Placeholder,
@@ -415,7 +415,7 @@ impl FromValue<PatternValuePlace> for PatternValuePlace {
 
 impl PatternValuePlace {
     // I think we'll want move variants, so let's leave these here for now.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn into_pattern_non_value_place(self) -> Option<PatternNonValuePlace> {
         match self {
             PatternValuePlace::Placeholder => Some(PatternNonValuePlace::Placeholder),
@@ -975,7 +975,6 @@ pub struct Rule {
     pub clauses: Vec<RuleClause>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WhereClause {
     NotJoin(NotJoin),
@@ -987,7 +986,6 @@ pub enum WhereClause {
     TypeAnnotation(TypeAnnotation),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
 pub struct ParsedQuery {
     pub find_spec: FindSpec,
@@ -1007,7 +1005,7 @@ pub struct ParsedQuery {
 pub(crate) enum QueryPart {
     FindSpec(FindSpec),
     WithVars(Vec<Variable>),
-    #[allow(dead_code)] // Kept for backward compat; parser now emits InBindings
+    #[expect(dead_code, reason = "Kept for backward compat; parser now emits InBindings")]
     InVars(Vec<Variable>),
     InBindings(Vec<Binding>),
     Limit(Limit),

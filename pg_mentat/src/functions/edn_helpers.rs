@@ -586,30 +586,35 @@ mod tests {
 
     #[pg_test]
     fn test_edn_helpers_compile() {
+        crate::ensure_extension_loaded();
         // Compilation test
         assert!(true);
     }
 
     #[pg_test]
     fn test_edn_pretty_simple_map() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("{:a 1 :b 2}", None).unwrap();
         assert_eq!(result, "{:a 1 :b 2}");
     }
 
     #[pg_test]
     fn test_edn_pretty_vector() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("[1 2 3 4 5]", None).unwrap();
         assert_eq!(result, "[1 2 3 4 5]");
     }
 
     #[pg_test]
     fn test_edn_pretty_narrow_width() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("[1 2 3 4 5 6]", Some(10)).unwrap();
         assert!(result.contains('\n'), "narrow width should produce multi-line output");
     }
 
     #[pg_test]
     fn test_edn_pretty_nested() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("{:a [1 2 3] :b {:c 4}}", None).unwrap();
         // Should parse and format without error
         assert!(result.contains(":a"));
@@ -618,24 +623,28 @@ mod tests {
 
     #[pg_test]
     fn test_edn_pretty_invalid_input() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("{invalid", None);
         assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_edn_pretty_invalid_width() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("{:a 1}", Some(-1));
         assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_edn_pretty_nil() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("nil", None).unwrap();
         assert_eq!(result, "nil");
     }
 
     #[pg_test]
     fn test_edn_pretty_set() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("#{1 2 3}", None).unwrap();
         assert!(result.starts_with("#{"));
         assert!(result.ends_with('}'));
@@ -643,6 +652,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_pretty_list() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty("(1 2 3)", None).unwrap();
         assert!(result.starts_with('('));
         assert!(result.ends_with(')'));
@@ -650,6 +660,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_pretty_keyword() {
+        crate::ensure_extension_loaded();
         let result = edn_pretty(":person/name", None).unwrap();
         assert_eq!(result, ":person/name");
     }

@@ -43,7 +43,7 @@ pub fn mentat_query_stats() -> Result<JsonB, Box<dyn std::error::Error + Send + 
     // Try pg_stat_user_functions for function call stats
     Spi::connect(|client| {
         // Query pg_stat_user_functions for mentat functions
-        let func_query = r#"
+        let func_query = r"
             SELECT funcname::TEXT,
                    calls::BIGINT,
                    total_time::DOUBLE PRECISION,
@@ -51,7 +51,7 @@ pub fn mentat_query_stats() -> Result<JsonB, Box<dyn std::error::Error + Send + 
             FROM pg_stat_user_functions
             WHERE funcname LIKE 'mentat_%'
             ORDER BY calls DESC
-        "#;
+        ";
 
         match client.select(func_query, None, &[]) {
             Ok(rows) => {
@@ -222,7 +222,7 @@ pub fn mentat_slow_queries(
     // Find mentat functions whose average duration exceeds the threshold
     let slow_functions = Spi::connect(|client| {
         let query = format!(
-            r#"
+            r"
             SELECT funcname::TEXT,
                    calls::BIGINT,
                    total_time::DOUBLE PRECISION,
@@ -232,7 +232,7 @@ pub fn mentat_slow_queries(
               AND calls > 0
               AND (total_time / calls) > {threshold}
             ORDER BY (total_time / calls) DESC
-            "#,
+            ",
         );
 
         let mut result_arr = Vec::new();
@@ -277,7 +277,7 @@ pub fn mentat_slow_queries(
 
     // Also show the 10 heaviest recent transactions by datom count
     let heavy_txns = Spi::connect(|client| {
-        let query = r#"
+        let query = r"
             SELECT t.tx,
                    t.tx_instant::TEXT,
                    (SELECT COUNT(*) FROM mentat.datoms d WHERE d.tx = t.tx)::BIGINT AS datom_count,
@@ -286,7 +286,7 @@ pub fn mentat_slow_queries(
             FROM mentat.transactions t
             ORDER BY t.tx DESC
             LIMIT 10
-        "#;
+        ";
 
         let mut result_arr = Vec::new();
         for row in client.select(query, None, &[])? {
@@ -355,14 +355,14 @@ pub fn mentat_storage_stats() -> Result<JsonB, Box<dyn std::error::Error + Send 
         let mut tables = serde_json::Map::new();
 
         // Table sizes
-        let table_query = r#"
+        let table_query = r"
             SELECT schemaname || '.' || relname AS table_name,
                    pg_size_pretty(pg_total_relation_size(relid)) AS total_size,
                    n_live_tup::BIGINT AS row_estimate
             FROM pg_stat_user_tables
             WHERE schemaname = 'mentat'
             ORDER BY pg_total_relation_size(relid) DESC
-        "#;
+        ";
 
         if let Ok(rows) = client.select(table_query, None, &[]) {
             for row in rows {
@@ -390,13 +390,13 @@ pub fn mentat_storage_stats() -> Result<JsonB, Box<dyn std::error::Error + Send 
 
         // Index sizes
         let mut indexes_arr = Vec::new();
-        let idx_query = r#"
+        let idx_query = r"
             SELECT indexrelname AS index_name,
                    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
             FROM pg_stat_user_indexes
             WHERE schemaname = 'mentat'
             ORDER BY pg_relation_size(indexrelid) DESC
-        "#;
+        ";
 
         if let Ok(rows) = client.select(idx_query, None, &[]) {
             for row in rows {

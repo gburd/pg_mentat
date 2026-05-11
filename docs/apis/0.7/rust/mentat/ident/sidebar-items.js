@@ -1,1 +1,0 @@
-initSidebarItems({"trait":[["ToEntId","The ability to transform idents into the corresponding entid."],["ToIdent","The ability to transform entity identifiers (entids) into keyword names (idents)."]],"type":[["EntId",""]]});

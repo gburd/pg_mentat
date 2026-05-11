@@ -1,0 +1,169 @@
+# Forgejo/Codeberg CI — mirrors .github/workflows/ci.yml logic.
+#
+# Forgejo Actions uses a syntax nearly identical to GitHub Actions.
+# This workflow runs on Codeberg's hosted runners (or self-hosted).
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  PGRX_VERSION: "0.17.0"
+  RUST_TOOLCHAIN: "1.88.0"
+
+jobs:
+  build-and-install:
+    name: build + CREATE EXTENSION (pg16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL 16
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-16 postgresql-server-dev-16 postgresql-client-16 \
+              libpq-dev build-essential pkg-config libclang-dev clang
+
+      - name: Start PostgreSQL
+        run: |
+          sudo systemctl enable --now postgresql
+          sudo -u postgres psql -c "ALTER USER postgres WITH PASSWORD 'postgres';"
+          PG_HBA=$(sudo -u postgres psql -tAc "SHOW hba_file;")
+          echo "local all all trust"              | sudo tee -a "$PG_HBA" >/dev/null
+          echo "host  all all 127.0.0.1/32 trust" | sudo tee -a "$PG_HBA" >/dev/null
+          sudo systemctl restart postgresql
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.RUST_TOOLCHAIN }}
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-build-${{ runner.os }}-
+
+      - name: Install cargo-pgrx
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo build
+        working-directory: pg_mentat
+        run: cargo build --no-default-features --features pg16
+
+      - name: cargo pgrx install
+        working-directory: pg_mentat
+        run: |
+          sudo -E env "PATH=$PATH" "CARGO_HOME=$CARGO_HOME" \
+              cargo pgrx install --no-default-features --features pg16 \
+                --pg-config "$(which pg_config)"
+
+      - name: Smoke test
+        env:
+          PGHOST: "localhost"
+          PGPORT: "5432"
+          PGUSER: "postgres"
+          PGPASSWORD: "postgres"
+        run: |
+          psql -c "CREATE EXTENSION pg_mentat;"
+          psql -c "SELECT mentat_transact('[{:db/ident :test/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]');"
+          psql -c "SELECT mentat_transact('[{:test/name \"hello\"}]');"
+          psql -c "SELECT mentat_query('[:find ?n :where [?e :test/name ?n]]', '{}');"
+
+  clippy:
+    name: clippy (pg16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-server-dev-16 libpq-dev build-essential \
+              pkg-config libclang-dev clang
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.RUST_TOOLCHAIN }} --component clippy
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-clippy-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-clippy-${{ runner.os }}-
+
+      - name: Install cargo-pgrx
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo clippy
+        working-directory: pg_mentat
+        run: cargo clippy --no-default-features --features pg16 -- -D warnings
+
+  test:
+    name: cargo pgrx test pg16
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+              postgresql-server-dev-16 libpq-dev build-essential \
+              pkg-config libclang-dev clang
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.RUST_TOOLCHAIN }}
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ci-test-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ci-test-${{ runner.os }}-
+
+      - name: Install cargo-pgrx
+        run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
+
+      - name: pgrx init
+        run: cargo pgrx init --pg16 "$(which pg_config)"
+
+      - name: cargo pgrx test
+        working-directory: pg_mentat
+        run: cargo pgrx test --no-default-features --features pg16 pg16

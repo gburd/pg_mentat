@@ -123,7 +123,7 @@ fn refresh_trigger_function_sql(
     let qualified_view = format!("{}.{}", schema, view_name);
 
     format!(
-        r#"
+        r"
 CREATE OR REPLACE FUNCTION {func_name}() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -131,7 +131,7 @@ BEGIN
     RETURN NULL;
 END;
 $$;
-"#,
+",
         func_name = func_name,
         qualified_view = qualified_view,
     )
@@ -143,12 +143,12 @@ fn refresh_trigger_sql(schema: &str, view_name: &str) -> String {
     let func_name = format!("{}.mentat_matview_refresh_{}", schema, view_name);
 
     format!(
-        r#"
+        r"
 CREATE OR REPLACE TRIGGER {trigger_name}
     AFTER INSERT OR UPDATE OR DELETE ON {schema}.datoms
     FOR EACH STATEMENT
     EXECUTE FUNCTION {func_name}();
-"#,
+",
         trigger_name = trigger_name,
         schema = schema,
         func_name = func_name,

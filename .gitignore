@@ -1,99 +1,25 @@
-*.class
-*.DS_Store
-*.jar
-*jar
-*~
+# Build artifacts
+/target
+/edn/target/
+*.o
+*.so
+*.dylib
+*.dll
+
+# Rust
 **/*.rs.bk
-.s*
-.*.sw*
 *.rs.bak
 *.bak
-.hg/
-.hgignore
-.lein-deps-sum
-.lein-failures
-.lein-plugins/
-.lein-repl-history
-.nrepl-port
-.bundle/
-docs/vendor/
-/.lein-*
-/.nrepl-port
-Cargo.lock
-/checkouts/
-/classes/
-/node_modules/
-/out/
-/target
-pom.xml
-pom.xml.asc
-/.cljs_node_repl/
-/.cljs_rhino_repl/
-/addon/built/index.js
-/addon/node_modules/
-/addon/release/datomish-test.xpi
-/addon/release/datomish.js
-/addon/release/index.js
-/release-browser/cljs/
-/release-browser/cljs_promises/
-/release-browser/clojure/
-/release-browser/constants_table.js
-/release-browser/datomish.bare.js
-/release-browser/datomish.js
-/release-browser/datomish/
-/release-browser/goog/
-/release-browser/honeysql/
-/release-node/cljs/
-/release-node/cljs_promises/
-/release-node/clojure/
-/release-node/constants_table.js
-/release-node/datomish.bare.js
-/release-node/datomish.js
-/release-node/datomish/
-/release-node/goog/
-/release-node/honeysql/
-/edn/target/
-/fixtures/*.db-shm
-/fixtures/*.db-wal
-/query-parser/out/
 
-## Build generated
-/sdks/swift/Mentat/build/
-/sdks/android/**/build
-DerivedData
-build.xcarchive
-
-## Various settings
-*.pbxuser
-!default.pbxuser
-*.mode1v3
-!default.mode1v3
-*.mode2v3
-!default.mode2v3
-*.perspectivev3
-!default.perspectivev3
-/sdks/swift/Mentat/*.xcodeproj/project.xcworkspace/xcuserdata
-
-## Other
-*.xccheckout
-*.moved-aside
-*.xcuserstate
-*.xcscmblueprint
-
-## Obj-C/Swift specific
-*.hmap
-*.ipa
-/sdks/swift/Mentat/External-Dependencies
-
-# Android & IntelliJ
+# Editor/IDE
+*.DS_Store
+*~
+.s*
+.*.sw*
 **/*.iml
 **/.idea
-/sdks/android/**/local.properties
-
-# Documentation
-docs/_site
-docs/.sass-cache
-docs/.jekyll-metadata
+.vscode/
+.kiro/
 
 # Nix
 result
@@ -109,64 +35,15 @@ result-*
 .tmp/
 *.log
 core.*
-test_*.sql
 
-# User configuration files
-.bash_profile
-.bashrc
-.zshrc
-.zprofile
-.profile
-.gitconfig
-.ripgreprc
-
-# Claude Code settings
-.claude/
-
-# Status and progress documents (ephemeral)
-# Exclude generated status docs but keep important architecture docs
-*_STATUS.md
-IMPLEMENTATION_SUMMARY.md
-SESSION_*_SUMMARY.md
-*_REPORT.md
-*_RESULTS.md
-*_PROGRESS.md
-*_COMPLETE.md
-*_ANALYSIS.md
-*_PLAN.md
-*_GUIDE.md
-ACTION_REQUIRED.md
-QUICK_START.md
-SESSION_*.md
-# Keep these important docs:
-# !EXPERT_REVIEW.md
-# !NEXT_STEPS_EXECUTIVE_SUMMARY.md
-
-# Nix and environment
-.envrc
-.envrc.cache
-.mcp.json
-
-# Build artifacts
-*.s
-*.o
-*.so
-*.dylib
-*.dll
-
-# Claude Code agent files
-.claude-tasks/
-
-# IDE configuration  
-.vscode/
-.idea/
-
-# Generated build files
-build/version.rs
+# Documentation build output
+docs/book/
 
 # Database fixtures (binary)
 fixtures/*.db
 fixtures/**/*.db
+fixtures/*.db-shm
+fixtures/*.db-wal
 
 # Benchmark results (generated data)
 benchmarks/results/*/
@@ -175,4 +52,10 @@ benchmarks/results/*/
 __pycache__/
 *.pyc
 *.pyo
+
+# Claude Code
+.claude/
+.claude-tasks/
 .memelord/
+.claude-state-plan.md
+.claude-transcript.jsonl

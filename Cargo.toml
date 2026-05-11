@@ -9,10 +9,13 @@ members = [
 ]
 
 [workspace.package]
+version = "1.2.1"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
+repository = "https://github.com/gburd/pg_mentat"
 authors = [
+  "Gregory Burd <greg@burd.me>",
   "Richard Newman <rnewman@twinql.com>",
   "Nicholas Alexander <nalexander@mozilla.com>",
   "Victor Porof <vporof@mozilla.com>",
@@ -23,7 +26,6 @@ authors = [
   "Kit Cambridge <kit@yakshaving.ninja>",
   "Edouard Oger <eoger@fastmail.com>",
   "Thom Chiovoloni <tchiovoloni@mozilla.com>",
-  "Gregory Burd <greg@burd.me>",
 ]
 
 [workspace.lints.clippy]
@@ -49,3 +51,8 @@ mem_forget = "deny"
 # Pedantic relaxations (too noisy)
 module_name_repetitions = "allow"
 similar_names = "allow"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

@@ -1,4 +1,0 @@
-module MentatStore [system][extern_c] {
-    header "store.h"
-    export *
-}

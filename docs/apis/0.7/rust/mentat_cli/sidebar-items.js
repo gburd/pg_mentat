@@ -1,1 +1,0 @@
-initSidebarItems({"enum":[["CliError",""]],"fn":[["run",""],["version","Returns a version string."]],"macro":[["bail",""]],"mod":[["command_parser",""],["input",""],["repl",""]]});

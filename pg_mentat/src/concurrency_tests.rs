@@ -159,6 +159,7 @@ mod concurrency_tests {
     /// unique, monotonically increasing IDs with no duplicates.
     #[pg_test]
     fn test_sequence_produces_unique_ids() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         let mut ids: Vec<i64> = Vec::new();
@@ -194,6 +195,7 @@ mod concurrency_tests {
     /// Verify that the allocate_entid function produces unique IDs for each partition.
     #[pg_test]
     fn test_allocate_entid_uniqueness_per_partition() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         let mut db_ids: Vec<i64> = Vec::new();
@@ -275,6 +277,7 @@ mod concurrency_tests {
     /// Verify that multiple rapid transactions each get unique entity IDs.
     #[pg_test]
     fn test_no_duplicate_entids_across_transactions() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Define a test attribute
@@ -342,6 +345,7 @@ mod concurrency_tests {
     /// Verify that transaction IDs are unique and monotonically increasing.
     #[pg_test]
     fn test_transaction_ids_unique_and_ordered() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Define a test attribute
@@ -416,6 +420,7 @@ mod concurrency_tests {
     /// so gaps of up to 100 are expected under normal operation.
     #[pg_test]
     fn test_sequence_gaps_acceptable() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Define test attribute
@@ -474,6 +479,7 @@ mod concurrency_tests {
     /// handle allocation now).
     #[pg_test]
     fn test_sequences_dont_lock_partitions_table() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Read current next_entid values
@@ -515,6 +521,7 @@ mod concurrency_tests {
     /// single backend session.
     #[pg_test]
     fn test_sequence_cache_behavior() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Within a single backend, consecutive nextval() should produce
@@ -559,6 +566,7 @@ mod concurrency_tests {
     /// even when called in a set-returning context.
     #[pg_test]
     fn test_bulk_sequence_allocation() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Allocate 1000 IDs in a single SQL statement
@@ -582,6 +590,7 @@ mod concurrency_tests {
     /// produces non-overlapping ranges.
     #[pg_test]
     fn test_multi_partition_interleaved_allocation() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         let mut all_ids: HashSet<i64> = HashSet::new();
@@ -630,6 +639,7 @@ mod concurrency_tests {
     /// This isn't a pass/fail test but logs the throughput for comparison.
     #[pg_test]
     fn test_sequence_allocation_throughput() {
+        crate::ensure_extension_loaded();
         setup_test_db().expect("setup failed");
 
         // Define test attribute

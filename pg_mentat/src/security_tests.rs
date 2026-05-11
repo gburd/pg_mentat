@@ -17,6 +17,7 @@ mod security_tests {
     use pgrx::prelude::*;
 
     fn setup() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
     }
 

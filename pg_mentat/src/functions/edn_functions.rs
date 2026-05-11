@@ -403,6 +403,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_functions_compile() {
+        crate::ensure_extension_loaded();
         // Compilation test -- verifies all functions are accessible
         assert!(true);
     }

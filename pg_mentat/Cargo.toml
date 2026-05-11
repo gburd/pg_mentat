@@ -1,11 +1,12 @@
 [package]
 name = "pg_mentat"
-version = "1.0.0"
+version = "1.2.1"
 edition = "2021"
 authors = ["Greg Burd <greg@burd.me>"]
 license = "Apache-2.0"
-repository = "https://github.com/mozilla/mentat"
-description = "Mentat Datalog database for PostgreSQL"
+repository = "https://github.com/gburd/pg_mentat"
+homepage = "https://github.com/gburd/pg_mentat"
+description = "Datomic-compatible Datalog query engine for PostgreSQL"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -46,10 +47,7 @@ mentat_core = { path = "../core" }
 [dev-dependencies]
 pgrx-tests = "0.17.0"
 
-[profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
+# Release profile is specified at workspace root (Cargo.toml).
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

@@ -1,1 +1,0 @@
-initSidebarItems({"fn":[["c_char_to_string",""],["kw_from_string",""],["string_to_c_char",""]]});

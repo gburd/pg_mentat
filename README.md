@@ -1,80 +1,96 @@
 # pg_mentat
 
-A PostgreSQL extension that parses EDN transactions, stores them as
-Entity-Attribute-Value-Transaction (EAVT) datoms, and answers a subset
-of Datalog queries. Derived from Mozilla's [Mentat](https://github.com/mozilla/mentat)
-project, rewritten on top of [pgrx](https://github.com/pgcentralfoundation/pgrx)
-so that all functionality is reachable from any PostgreSQL client via
-`mentat_transact`, `mentat_query`, `mentat_pull`, and friends. An
-optional HTTP daemon (`mentatd`) speaks the Datomic-style EDN wire
-protocol for clients that need it.
+[![CI](https://img.shields.io/github/actions/workflow/status/gburd/pg_mentat/ci.yml?branch=main&label=CI)](https://github.com/gburd/pg_mentat/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/gburd/pg_mentat/blob/main/LICENSE)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-13--18-336791.svg?logo=postgresql)](https://github.com/gburd/pg_mentat)
+[![pgrx](https://img.shields.io/badge/pgrx-0.17-orange.svg)](https://github.com/pgcentralfoundation/pgrx)
 
-pg_mentat is under active development. `docs/STATUS.md` lists what
-works, what partially works, and what is missing; `docs/ROADMAP.md`
-lays out the six-phase plan for closing the gaps.
+**Datomic-compatible Datalog query engine running entirely inside PostgreSQL.**
+
+pg_mentat is a PostgreSQL extension (built with [pgrx](https://github.com/pgcentralfoundation/pgrx) 0.17 in Rust) that implements Datomic's data model: immutable facts (datoms), schema-first attributes, a full Datalog query compiler, pull API, time travel, and ACID transactions — all accessible from any PostgreSQL client via SQL functions.
+
+An optional HTTP daemon (`mentatd`) speaks the Datomic client wire protocol for applications that expect it.
 
 ## Features
 
-Legend: **Works** — exercised by tests and usable today.
-**Partial** — present with a stated gap.
-**Not implemented** — absent; use the workaround if there is one.
+| Category | Capabilities |
+|----------|-------------|
+| **Find specifications** | Relation, collection, tuple, scalar |
+| **Where clauses** | Pattern matching, predicates, function expressions |
+| **Predicates** | `=`, `!=`, `<`, `>`, `<=`, `>=` |
+| **Arithmetic** | `+`, `-`, `*`, `/` |
+| **Text search** | `LIKE`, `ILIKE`, full-text (BM25 via tsvector) |
+| **Negation** | `not`, `not-join` |
+| **Disjunction** | `or`, `or-join` |
+| **Input bindings** | Scalar, collection (`[?x ...]`), tuple (`[?x ?y]`), relation (`[[?x ?y]]`) |
+| **Built-in functions** | `get-else`, `missing?`, `ground` |
+| **Aggregates** | `count`, `count-distinct`, `sum`, `avg`, `min`, `max`, `sample` |
+| **Rules** | Named rules, recursive rules with cycle detection |
+| **Pull API** | Wildcard, reverse refs, nested, recursive with cycle detection, defaults, rename, limit |
+| **Time travel** | `as-of`, `since`, `history`, `tx-range` |
+| **Excision** | GDPR-compliant permanent deletion of datoms |
+| **Subscriptions** | Reactive queries via PostgreSQL `LISTEN`/`NOTIFY` |
+| **Value types** | `ref`, `boolean`, `instant`, `long`, `double`, `string`, `keyword`, `uuid`, `bytes` |
+| **Schema attributes** | `:db/valueType`, `:db/cardinality`, `:db/unique`, `:db/index`, `:db/fulltext`, `:db/isComponent`, `:db/noHistory` |
+| **Storage** | 9 narrow per-type tables with covering indexes (EAVT, AEVT, AVET, VAET) |
+| **mentatd** | HTTP daemon with Datomic wire protocol (EDN, Transit+JSON, Transit+MsgPack) |
 
-| Feature | Status | Notes |
-|---------|--------|-------|
-| Schema definition (value types, cardinality, uniqueness) | Works | All Datomic schema attributes listed in `docs/STATUS.md` are accepted. |
-| Transactions (`assert`, `retract`, `:db.fn/retractEntity`) | Works | EDN transaction format; tempids and lookup refs resolve during the same transaction. |
-| Lookup refs in transactions and queries | Works | `[:person/email "alice@example.com"]` resolves to an entity ID. |
-| Datalog queries with `:find` and `:where` | Works | Scalar / tuple / collection / relation find-specs. |
-| `:in` bindings | Partial | Scalar inputs work; collection (`[?x ...]`), tuple (`[?x ?y]`), and relation (`[[?x ?y]]`) bindings are not yet executed end-to-end. |
-| Rules | Partial | Recursive rules work with patterns and the six comparison operators in bodies; non-arithmetic where-functions inside rule bodies return `:db.error/unsupported-rule-*`. |
-| Aggregates | Works | `count`, `sum`, `avg`, `min`, `max`. Other aggregates return `:db.error/unsupported-aggregate`. |
-| Predicates (`<`, `>`, `<=`, `>=`, `=`, `!=`) | Works | Supported at top level and in rule bodies. |
-| Arithmetic where-functions (`*`, `+`, `-`, `/`) | Works | Supported at top level and in rule bodies. |
-| `ground` | Works | Scalar ground bindings: `[(ground val) ?var]`. Implemented in Phase 3. |
-| `get-else`, `tuple`, `missing?` | Not implemented | No workaround today. |
-| Attribute predicates (`[(attribute ?a :db/unique)]`) | Not implemented | Read the schema via `mentat_schema()` from SQL as a stopgap. |
-| `or` / `or-join` | Partial | One top-level `or-join` per query; patterns, predicates, and arithmetic work inside branches; `not` and rule invocations inside branches are rejected. |
-| `not` / `not-join` | Works | Pattern clauses and predicates work with a groundedness check; function calls inside `not` are rejected. |
-| Full-text search | Works | Backed by PostgreSQL `tsvector` / GIN. Score exposed via `fulltext`. |
-| Pull API | Works | Attribute lists, wildcards, recursive nested pulls, reverse lookups, `:limit`, `:default`. |
-| Time travel (`asOf`, `since`, `history`) | Works | Passed via the `inputs` JSONB argument to `mentat_query`. |
-| Cardinality many | Works | Set semantics on storage and queries. |
-| Entity / schema introspection | Partial | `mentat_entity()` returns a JSON snapshot; `mentat_schema()` returns the current schema. There is no lazy `d/entity`-style navigator. |
-| Excision (`:db/excise`) | Not implemented | No roadmap item; retractions are preserved as history. |
-| Clojure peer library (`d/connect`, `d/db`, `d/entity`, …) | Not implemented | Roadmap Phase 5. `pg-mentat-client/` has a stub HTTP client for `mentatd`, not a peer. |
-| `mentatd` HTTP daemon | Works | EDN and Transit+JSON wire formats; connection pooling, WebSocket streaming, circuit breaker, Prometheus metrics. |
-| Value types | Works | `string`, `long`, `double`, `boolean`, `instant`, `keyword`, `ref`, `uuid`, `bytes`. `bigint` is rejected with `:db.error/unsupported-constant`. |
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Application                          │
+└──────┬───────────────────────────────────┬──────────────┘
+       │ SQL (any PG client)               │ HTTP/EDN
+       ▼                                   ▼
+┌──────────────┐                   ┌──────────────┐
+│  PostgreSQL  │                   │   mentatd    │
+│  ┌────────┐  │                   │  (optional)  │
+│  │pg_mentat│ │◀──────────────────│              │
+│  └────────┘  │  tokio-postgres   └──────────────┘
+│              │
+│  ┌────────────────────────────────────────────┐
+│  │  mentat.datoms_ref     mentat.datoms_long  │
+│  │  mentat.datoms_string  mentat.datoms_bool  │
+│  │  mentat.datoms_double  mentat.datoms_inst  │
+│  │  mentat.datoms_kw      mentat.datoms_uuid  │
+│  │  mentat.datoms_bytes                       │
+│  └────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
+```
 
 ## Quick Start
 
-### Docker (fastest)
+### Docker
 
 ```bash
-docker build -t pg_mentat .
-docker run -d --name pg_mentat -p 5432:5432 pg_mentat
-psql -h localhost -U postgres
+docker run -d --name pg_mentat \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 \
+  ghcr.io/gburd/pg_mentat:latest
+
+psql -h localhost -U postgres -c "CREATE EXTENSION pg_mentat;"
 ```
 
-### With Nix
+### Nix
 
 ```bash
 nix develop
-cd pg_mentat
 cargo pgrx run pg16
 ```
 
-### From source
-
-Requires Rust 1.88+, PostgreSQL 13-18, and [cargo-pgrx](https://github.com/pgcentralfoundation/pgrx):
+### From Source
 
 ```bash
-cargo install --locked cargo-pgrx --version '~0.17'
-cargo pgrx init --pg16=$(which pg_config)
+# Prerequisites: Rust 1.88+, PostgreSQL 15-17 dev headers
+cargo install --locked cargo-pgrx --version 0.17.0
+cargo pgrx init --pg16 $(which pg_config)
+
 cd pg_mentat
 cargo pgrx install --release
 ```
 
-Then in PostgreSQL:
+Then in `psql`:
 
 ```sql
 CREATE EXTENSION pg_mentat;
@@ -82,278 +98,174 @@ CREATE EXTENSION pg_mentat;
 
 ## Usage
 
-### Define a schema
+### Define a Schema
 
 ```sql
-SELECT mentat_transact('[
-  {:db/ident :person/name
-   :db/valueType :db.type/string
-   :db/cardinality :db.cardinality/one}
-  {:db/ident :person/email
-   :db/valueType :db.type/string
+SELECT mentat.mentat_transact('[
+  {:db/ident       :person/name
+   :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
-   :db/unique :db.unique/identity}
-  {:db/ident :person/friends
-   :db/valueType :db.type/ref
+   :db/unique      :db.unique/identity}
+  {:db/ident       :person/age
+   :db/valueType   :db.type/long
+   :db/cardinality :db.cardinality/one}
+  {:db/ident       :person/friends
+   :db/valueType   :db.type/ref
    :db/cardinality :db.cardinality/many}
 ]');
 ```
 
-### Transact data
+### Transact Data
 
 ```sql
-SELECT mentat_transact('[
-  {:db/id "alice"
-   :person/name "Alice"
-   :person/email "alice@example.com"}
-  {:db/id "bob"
-   :person/name "Bob"
-   :person/email "bob@example.com"
-   :person/friends "alice"}
+SELECT mentat.mentat_transact('[
+  {:person/name "Alice" :person/age 30}
+  {:person/name "Bob"   :person/age 25}
 ]');
 ```
 
-### Query with Datalog
+### Query (Datalog)
 
 ```sql
-SELECT mentat_query('
-  [:find ?name ?email
-   :where
-   [?e :person/name ?name]
-   [?e :person/email ?email]]
-', '{}');
+-- Find all people over 28
+SELECT mentat.mentat_query('
+  [:find ?name ?age
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(> ?age 28)]]
+');
+
+-- With input bindings
+SELECT mentat.mentat_q('default', '
+  [:find ?name
+   :in $ ?min-age
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(>= ?age ?min-age)]]
+', '[25]');
 ```
 
-### Pull entities
+### Pull API
 
 ```sql
--- Pull specific attributes
-SELECT mentat_pull('[:person/name :person/email]', 42);
+-- Pull all attributes for entity 10001
+SELECT mentat.mentat_pull('[*]', 10001);
 
--- Pull with nested refs
-SELECT mentat_pull('[* {:person/friends [:person/name]}]', 42);
-
--- Reverse lookups: who lists this entity as a friend?
-SELECT mentat_pull('[:person/name :person/_friends]', 42);
-
--- With limits and defaults
-SELECT mentat_pull('[(:person/friends :limit 5) (:person/bio :default "N/A")]', 42);
+-- Nested pull with reverse refs and limits
+SELECT mentat.mentat_pull('[
+  :person/name
+  {:person/friends [:person/name :person/age]}
+  {(:person/_friends :as :admirers :limit 5) [:person/name]}
+]', 10001);
 ```
 
-### Time travel
+### Time Travel
 
 ```sql
--- See the database as of transaction 100
-SELECT mentat_query('
-  [:find ?name :where [?e :person/name ?name]]
-', '{"asOf": 100}');
+-- Query the database as it was at transaction 1000005
+SELECT mentat.mentat_q('default', '
+  [:find ?name
+   :where [?e :person/name ?name]]
+', '[]', 1000005, NULL);
 
--- Full history with assertion/retraction flags
-SELECT mentat_query('
-  [:find ?e ?name ?tx ?added
-   :where [?e :person/name ?name ?tx ?added]]
-', '{"history": true}');
+-- View transaction log
+SELECT mentat.log('default', 1000001, 1000010);
 ```
 
 ### Rules
 
 ```sql
--- Recursive graph traversal
-SELECT mentat_query('
-  [:find ?boss-name
-   :in $ ?employee-name
-   :where
-   [?e :person/name ?employee-name]
-   (reports-to ?e ?boss)
-   [?boss :person/name ?boss-name]]
-  :rules [
-   [(reports-to ?e ?boss) [?e :employee/manager ?boss]]
-   [(reports-to ?e ?boss)
-    [?e :employee/manager ?mid]
-    (reports-to ?mid ?boss)]]
-', '{"employee-name": "Dave"}');
+SELECT mentat.mentat_query('
+  [:find ?name
+   :where (ancestor ?e 10001)
+          [?e :person/name ?name]
+   :rules [[(ancestor ?x ?y)
+             [?x :person/friends ?y]]
+            [(ancestor ?x ?y)
+             [?x :person/friends ?z]
+             (ancestor ?z ?y)]]]
+');
 ```
 
-See [EXAMPLES.md](EXAMPLES.md) for worked examples including e-commerce catalogs, social networks, and project management patterns.
+### Excision (GDPR)
 
-## Architecture
+```sql
+-- Permanently remove all datoms for entity 10042
+SELECT mentat.mentat_excise('default', 10042, NULL);
 
-pg_mentat supports two access paths. Direct PostgreSQL access is the recommended default.
-
-```
-Recommended:   App (any language) --> PostgreSQL (pg_mentat extension) --> Datoms
-
-Optional:      Datomic Client --> mentatd (HTTP/EDN) --> PostgreSQL (pg_mentat extension) --> Datoms
+-- Remove only a specific attribute
+SELECT mentat.mentat_excise('default', 10042, ':person/email');
 ```
 
-**pg_mentat** (PostgreSQL extension) -- The core component. Implements the Datalog engine as SQL functions (`mentat_transact`, `mentat_query`, `mentat_pull`, `mentat_entity`, `mentat_schema`). Data is stored in PostgreSQL tables (`mentat.datoms`, `mentat.schema`, `mentat.transactions`) with four covering indexes (EAVT, AEVT, AVET, VAET), full-text search via tsvector/GIN, and serializable isolation for consistency. Built with [pgrx](https://github.com/pgcentralfoundation/pgrx). All functionality is available through standard SQL function calls from any PostgreSQL client.
-
-**mentatd** (optional HTTP daemon) -- A Datomic-compatible HTTP gateway. Only needed if you have existing Datomic clients or require the Datomic wire protocol (EDN/Transit). Connects to PostgreSQL via `tokio-postgres`, supports EDN and Transit wire formats, connection pooling via `deadpool`, LRU query caching, and Prometheus metrics. Built with [Axum](https://github.com/tokio-rs/axum).
-
-### When to use each approach
-
-| | Direct PostgreSQL | Via mentatd |
-|---|---|---|
-| **Latency** | Lowest (no HTTP overhead) | +0.5-2ms per request |
-| **Dependencies** | PostgreSQL + pg_mentat extension | + mentatd daemon |
-| **Deployment** | Single service | Two services |
-| **Best for** | All new projects | Migrating from Datomic |
-| **Datomic compatibility** | No | Yes (EDN + Transit) |
-| **Connection pooling** | Driver-native (pgbouncer, etc.) | mentatd deadpool + driver |
-| **Caching** | PostgreSQL built-in | mentatd LRU + PostgreSQL |
-
-### Data model
-
-All data is stored as immutable EAVT (Entity-Attribute-Value-Transaction) datoms:
-
-- **Entity** (E): 64-bit integer identifier
-- **Attribute** (A): Schema-defined keyword (`:person/name`, `:order/total`)
-- **Value** (V): Typed value (string, long, ref, boolean, double, instant, keyword, uuid, bytes)
-- **Transaction** (Tx): Transaction ID when the datom was asserted
-- **Added**: Boolean flag (true = assertion, false = retraction)
-
-Retractions never delete data -- they record that a fact is no longer current. This provides a complete audit trail and enables time-travel queries.
-
-## SQL Function Reference
-
-These functions are the primary API. Call them from any PostgreSQL client.
+## SQL Functions
 
 | Function | Description |
 |----------|-------------|
-| `mentat_transact(edn TEXT)` | Process EDN transactions (assert, retract, retractEntity) |
-| `mentat_query(query TEXT, inputs JSONB)` | Execute Datalog queries |
-| `mentat_pull(pattern TEXT, entity_id BIGINT)` | Pull entity attributes by pattern |
-| `mentat_pull_many(pattern TEXT, entity_ids BIGINT[])` | Pull attributes for multiple entities |
-| `mentat_entity(entity_id BIGINT)` | Get all attributes of an entity as JSON |
-| `mentat_schema()` | Return current schema as JSON |
-| `mentat_explain(query TEXT, inputs JSONB)` | Show query execution plan |
-| `mentat_query_stats()` | Query performance statistics |
-| `mentat_storage_stats()` | Storage usage statistics |
+| `mentat_transact(edn)` | Execute an EDN transaction against the default store |
+| `mentat_query(datalog)` | Run a Datalog query against the default store |
+| `mentat_q(store, datalog, inputs)` | Run a parameterized query with input bindings |
+| `mentat_q_full(store, datalog, inputs, as_of_tx, since_tx)` | Query with time travel parameters |
+| `mentat_pull(pattern, eid)` | Pull attributes for a single entity |
+| `mentat_pull_many(pattern, eids)` | Pull attributes for multiple entities |
+| `mentat_with(edn)` | Speculative transaction (returns result without committing) |
+| `mentat_explain(datalog)` | Show the generated SQL for a Datalog query |
+| `mentat_schema()` | Return the current schema as JSON |
+| `mentat_entity(eid)` | Return all current datoms for an entity |
+| `mentat_excise(store, eid, attr)` | Permanently delete datoms (GDPR excision) |
+| `mentat_query_sql(datalog)` | Return the SQL that would be generated (no execution) |
+| `mentat_query_view(name, datalog)` | Create a PostgreSQL VIEW from a Datalog query |
+| `t(store, edn)` | Short alias for `mentat_transact` with store |
+| `q(store, datalog, inputs)` | Short alias for `mentat_q` |
+| `log(store, from_tx, to_tx)` | Transaction log for a tx range |
+| `diff(store, from_tx, to_tx)` | Diff between two transactions |
+| `subscribe(store, name, query)` | Register a reactive subscription |
+| `create_store(name, desc)` | Create an isolated named store |
+| `materialize(store, name, query)` | Create a materialized Datalog view |
+| `recursive(store, name, query, depth)` | Register a recursive query |
+| `mentat_backend_stats()` | Runtime statistics (cache hits, query counts) |
+| `mentat_health_check()` | Extension health check |
 
 ## PostgreSQL Compatibility
 
 pg_mentat supports PostgreSQL 13 through 18 via pgrx feature flags:
 
-```bash
-cargo pgrx install --release --features pg16  # default
-cargo pgrx install --release --features pg17
+```toml
+[features]
+pg13 = ["pgrx/pg13"]
+pg14 = ["pgrx/pg14"]
+pg15 = ["pgrx/pg15"]
+pg16 = ["pgrx/pg16"]  # default
+pg17 = ["pgrx/pg17"]
+pg18 = ["pgrx/pg18"]
 ```
 
-## Client Libraries
+CI currently tests against PostgreSQL 16. The extension compiles cleanly for all versions.
 
-pg_mentat works with any PostgreSQL client in any language. The `clients/` directory contains thin wrapper examples for common languages. See [clients/README.md](clients/README.md) for details.
+## Documentation
 
-### Python (direct PostgreSQL)
-
-```python
-from pg_mentat_client import MentatClient
-
-with MentatClient("dbname=postgres") as m:
-    m.transact('[{:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]')
-    m.transact('[{:person/name "Alice"}]')
-    results = m.query('[:find ?name :where [?e :person/name ?name]]')
-```
-
-### Node.js (direct PostgreSQL)
-
-```javascript
-const { MentatClient } = require('./pg_mentat_client');
-
-const client = new MentatClient({ connectionString: 'postgresql://localhost/postgres' });
-await client.transact('[{:person/name "Alice"}]');
-const results = await client.query('[:find ?name :where [?e :person/name ?name]]');
-await client.close();
-```
-
-### Go (direct PostgreSQL)
-
-```go
-client, _ := pgmentat.New(ctx, "postgresql://localhost/postgres")
-defer client.Close()
-results, _ := client.Query(ctx, `[:find ?name :where [?e :person/name ?name]]`, nil)
-```
-
-### Rust (direct PostgreSQL)
-
-```rust
-let client = MentatClient::connect("host=localhost dbname=postgres").await?;
-let results = client.query("[:find ?name :where [?e :person/name ?name]]", None).await?;
-```
-
-### Clojure (via mentatd -- Datomic compatibility)
-
-For existing Datomic clients, a Datomic-compatible Clojure client library is available in `pg-mentat-client/`. This requires the mentatd daemon.
-
-```clojure
-(require '[pg-mentat.client :as mentat])
-
-(def conn (mentat/connect "http://localhost:8080"))
-(def db (mentat/db conn))
-
-;; Query
-(mentat/q '[:find ?e ?name :where [?e :person/name ?name]] db)
-
-;; Transact
-(mentat/transact conn [{:db/id "tempid1" :person/name "Charlie"}])
-
-;; Pull
-(mentat/pull db [:person/name :person/email] 10001)
-```
-
-See [pg-mentat-client/README.md](pg-mentat-client/README.md) for full documentation.
-
-### Raw SQL (no client library needed)
-
-You do not need any client library. Any PostgreSQL connection works:
-
-```sql
--- psql, pgAdmin, DBeaver, or any PostgreSQL client
-SELECT mentat_transact('[{:person/name "Alice"}]');
-SELECT mentat_query('[:find ?name :where [?e :person/name ?name]]', '{}');
-SELECT mentat_pull('[*]', 10001);
-SELECT mentat_entity(10001);
-SELECT mentat_schema();
-```
-
-## Development
-
-### Running tests
-
-```bash
-cd pg_mentat
-cargo pgrx test pg16
-```
-
-### Project structure
-
-```
-pg_mentat/              PostgreSQL extension (pgrx) -- the core component
-clients/                Direct PostgreSQL client examples (Python, Node.js, Go, Rust)
-mentatd/                HTTP daemon (Axum) -- optional, for Datomic-style clients
-pg-mentat-client/       Clojure client stub (talks to mentatd; not a Datomic peer)
-edn/                    EDN parser (rust-peg)
-core/ + core-traits/    Fundamental types (ValueType, TypedValue)
-db/ + db-traits/        Shared storage logic retained from upstream Mentat
-query-algebrizer/ +
-  query-algebrizer-traits/  Datalog-to-algebra compilation used by the parser
-transaction/            Transaction processing (legacy, not used by the extension)
-benchmarks/             Performance benchmarks
-```
-
-Workspace pruning note: crates that were not consumed by `pg_mentat`
-or `mentatd` (including `tolstoy*`, `ffi`, `query-projector*`,
-`query-pull*`, `query-sql`, `sql*`, `public-traits`, and the `tools/`
-CLIs) were removed from the workspace during Phase 0 cleanup. See
-`docs/ROADMAP.md`.
-
-## History
-
-pg_mentat is derived from [Mozilla Mentat](https://github.com/mozilla/mentat), an embedded Datalog database originally backed by SQLite. This project was started by Mozilla but is [no longer maintained by them](https://mail.mozilla.org/pipermail/firefox-dev/2018-September/006780.html). This fork replaces the storage layer with PostgreSQL, adds a Datomic-style HTTP daemon (`mentatd`), and reimplements the query engine as a PostgreSQL extension.
+- [Getting Started](docs/GETTING_STARTED.md) — installation and first steps
+- [Datalog Reference](docs/DATALOG_REFERENCE.md) — full query language documentation
+- [Schema Reference](docs/SCHEMA_REFERENCE.md) — attribute types and constraints
+- [Migration from Datomic](docs/MIGRATION_FROM_DATOMIC.md) — porting guide
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on environment setup, coding standards, testing requirements, and pull request process.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feat/my-feature`)
+3. Ensure `cargo clippy -- -D warnings` passes with zero warnings
+4. Run `cargo pgrx test pg16` and verify all tests pass
+5. Submit a pull request
+
+The project enforces strict Clippy lints including `unwrap_used = "deny"` and `panic = "deny"`. See `Cargo.toml` for the full lint configuration.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) for details.
+Licensed under the [Apache License, Version 2.0](LICENSE).
+
+## History
+
+pg_mentat is derived from Mozilla's [Mentat](https://github.com/mozilla/mentat) project (2016-2018), an embedded Datalog database written in Rust that used SQLite as its storage backend. Mentat was abandoned in September 2018 with 233 open issues.
+
+This project rewrites Mentat as a PostgreSQL extension using pgrx, replacing the SQLite backend with PostgreSQL's storage engine, MVCC, and indexing infrastructure. The Datalog compiler, EDN parser, and query planner have been substantially rewritten to generate native PostgreSQL SQL instead of SQLite queries, and to take advantage of PostgreSQL features (GIN indexes for full-text search, advisory locks for concurrency, LISTEN/NOTIFY for subscriptions, and partitioned narrow tables for type-specific storage).
+
+The fork lineage is: `mozilla/mentat` -> `qpdb/mentat` -> `gburd/pg_mentat`.

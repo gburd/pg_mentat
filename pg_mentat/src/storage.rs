@@ -171,6 +171,7 @@ mod tests {
 
     #[pg_test]
     fn test_alloc_entid_basic() {
+        crate::ensure_extension_loaded();
         // Test entity ID allocation
         // This will fail until schema is installed
         let result = alloc_entid("db.part/user");

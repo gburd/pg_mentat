@@ -123,7 +123,7 @@ fn trigger_function_sql(
     let var_name = format!("mentat.sub_hash_{}", subscription_name);
 
     format!(
-        r#"
+        r"
 CREATE OR REPLACE FUNCTION {func_name}() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -153,7 +153,7 @@ BEGIN
     RETURN NULL;
 END;
 $$;
-"#,
+",
         func_name = func_name,
         escaped_query = escaped_query,
         var_name = var_name,
@@ -171,12 +171,12 @@ fn trigger_sql(schema: &str, subscription_name: &str) -> String {
     );
 
     format!(
-        r#"
+        r"
 CREATE OR REPLACE TRIGGER {trigger_name}
     AFTER INSERT OR UPDATE OR DELETE ON {schema}.datoms
     FOR EACH STATEMENT
     EXECUTE FUNCTION {func_name}();
-"#,
+",
         trigger_name = trigger_name,
         schema = schema,
         func_name = func_name,
@@ -193,10 +193,10 @@ fn drop_trigger_sql(schema: &str, subscription_name: &str) -> String {
     );
 
     format!(
-        r#"
+        r"
 DROP TRIGGER IF EXISTS {trigger_name} ON {schema}.datoms;
 DROP FUNCTION IF EXISTS {func_name}();
-"#,
+",
         trigger_name = trigger_name,
         schema = schema,
         func_name = func_name,

@@ -1,0 +1,21 @@
+[extension]
+name = "pg_mentat"
+version = "1.2.1"
+repository = "https://github.com/gburd/pg_mentat"
+license = "Apache-2.0"
+description = "Datomic-compatible Datalog query engine for PostgreSQL"
+homepage = "https://github.com/gburd/pg_mentat"
+documentation = "https://github.com/gburd/pg_mentat/tree/main/docs"
+categories = ["data-transforms", "search"]
+
+[build]
+postgres_version = "16"
+pgrx_version = "0.17.0"
+rust_version = "1.88.0"
+
+# Extension installs a shared library + SQL scripts
+[build.features]
+pg16 = true
+
+[build.platform_dependencies]
+linux = ["libclang-dev", "clang", "build-essential", "pkg-config"]

@@ -1,1 +1,0 @@
-initSidebarItems({"enum":[["CardinalityConflict",""],["DbErrorKind",""],["InputError",""],["SchemaConstraintViolation",""]],"struct":[["DbError",""]],"type":[["Result",""]]});

@@ -232,7 +232,7 @@ pub fn max_result_rows() -> i32 {
 }
 
 /// Read the current value of `mentat.max_recursion_depth`.
-#[allow(dead_code)] // GUC reader; may be used by future rule invocation paths
+#[expect(dead_code, reason = "GUC reader; may be used by future rule invocation paths")]
 pub fn max_recursion_depth() -> i32 {
     MAX_RECURSION_DEPTH.get()
 }
@@ -259,7 +259,6 @@ pub fn explain_format() -> String {
 /// Registers GUC parameters so users can configure optimizer behavior via:
 ///   SET mentat.enable_optimizer_hints = off;
 ///   SET mentat.default_work_mem = '128MB';
-#[allow(dead_code)]
 pub unsafe fn init_planner_hooks() {
     GucRegistry::define_bool_guc(
         c"mentat.enable_optimizer_hints",

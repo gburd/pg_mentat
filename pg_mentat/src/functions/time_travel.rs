@@ -307,7 +307,7 @@ pub fn log(
     // a `type_tag` literal and casts `v` to text so that the UNION is
     // type-compatible.  Both assertions and retractions are included.
     let sql = format!(
-        r#"
+        r"
         SELECT d.tx,
                t.tx_instant::TEXT AS tx_instant,
                d.e,
@@ -354,7 +354,7 @@ pub fn log(
         ) d
         JOIN {schema}.transactions t ON t.tx = d.tx
         ORDER BY d.tx ASC, d.e ASC, d.a ASC
-        "#,
+        ",
         schema = quoted_schema,
     );
 

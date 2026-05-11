@@ -7,6 +7,7 @@ mod cache_tests {
     /// Test that the cache bulk-loads all bootstrap attributes on first access
     #[pg_test]
     fn test_cache_warming() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -42,6 +43,7 @@ mod cache_tests {
     /// Test cache hit behavior for attribute lookups
     #[pg_test]
     fn test_attribute_cache_hit() {
+        crate::ensure_extension_loaded();
         // Bootstrap schema should be in place
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
@@ -60,6 +62,7 @@ mod cache_tests {
     /// Test cache hit behavior for ident resolution
     #[pg_test]
     fn test_ident_cache_hit() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -76,6 +79,7 @@ mod cache_tests {
     /// Test bidirectional ident/entid cache consistency
     #[pg_test]
     fn test_bidirectional_cache() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -96,6 +100,7 @@ mod cache_tests {
     /// Test cache invalidation after schema changes
     #[pg_test]
     fn test_cache_invalidation() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -127,6 +132,7 @@ mod cache_tests {
     /// Test cache behavior with user-defined attributes
     #[pg_test]
     fn test_user_attribute_caching() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Define a new attribute
@@ -160,6 +166,7 @@ mod cache_tests {
     /// Test cache miss for non-existent attributes
     #[pg_test]
     fn test_cache_miss_nonexistent() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -176,6 +183,7 @@ mod cache_tests {
     /// Test attribute metadata completeness
     #[pg_test]
     fn test_attribute_metadata_fields() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Create attribute with various properties
@@ -209,6 +217,7 @@ mod cache_tests {
     /// Test concurrent cache access (read-heavy workload)
     #[pg_test]
     fn test_concurrent_reads() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -231,6 +240,7 @@ mod cache_tests {
     /// Test cache behavior across schema transactions
     #[pg_test]
     fn test_cache_across_transactions() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
@@ -277,6 +287,7 @@ mod cache_tests {
     /// Test that repeated attribute resolution is instant (no DB queries after warming)
     #[pg_test]
     fn test_repeated_resolution_performance() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Define a few attributes

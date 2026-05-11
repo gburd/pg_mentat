@@ -5,6 +5,7 @@ use crate::functions::{mentat_transact, mentat_query};
 
 #[pg_test]
 fn test_rule_with_simple_predicate() {
+    crate::ensure_extension_loaded();
     // Setup schema
     mentat_transact(r#"[
         {:db/id "schema1"
@@ -55,6 +56,7 @@ fn test_rule_with_simple_predicate() {
 
 #[pg_test]
 fn test_rule_with_multiple_predicates() {
+    crate::ensure_extension_loaded();
     // Setup schema
     mentat_transact(r#"[
         {:db/id "schema1"
@@ -106,6 +108,7 @@ fn test_rule_with_multiple_predicates() {
 
 #[pg_test]
 fn test_rule_with_arithmetic_function() {
+    crate::ensure_extension_loaded();
     // Setup schema
     mentat_transact(r#"[
         {:db/id "schema1"
@@ -158,6 +161,7 @@ fn test_rule_with_arithmetic_function() {
 
 #[pg_test]
 fn test_recursive_rule_with_predicate() {
+    crate::ensure_extension_loaded();
     // Setup schema
     mentat_transact(r#"[
         {:db/id "schema1"
@@ -226,6 +230,7 @@ fn test_recursive_rule_with_predicate() {
 
 #[pg_test]
 fn test_rule_with_comparison_operators() {
+    crate::ensure_extension_loaded();
     // Setup schema
     mentat_transact(r#"[
         {:db/id "schema1"

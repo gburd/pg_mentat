@@ -1,0 +1,51 @@
+{
+  "name": "pg_mentat",
+  "abstract": "Datomic-compatible Datalog query engine for PostgreSQL",
+  "description": "pg_mentat implements the Datomic/Mentat data model (entity-attribute-value with time-travel) entirely within PostgreSQL. Provides Datalog query execution, pull API, temporal queries, and transaction processing via SQL functions.",
+  "version": "1.2.1",
+  "maintainer": [
+    "Gregory Burd <greg@burd.me>"
+  ],
+  "license": "apache_2_0",
+  "provides": {
+    "pg_mentat": {
+      "abstract": "Datomic-compatible Datalog query engine",
+      "file": "pg_mentat/pg_mentat.control",
+      "docfile": "README.md",
+      "version": "1.2.1"
+    }
+  },
+  "prereqs": {
+    "runtime": {
+      "requires": {
+        "PostgreSQL": "13.0"
+      }
+    }
+  },
+  "resources": {
+    "bugtracker": {
+      "web": "https://github.com/gburd/pg_mentat/issues"
+    },
+    "repository": {
+      "url": "https://github.com/gburd/pg_mentat.git",
+      "web": "https://github.com/gburd/pg_mentat",
+      "type": "git"
+    }
+  },
+  "generated_by": "Gregory Burd",
+  "meta-spec": {
+    "version": "1.0.0",
+    "url": "https://pgxn.org/meta/spec.txt"
+  },
+  "tags": [
+    "datalog",
+    "datomic",
+    "eav",
+    "entity-attribute-value",
+    "temporal",
+    "time-travel",
+    "graph",
+    "query-engine",
+    "mentat"
+  ]
+}

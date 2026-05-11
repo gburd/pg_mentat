@@ -7,6 +7,7 @@ mod transaction_safety_tests {
     use pgrx::prelude::*;
 
     fn setup() {
+        crate::ensure_extension_loaded();
         Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
@@ -267,6 +268,7 @@ mod transaction_safety_tests {
 
     #[pg_test]
     fn test_serialization_failure_error_format() {
+        crate::ensure_extension_loaded();
         // Test that the SerializationFailure error variant formats correctly
         let err = crate::error::MentatError::SerializationFailure {
             message: "test failure".to_string(),
@@ -287,6 +289,7 @@ mod transaction_safety_tests {
 
     #[pg_test]
     fn test_serialization_failure_error_code() {
+        crate::ensure_extension_loaded();
         let err = crate::error::MentatError::SerializationFailure {
             message: "test".to_string(),
             attempt: 1,

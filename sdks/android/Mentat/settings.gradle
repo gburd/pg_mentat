@@ -1,5 +1,0 @@
-include ':library'
-
-// SDK sample
-include ':samples-basic'
-project(':samples-basic').projectDir = new File(rootDir, 'samples/basic')

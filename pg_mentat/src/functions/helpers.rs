@@ -305,6 +305,7 @@ mod tests {
 
     #[pg_test]
     fn test_helper_functions_compile() {
+        crate::ensure_extension_loaded();
         // This test just verifies the functions compile and are accessible
         // Actual functionality tests require a populated database
         assert!(true);

@@ -1,0 +1,71 @@
+2026-05-11  Gregory Burd  <greg@burd.me>
+
+	* Release 1.2.1
+
+	* pg_mentat/Cargo.toml: Unified version to 1.2.1 across all crates.
+	* mentatd/Cargo.toml: Unified version to 1.2.1.
+	* pg_mentat/pg_mentat.control: Bumped default_version to 1.2.1.
+	* pg_mentat/Cargo.toml (repository): Corrected to gburd/pg_mentat.
+	* .github/workflows/ci.yml: Consolidated to single canonical CI workflow.
+	* .github/workflows/release.yml: New release automation workflow.
+	* README.md: Complete rewrite reflecting actual feature status.
+	* ChangeLog: New file (this file).
+	* Removed pre-fork garbage: sdks/, automation/, .travis.yml,
+	.taskcluster.yml, fixtures/, empty dotfiles, committed mbox file,
+	rename_functions.sh, demo cast file, stale benchmark results.
+	* Removed duplicated/broken CI workflows (13 of 18 were dead).
+	* Removed fabricated client libraries (clojure, go, nodejs, python, rust)
+	that contained no working code.
+	* Removed speculative documentation (docker/, helm/, k8s/, docs/ops/,
+	docs/deployment/) describing infrastructure that does not exist.
+
+2026-05-10  Gregory Burd  <greg@burd.me>
+
+	* Pre-release development (cumulative)
+
+	Full Datalog query compiler:
+	* edn/src/lib.rs: PEG grammar for Datalog with all find specs,
+	input bindings (scalar, collection, tuple, relation), not/not-join,
+	or/or-join, rules, predicates, arithmetic, ground, get-else, missing?.
+	* pg_mentat/src/functions/query.rs: SQL code generator targeting
+	PostgreSQL; prepared statement cache; mentat_explain for query plans.
+
+	Storage redesign (Phase 1):
+	* pg_mentat/sql/10_narrow_storage.sql: Nine narrow per-type tables
+	(datoms_ref, datoms_long, datoms_double, datoms_string, datoms_bool,
+	datoms_inst, datoms_kw, datoms_uuid, datoms_bytes) with covering
+	indexes for EAVT/AEVT/AVET/VAET access patterns.
+	* pg_mentat/src/lib.rs: INSTEAD OF triggers on compatibility view.
+	* Wide-row mentat.datoms table dropped.
+
+	Pull API:
+	* pg_mentat/src/functions/pull.rs: Full pull expression parser and
+	executor with wildcard, reverse refs, nested maps, recursive descent
+	with cycle detection, :default, :as rename, :limit.
+
+	Time travel:
+	* pg_mentat/src/functions/time_travel.rs: as-of, since, history
+	queries; transaction log (tx-range); diff between transactions.
+
+	Excision:
+	* pg_mentat/src/functions/excision.rs: GDPR-compliant permanent
+	deletion of datoms by entity or entity+attribute.
+
+	Subscriptions:
+	* pg_mentat/src/functions/subscriptions.rs: Reactive query
+	subscriptions using PostgreSQL LISTEN/NOTIFY.
+
+	mentatd HTTP server:
+	* mentatd/src/main.rs: Axum-based HTTP server with Datomic client
+	wire protocol (EDN, Transit+JSON, Transit+MsgPack).
+	* mentatd/src/server.rs: Eight /api/* route aliases, CORS support.
+
+	Testing:
+	* 1600+ pgrx test functions covering all query features, pull API,
+	time travel, excision, transactions, schema evolution, concurrency.
+
+	Production hardening:
+	* Sequence-based entity ID allocation (lock-free).
+	* Cross-backend schema cache invalidation via generation counter.
+	* Planner hooks and GUC parameters for query optimization.
+	* Store isolation (multiple named stores per database).

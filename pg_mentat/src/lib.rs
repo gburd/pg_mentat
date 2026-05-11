@@ -5,7 +5,6 @@ pgrx::pg_module_magic!();
 /// Extension initialization: register GUC parameters and planner hooks.
 ///
 /// Called automatically by PostgreSQL when the shared library is loaded.
-#[allow(non_snake_case)]
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     // Register planner GUC parameters (optimizer hints, timeouts, limits)
@@ -27,7 +26,7 @@ pub extern "C-unwind" fn _PG_init() {
 // this. That double-create is what produces
 // `ERROR: schema mentat is not a member of extension "pg_mentat"`.
 extension_sql!(
-    r#"
+    r"
     CREATE SCHEMA IF NOT EXISTS mentat;
 
     -- Define enum types
@@ -208,7 +207,7 @@ extension_sql!(
     BEGIN
         RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
     END; $$ LANGUAGE plpgsql;
-"#,
+",
     name = "bootstrap_schema",
 );
 
@@ -237,7 +236,7 @@ extension_sql_file!(
 
 // Datom helper functions: convenience PL/pgSQL wrappers for common query patterns
 extension_sql!(
-    r#"
+    r"
     -- datom_text_like: Find entities whose text attribute matches a LIKE pattern.
     CREATE OR REPLACE FUNCTION mentat.datom_text_like(
         attr_ident TEXT,
@@ -427,14 +426,14 @@ extension_sql!(
         LIMIT 1;
     END;
     $$ LANGUAGE plpgsql STABLE;
-"#,
+",
     name = "datom_helpers",
     requires = ["bootstrap_schema"],
 );
 
 // Excision log: tracks permanent data deletions for audit/compliance purposes
 extension_sql!(
-    r#"
+    r"
     CREATE TABLE IF NOT EXISTS mentat.excision_log (
         id BIGSERIAL PRIMARY KEY,
         store_name TEXT NOT NULL DEFAULT 'default',
@@ -444,14 +443,14 @@ extension_sql!(
         tx_log_entries_removed BIGINT NOT NULL DEFAULT 0,
         reason TEXT
     );
-"#,
+",
     name = "excision_log",
     requires = ["bootstrap_schema"],
 );
 
 // VIEW helper functions: create SQL VIEWs backed by Datalog queries
 extension_sql!(
-    r#"
+    r"
     -- Create a SQL VIEW backed by a Datalog query.
     --
     -- The VIEW executes the Datalog query whenever it is queried via SQL,
@@ -680,7 +679,7 @@ extension_sql!(
         RETURN format('MATERIALIZED VIEW %s refreshed', safe_view_name);
     END;
     $$ LANGUAGE plpgsql;
-"#,
+",
     name = "view_helpers",
     requires = ["datom_helpers", mentat_query_sql, mentat_query_view],
 );
@@ -870,7 +869,7 @@ mod mentat {
     #[pg_extern]
     fn initialize_schema() -> Result<(), Box<dyn std::error::Error>> {
         Spi::run(
-            r#"
+            r"
             CREATE TABLE IF NOT EXISTS mentat_datoms (
                 e BIGINT NOT NULL,
                 a BIGINT NOT NULL,
@@ -887,31 +886,31 @@ mod mentat {
                 ON mentat_datoms (a, v, e, tx);
             CREATE INDEX IF NOT EXISTS idx_mentat_vaet
                 ON mentat_datoms (v, a, e, tx);
-        "#,
+        ",
         )?;
         Ok(())
     }
 
     // Re-export all extension functions into the mentat schema
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::entity::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::materialized_views::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::pull::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::query::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::schema::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::stats::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::store_management::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::subscriptions::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::transact::*;
-    #[allow(unused_imports)]
+    #[expect(unused_imports)]
     pub use crate::functions::virtual_tables::*;
 }
 
@@ -971,8 +970,9 @@ mod tests {
 
     /// Initialize a test database with the pg_mentat schema.
     fn setup_test_db() -> Result<(), Box<dyn std::error::Error>> {
+        crate::ensure_extension_loaded();
         Spi::run(
-            r#"
+            r"
             CREATE SCHEMA IF NOT EXISTS mentat;
 
             -- Define enum types
@@ -1246,7 +1246,7 @@ mod tests {
                 ORDER BY d.tx DESC
                 LIMIT 1;
             END; $$ LANGUAGE plpgsql STABLE;
-            "#,
+            ",
         )?;
         Ok(())
     }
@@ -1254,7 +1254,7 @@ mod tests {
     /// Bootstrap the core Mentat schema (test helper).
     fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error>> {
         Spi::run(
-            r#"
+            r"
             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed) VALUES
                 -- Core schema attributes
                 (1, ':db/ident', 'keyword', 'one', 'identity', true),
@@ -1385,7 +1385,7 @@ mod tests {
                 (8,  3, 0, 30, 1000000, true),
                 (9,  3, 0, 30, 1000000, true),
                 (10, 3, 0, 30, 1000000, true);
-            "#,
+            ",
         )?;
         Ok(())
     }
@@ -1419,6 +1419,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_roundtrip_boolean() {
+        crate::ensure_extension_loaded();
         let result = Spi::get_one::<String>("SELECT edn_out(edn_in('true'))")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
@@ -1427,6 +1428,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_roundtrip_integer() {
+        crate::ensure_extension_loaded();
         let result = Spi::get_one::<String>("SELECT edn_out(edn_in('42'))")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
@@ -1435,6 +1437,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_roundtrip_string() {
+        crate::ensure_extension_loaded();
         let result = Spi::get_one::<String>("SELECT edn_out(edn_in('\"hello\"'))")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
@@ -1443,6 +1446,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_roundtrip_vector() {
+        crate::ensure_extension_loaded();
         let result = Spi::get_one::<String>("SELECT edn_out(edn_in('[1 2 3]'))")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
@@ -1451,6 +1455,7 @@ mod tests {
 
     #[pg_test]
     fn test_edn_roundtrip_map() {
+        crate::ensure_extension_loaded();
         let result = Spi::get_one::<String>("SELECT edn_out(edn_in('{:name \"Alice\" :age 30}'))")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
@@ -2967,7 +2972,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -2977,7 +2982,7 @@ mod tests {
             {:db/ident :person/email
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3032,7 +3037,7 @@ mod tests {
         );
 
         // Retract the entire entity
-        let retract_tx = format!(r#"[[:db/retractEntity {}]]"#, alice_eid);
+        let retract_tx = format!(r"[[:db/retractEntity {}]]", alice_eid);
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3102,14 +3107,14 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with ref attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
             {:db/ident :person/friend
              :db/valueType :db.type/ref
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3223,14 +3228,14 @@ mod tests {
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
             &[DatumWithOid::from(
-                r#"[
+                r"[
                 {:db/ident :item/name
                  :db/valueType :db.type/string
                  :db/cardinality :db.cardinality/one}
                 {:db/ident :item/link
                  :db/valueType :db.type/ref
                  :db/cardinality :db.cardinality/one}
-            ]"#,
+            ]",
             )],
         )
         .expect("Schema transaction failed");
@@ -3288,7 +3293,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with a unique email attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -3299,7 +3304,7 @@ mod tests {
             {:db/ident :person/age
              :db/valueType :db.type/long
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3365,7 +3370,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with unique email attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -3376,7 +3381,7 @@ mod tests {
             {:db/ident :person/age
              :db/valueType :db.type/long
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3443,7 +3448,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with unique email and ref attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -3454,7 +3459,7 @@ mod tests {
             {:db/ident :person/friend
              :db/valueType :db.type/ref
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3514,7 +3519,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with :db.unique/value (not identity)
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :product/sku
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one
@@ -3522,7 +3527,7 @@ mod tests {
             {:db/ident :product/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3580,12 +3585,12 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with unique email
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/email
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one
              :db/unique :db.unique/identity}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3615,11 +3620,11 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema WITHOUT unique constraint
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3657,7 +3662,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with a unique email attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -3668,7 +3673,7 @@ mod tests {
             {:db/ident :person/age
              :db/valueType :db.type/long
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -3719,7 +3724,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with unique email and ref attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :person/name
              :db/valueType :db.type/string
              :db/cardinality :db.cardinality/one}
@@ -3730,7 +3735,7 @@ mod tests {
             {:db/ident :person/friend
              :db/valueType :db.type/ref
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -4987,6 +4992,7 @@ mod tests {
 
     #[pg_test]
     fn test_stmt_cache_stats_initial() {
+        crate::ensure_extension_loaded();
         // Cache starts empty
         let result = Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
             .expect("Cache clear failed")
@@ -5178,11 +5184,11 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with double attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :measurement/value
              :db/valueType :db.type/double
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -5274,11 +5280,11 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with instant attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :event/timestamp
              :db/valueType :db.type/instant
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -5373,11 +5379,11 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with uuid attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :session/id
              :db/valueType :db.type/uuid
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
@@ -5468,11 +5474,11 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
 
         // Define schema with bytes attribute
-        let schema_tx = r#"[
+        let schema_tx = r"[
             {:db/ident :file/data
              :db/valueType :db.type/bytes
              :db/cardinality :db.cardinality/one}
-        ]"#;
+        ]";
 
         Spi::run_with_args(
             "SELECT mentat_transact($1)",

@@ -128,7 +128,7 @@ fn validate_query_fragment(sql: &str, label: &str) -> Result<(), MentatError> {
 /// they can be listed, refreshed, or dropped programmatically.
 fn ensure_metadata_table() -> Result<(), pgrx::spi::SpiError> {
     Spi::run(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS mentat.recursive_views (
             view_name   TEXT NOT NULL,
             schema_name TEXT NOT NULL,
@@ -140,7 +140,7 @@ fn ensure_metadata_table() -> Result<(), pgrx::spi::SpiError> {
             created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (schema_name, view_name)
         )
-        "#,
+        ",
     )
 }
 
@@ -535,6 +535,7 @@ mod recursive_query_tests {
 
     #[pg_test]
     fn test_recursive_queries_compile() {
+        crate::ensure_extension_loaded();
         // Verify the exported functions compile and are accessible.
         // Full integration tests require a populated database with schema
         // and hierarchy data.

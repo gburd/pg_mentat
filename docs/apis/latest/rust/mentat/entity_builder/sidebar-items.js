@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["EntityBuilder",""],["InProgressBuilder",""],["TermBuilder",""]],"trait":[["BuildTerms",""],["FromThing",""],["IntoThing",""]],"type":[["Terms",""]]});

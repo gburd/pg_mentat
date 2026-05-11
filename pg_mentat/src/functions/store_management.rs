@@ -158,7 +158,7 @@ pub fn create_store(
 
     // Create core tables in the new schema
     Spi::run(&format!(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS {schema}.datoms (
             e BIGINT NOT NULL,
             a BIGINT NOT NULL,
@@ -223,17 +223,17 @@ pub fn create_store(
 
         CREATE SEQUENCE IF NOT EXISTS {schema}.partition_user_seq START WITH 10000 CACHE 100;
         CREATE SEQUENCE IF NOT EXISTS {schema}.partition_tx_seq START WITH 1000001 CACHE 100;
-        "#,
+        ",
         schema = quoted_schema
     ))?;
 
     // Create indexes on the new datoms table
     Spi::run(&format!(
-        r#"
+        r"
         CREATE INDEX IF NOT EXISTS idx_{name}_eavt ON {schema}.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
         CREATE INDEX IF NOT EXISTS idx_{name}_aevt ON {schema}.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
         CREATE INDEX IF NOT EXISTS idx_{name}_tx ON {schema}.datoms (tx DESC);
-        "#,
+        ",
         name = store_name,
         schema = quoted_schema
     ))?;

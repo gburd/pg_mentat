@@ -1,1 +1,0 @@
-initSidebarItems({"struct":[["InProgressObserverTransactWatcher",""],["TxCommand",""],["TxObservationService",""],["TxObserver",""]],"trait":[["Command",""]]});

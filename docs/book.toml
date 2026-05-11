@@ -1,0 +1,21 @@
+[book]
+title = "pg_mentat"
+description = "Datomic-compatible Datalog query engine for PostgreSQL"
+authors = ["Gregory Burd"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/gburd/pg_mentat"
+git-repository-icon = "fa-github"
+site-url = "/pg_mentat/"
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1

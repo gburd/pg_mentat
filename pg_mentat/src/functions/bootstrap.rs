@@ -7,7 +7,7 @@ use pgrx::prelude::*;
 #[pg_extern]
 pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Spi::run(
-        r#"
+        r"
         INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed) VALUES
             -- Core schema attributes
             (1, ':db/ident', 'keyword', 'one', 'identity', true),
@@ -138,7 +138,7 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
             (8,  3, 0, 30, 1000000, true),
             (9,  3, 0, 30, 1000000, true),
             (10, 3, 0, 30, 1000000, true);
-        "#,
+        ",
     )?;
     Ok(())
 }

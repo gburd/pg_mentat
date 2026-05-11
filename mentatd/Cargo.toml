@@ -1,11 +1,12 @@
 [package]
 name = "mentatd"
-version = "0.1.0"
+version = "1.2.1"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Gregory Burd <greg@burd.me>"]
 license = "Apache-2.0"
-description = "Datomic-compatible HTTP server for Mentat"
+repository = "https://github.com/gburd/pg_mentat"
+description = "Datomic-compatible HTTP server for pg_mentat"
 
 [lib]
 name = "mentatd"

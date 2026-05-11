@@ -1,13 +1,13 @@
 [package]
 edition = "2021"
 name = "edn"
-version = "0.1.0"
-authors = ["Joe Walker <jwalker@mozilla.com>"]
+version = "1.2.1"
+authors = ["Joe Walker <jwalker@mozilla.com>", "Gregory Burd <greg@burd.me>"]
 workspace = ".."
 
 license = "Apache-2.0"
-repository = "https://github.com/mozilla/mentat"
-description = "EDN parser for Project Mentat"
+repository = "https://github.com/gburd/pg_mentat"
+description = "EDN parser for pg_mentat"
 readme = "./README.md"
 
 [dependencies]

@@ -134,7 +134,7 @@ fn entities_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     let union = all_datoms_union_sql(&sid, "");
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.entities AS
+        r"CREATE OR REPLACE VIEW {schema}.entities AS
 SELECT
     d.e AS entity_id,
     MIN(d.tx) AS first_tx,
@@ -147,7 +147,7 @@ FROM (
 ) d
 JOIN {schema}.transactions t ON t.tx = d.tx
 GROUP BY d.e
-ORDER BY d.e"#,
+ORDER BY d.e",
         schema = schema,
         union = union,
     )
@@ -162,7 +162,7 @@ ORDER BY d.e"#,
 ///          fulltext, component, no_history
 fn attributes_view_sql(schema: &str) -> String {
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.attributes AS
+        r"CREATE OR REPLACE VIEW {schema}.attributes AS
 SELECT
     s.entid,
     s.ident,
@@ -174,7 +174,7 @@ SELECT
     s.component,
     s.no_history
 FROM {schema}.schema s
-ORDER BY s.entid"#,
+ORDER BY s.entid",
         schema = schema
     )
 }
@@ -259,7 +259,7 @@ fn facts_view_sql(schema: &str) -> String {
         .join("\nUNION ALL\n");
 
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.facts AS
+        r"CREATE OR REPLACE VIEW {schema}.facts AS
 SELECT
     d.e AS entity_id,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -272,7 +272,7 @@ FROM (
 ) d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 LEFT JOIN {schema}.transactions t ON t.tx = d.tx
-ORDER BY d.e, d.a"#,
+ORDER BY d.e, d.a",
         schema = schema,
         union = union,
     )
@@ -305,7 +305,7 @@ fn type_specific_views_sql(schema: &str) -> String {
             sql.push_str(";\n");
         }
         sql.push_str(&format!(
-            r#"CREATE OR REPLACE VIEW {schema}.{view_name} AS
+            r"CREATE OR REPLACE VIEW {schema}.{view_name} AS
 SELECT
     d.e AS entity_id,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -314,7 +314,7 @@ SELECT
 FROM {table} d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 WHERE d.store_id = {sid} AND d.added = true
-ORDER BY d.e, d.a"#,
+ORDER BY d.e, d.a",
             schema = schema,
             view_name = view_name,
             value_expr = value_expr,
@@ -334,7 +334,7 @@ ORDER BY d.e, d.a"#,
 fn searchable_text_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.searchable_text AS
+        r"CREATE OR REPLACE VIEW {schema}.searchable_text AS
 SELECT
     d.e AS entity_id,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -344,7 +344,7 @@ SELECT
 FROM mentat.datoms_text_new d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 WHERE d.store_id = {sid} AND d.added = true AND d.v IS NOT NULL
-ORDER BY d.e, d.a"#,
+ORDER BY d.e, d.a",
         schema = schema,
         sid = sid,
     )
@@ -383,7 +383,7 @@ fn entities_with_attribute_fn_sql(schema: &str) -> String {
         .join("\n        UNION ALL\n        ");
 
     format!(
-        r#"CREATE OR REPLACE FUNCTION {schema}.entities_with_attribute(attr_ident TEXT)
+        r"CREATE OR REPLACE FUNCTION {schema}.entities_with_attribute(attr_ident TEXT)
 RETURNS TABLE(entity_id BIGINT, tx BIGINT)
 AS $$
 DECLARE
@@ -400,7 +400,7 @@ BEGIN
     ) sub
     ORDER BY sub.e;
 END;
-$$ LANGUAGE plpgsql STABLE"#,
+$$ LANGUAGE plpgsql STABLE",
         schema = schema,
         union = union,
     )
@@ -419,7 +419,7 @@ $$ LANGUAGE plpgsql STABLE"#,
 fn entity_references_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.entity_references AS
+        r"CREATE OR REPLACE VIEW {schema}.entity_references AS
 SELECT
     d.e AS source_entity,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -430,7 +430,7 @@ FROM mentat.datoms_ref_new d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 LEFT JOIN {schema}.idents i ON i.entid = d.v
 WHERE d.store_id = {sid} AND d.added = true
-ORDER BY d.e, d.a"#,
+ORDER BY d.e, d.a",
         schema = schema,
         sid = sid,
     )
@@ -445,7 +445,7 @@ ORDER BY d.e, d.a"#,
 fn reverse_references_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.reverse_references AS
+        r"CREATE OR REPLACE VIEW {schema}.reverse_references AS
 SELECT
     d.v AS target_entity,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -454,7 +454,7 @@ SELECT
 FROM mentat.datoms_ref_new d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 WHERE d.store_id = {sid} AND d.added = true
-ORDER BY d.v, d.a"#,
+ORDER BY d.v, d.a",
         schema = schema,
         sid = sid,
     )
@@ -469,7 +469,7 @@ ORDER BY d.v, d.a"#,
 fn graph_edges_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.graph_edges AS
+        r"CREATE OR REPLACE VIEW {schema}.graph_edges AS
 SELECT
     d.e AS source,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS edge_type,
@@ -477,7 +477,7 @@ SELECT
     d.tx
 FROM mentat.datoms_ref_new d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
-WHERE d.store_id = {sid} AND d.added = true"#,
+WHERE d.store_id = {sid} AND d.added = true",
         schema = schema,
         sid = sid,
     )
@@ -497,7 +497,7 @@ fn tx_log_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     let union = all_datoms_union_sql(&sid, "");
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.tx_log AS
+        r"CREATE OR REPLACE VIEW {schema}.tx_log AS
 SELECT
     t.tx,
     t.tx_instant AS tx_time,
@@ -510,7 +510,7 @@ LEFT JOIN (
     ) sub
     GROUP BY tx
 ) d ON d.tx = t.tx
-ORDER BY t.tx DESC"#,
+ORDER BY t.tx DESC",
         schema = schema,
         union = union,
     )
@@ -559,7 +559,7 @@ fn entity_history_view_sql(schema: &str) -> String {
         .join("\nUNION ALL\n");
 
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.entity_history AS
+        r"CREATE OR REPLACE VIEW {schema}.entity_history AS
 SELECT
     d.e AS entity_id,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -573,7 +573,7 @@ FROM (
 ) d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 LEFT JOIN {schema}.transactions t ON t.tx = d.tx
-ORDER BY d.tx DESC, d.e, d.a"#,
+ORDER BY d.tx DESC, d.e, d.a",
         schema = schema,
         union = union,
     )
@@ -623,7 +623,7 @@ fn recent_changes_view_sql(schema: &str) -> String {
         .join("\nUNION ALL\n");
 
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.recent_changes AS
+        r"CREATE OR REPLACE VIEW {schema}.recent_changes AS
 SELECT
     d.e AS entity_id,
     COALESCE(s.ident, 'entid:' || d.a::TEXT) AS attribute,
@@ -636,7 +636,7 @@ FROM (
 ) d
 LEFT JOIN {schema}.schema s ON s.entid = d.a
 LEFT JOIN {schema}.transactions t ON t.tx = d.tx
-ORDER BY d.tx DESC, d.e, d.a"#,
+ORDER BY d.tx DESC, d.e, d.a",
         schema = schema,
         union = union,
     )
@@ -658,7 +658,7 @@ fn schema_summary_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     let union = all_datoms_union_sql(&sid, "");
     format!(
-        r#"CREATE OR REPLACE VIEW {schema}.schema_summary AS
+        r"CREATE OR REPLACE VIEW {schema}.schema_summary AS
 SELECT
     s.ident,
     s.value_type::TEXT AS value_type,
@@ -677,7 +677,7 @@ LEFT JOIN (
     GROUP BY a
 ) u ON u.a = s.entid
 WHERE s.entid >= 100
-ORDER BY s.ident"#,
+ORDER BY s.ident",
         schema = schema,
         union = union,
     )
@@ -700,7 +700,7 @@ fn lookup_entity_fn_sql(schema: &str) -> String {
     // Each type-specific table requires matching the text value against
     // the native column with appropriate casting.
     format!(
-        r#"CREATE OR REPLACE FUNCTION {schema}.lookup_entity(attr_ident TEXT, search_value TEXT)
+        r"CREATE OR REPLACE FUNCTION {schema}.lookup_entity(attr_ident TEXT, search_value TEXT)
 RETURNS TABLE(entity_id BIGINT, tx BIGINT)
 AS $$
 DECLARE
@@ -751,7 +751,7 @@ BEGIN
             (SELECT NULL::BIGINT, NULL::BIGINT WHERE false)
     END;
 END;
-$$ LANGUAGE plpgsql STABLE"#,
+$$ LANGUAGE plpgsql STABLE",
         schema = schema,
         sid = sid,
     )
@@ -766,7 +766,7 @@ $$ LANGUAGE plpgsql STABLE"#,
 fn entity_value_fn_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE FUNCTION {schema}.entity_value(eid BIGINT, attr_ident TEXT)
+        r"CREATE OR REPLACE FUNCTION {schema}.entity_value(eid BIGINT, attr_ident TEXT)
 RETURNS TEXT
 AS $$
 DECLARE
@@ -826,7 +826,7 @@ BEGIN
 
     RETURN result;
 END;
-$$ LANGUAGE plpgsql STABLE"#,
+$$ LANGUAGE plpgsql STABLE",
         schema = schema,
         sid = sid,
     )
@@ -843,7 +843,7 @@ fn count_by_attribute_fn_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     let union = all_datoms_union_sql(&sid, "");
     format!(
-        r#"CREATE OR REPLACE FUNCTION {schema}.count_by_attribute()
+        r"CREATE OR REPLACE FUNCTION {schema}.count_by_attribute()
 RETURNS TABLE(attribute TEXT, entity_count BIGINT, datom_count BIGINT)
 AS $$
 BEGIN
@@ -859,7 +859,7 @@ BEGIN
     GROUP BY d.a, s.ident
     ORDER BY datom_count DESC;
 END;
-$$ LANGUAGE plpgsql STABLE"#,
+$$ LANGUAGE plpgsql STABLE",
         schema = schema,
         union = union,
     )
@@ -875,7 +875,7 @@ $$ LANGUAGE plpgsql STABLE"#,
 fn find_text_fn_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
     format!(
-        r#"CREATE OR REPLACE FUNCTION {schema}.find_text(search_query TEXT)
+        r"CREATE OR REPLACE FUNCTION {schema}.find_text(search_query TEXT)
 RETURNS TABLE(entity_id BIGINT, attribute TEXT, value TEXT, rank REAL)
 AS $$
 BEGIN
@@ -892,7 +892,7 @@ BEGIN
       AND to_tsvector('english', d.v) @@ plainto_tsquery('english', search_query)
     ORDER BY ts_rank_cd(to_tsvector('english', d.v), plainto_tsquery('english', search_query)) DESC;
 END;
-$$ LANGUAGE plpgsql STABLE"#,
+$$ LANGUAGE plpgsql STABLE",
         schema = schema,
         sid = sid,
     )
@@ -908,13 +908,13 @@ $$ LANGUAGE plpgsql STABLE"#,
 /// for fast LIKE/ILIKE and similarity searches.
 fn trigram_indexes_sql(_schema: &str, store_name: &str) -> String {
     format!(
-        r#"CREATE INDEX IF NOT EXISTS idx_{name}_trgm_text
+        r"CREATE INDEX IF NOT EXISTS idx_{name}_trgm_text
 ON mentat.datoms_text_new USING GIN (v gin_trgm_ops)
 WHERE added = true;
 
 CREATE INDEX IF NOT EXISTS idx_{name}_trgm_keyword
 ON mentat.datoms_keyword_new USING GIN (v gin_trgm_ops)
-WHERE added = true"#,
+WHERE added = true",
         name = store_name
     )
 }
@@ -925,9 +925,9 @@ WHERE added = true"#,
 /// Creates a GIN index on a generated tsvector column for full-text search.
 fn fulltext_index_sql(_schema: &str, store_name: &str) -> String {
     format!(
-        r#"CREATE INDEX IF NOT EXISTS idx_{name}_fts_text
+        r"CREATE INDEX IF NOT EXISTS idx_{name}_fts_text
 ON mentat.datoms_text_new USING GIN (to_tsvector('english', COALESCE(v, '')))
-WHERE added = true"#,
+WHERE added = true",
         name = store_name
     )
 }
