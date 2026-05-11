@@ -360,6 +360,38 @@ fn value_type_to_table_info(value_type: &str) -> Option<TypedTableInfo> {
     }
 }
 
+/// Map a value_type string to its narrow table name (without schema prefix).
+fn typed_table_for_value_type(value_type: &str) -> &'static str {
+    match value_type {
+        "ref" => "datoms_ref_new",
+        "boolean" => "datoms_boolean_new",
+        "long" => "datoms_long_new",
+        "double" => "datoms_double_new",
+        "instant" => "datoms_instant_new",
+        "string" => "datoms_text_new",
+        "keyword" => "datoms_keyword_new",
+        "uuid" => "datoms_uuid_new",
+        "bytes" => "datoms_bytes_new",
+        _ => "datoms_text_new", // fallback
+    }
+}
+
+/// Map a value_type string to its native value column name in the narrow table.
+fn typed_value_col_for_type(value_type: &str) -> &'static str {
+    match value_type {
+        "ref" => "v",
+        "boolean" => "v",
+        "long" => "v",
+        "double" => "v",
+        "instant" => "v",
+        "string" => "v",
+        "keyword" => "v",
+        "uuid" => "v",
+        "bytes" => "v",
+        _ => "v",
+    }
+}
+
 /// Extract a store name from a schema_prefix for use with the schema cache.
 ///
 /// `"mentat."` -> `"default"`, `"\"mentat_foo\"."` -> `"foo"`.
@@ -415,10 +447,22 @@ fn resolve_pattern_value_type(
 /// This produces identical output columns to `build_datoms_union_subquery` so
 /// the rest of the query generation (WHERE, SELECT, etc.) is unchanged, but
 /// reads from exactly one table instead of nine.
-fn build_typed_datoms_from_fragment(
+/// Optional conditions to push down into the FROM subquery so that
+/// PostgreSQL's partial indexes (e.g. `WHERE added`) can be used directly.
+struct PushdownConditions {
+    /// When true, adds `AND added` to the subquery WHERE clause.
+    /// This enables partial index usage (all covering indexes have `WHERE added`).
+    added_true: bool,
+    /// When set, adds `AND a = <entid>` to the subquery WHERE clause.
+    /// This enables direct AEVT index scan `(store_id, a, e, tx)`.
+    attribute_entid: Option<String>,
+}
+
+fn build_typed_datoms_from_fragment_with_pushdown(
     alias: &str,
     store_id_param: &str,
     info: &TypedTableInfo,
+    pushdown: Option<&PushdownConditions>,
 ) -> String {
     // Build the SELECT list with the native column in its correct position
     // and NULLs for all other typed columns.
@@ -432,16 +476,28 @@ fn build_typed_datoms_from_fragment(
     let v_uuid = if info.value_column == "v_uuid" { "v" } else { "NULL::UUID" };
     let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
 
+    // Build pushdown WHERE conditions for direct index usage
+    let mut extra_where = String::new();
+    if let Some(pd) = pushdown {
+        if pd.added_true {
+            extra_where.push_str(" AND added");
+        }
+        if let Some(ref attr_entid) = pd.attribute_entid {
+            extra_where.push_str(&format!(" AND a = {}", attr_entid));
+        }
+    }
+
     format!(
         "(SELECT e, a, {tag}::SMALLINT AS value_type_tag, \
                 {v_ref} AS v_ref, {v_bool} AS v_bool, {v_long} AS v_long, \
                 {v_double} AS v_double, {v_text} AS v_text, \
                 {v_keyword} AS v_keyword, {v_instant} AS v_instant, \
                 {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, added \
-         FROM {table} WHERE store_id = {sid}) AS {alias}",
+         FROM {table} WHERE store_id = {sid}{extra}) AS {alias}",
         tag = info.type_tag,
         table = info.table,
         sid = store_id_param,
+        extra = extra_where,
     )
 }
 
@@ -1905,16 +1961,114 @@ fn build_sql_from_datalog_enriched(
         }
     }
 
-    // Handle where-functions: fulltext, arithmetic, and ground.
+    // Handle where-functions: fulltext, arithmetic, ground, get-else, missing?.
     let mut fts_joins: Vec<FtsJoin> = Vec::new();
     let mut extra_var_bindings: HashMap<String, String> = HashMap::new();
     let mut ground_bindings: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut get_else_clauses: Vec<GetElseClause> = Vec::new();
+    let mut missing_clauses: Vec<MissingClause> = Vec::new();
 
     for (fts_idx, wf) in where_fns.iter().enumerate() {
         let op_name = wf.operator.0.as_str();
         if op_name == "fulltext" {
             let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix, &store_id_param)?;
             fts_joins.push(fj);
+        } else if op_name == "get-else" {
+            // [(get-else $ ?e :attr default-val) ?result]
+            // args: [$, entity-var, attribute-keyword, default-value]
+            if wf.args.len() != 4 {
+                return Err(format!(
+                    ":db.error/fn-arity get-else requires exactly 4 arguments \
+                     ($ entity-var attr-keyword default-value), got {}. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]",
+                    wf.args.len()
+                ).into());
+            }
+            let result_var = match &wf.binding {
+                Binding::BindScalar(v) => format!("{}", v),
+                _ => return Err(
+                    ":db.error/fn-binding get-else requires a scalar binding. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
+                ),
+            };
+            // args[0] = $ (database, ignored)
+            // args[1] = entity variable
+            let entity_var = match &wf.args[1] {
+                FnArg::Variable(v) => format!("{}", v),
+                _ => return Err(
+                    ":db.error/fn-arg get-else second argument must be an entity variable. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
+                ),
+            };
+            // args[2] = attribute keyword
+            let attr_ident = match &wf.args[2] {
+                FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+                _ => return Err(
+                    ":db.error/fn-arg get-else third argument must be an attribute keyword. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
+                ),
+            };
+            // args[3] = default value
+            let default_sql = match &wf.args[3] {
+                FnArg::EntidOrInteger(i) => format!("{}::TEXT", i),
+                FnArg::Constant(NonIntegerConstant::Text(s)) => {
+                    let p = builder.bind_text(s.as_ref().to_string());
+                    format!("{}::TEXT", p)
+                }
+                FnArg::Constant(NonIntegerConstant::Float(f)) => format!("{}::TEXT", f.into_inner()),
+                FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
+                    format!("'{}'::TEXT", if *b { "true" } else { "false" })
+                }
+                FnArg::IdentOrKeyword(kw) => {
+                    let kw_str = format!(":{}", keyword_to_ident(kw));
+                    let p = builder.bind_text(kw_str);
+                    format!("{}::TEXT", p)
+                }
+                _ => return Err(
+                    ":db.error/fn-arg get-else default value must be a constant \
+                     (integer, string, float, boolean, or keyword).".into(),
+                ),
+            };
+            get_else_clauses.push(GetElseClause {
+                entity_var,
+                attr_ident,
+                default_sql,
+                result_var: result_var.clone(),
+            });
+            // Register the result_var as an extra binding (placeholder; resolved later)
+            extra_var_bindings.insert(result_var, "NULL::TEXT".to_string());
+        } else if op_name == "missing?" {
+            // [(missing? $ ?e :attr)]
+            // args: [$, entity-var, attribute-keyword]
+            if wf.args.len() != 3 {
+                return Err(format!(
+                    ":db.error/fn-arity missing? requires exactly 3 arguments \
+                     ($ entity-var attr-keyword), got {}. \
+                     Example: [(missing? $ ?e :person/email)]",
+                    wf.args.len()
+                ).into());
+            }
+            // args[0] = $ (database, ignored)
+            // args[1] = entity variable
+            let entity_var = match &wf.args[1] {
+                FnArg::Variable(v) => format!("{}", v),
+                _ => return Err(
+                    ":db.error/fn-arg missing? second argument must be an entity variable. \
+                     Example: [(missing? $ ?e :person/email)]".into(),
+                ),
+            };
+            // args[2] = attribute keyword
+            let attr_ident = match &wf.args[2] {
+                FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+                _ => return Err(
+                    ":db.error/fn-arg missing? third argument must be an attribute keyword. \
+                     Example: [(missing? $ ?e :person/email)]".into(),
+                ),
+            };
+            missing_clauses.push(MissingClause {
+                entity_var,
+                attr_ident,
+            });
         } else if op_name == "ground" {
             // ground injects a constant value as if it were an :in binding,
             // so the pattern compiler constrains the variable at build time.
@@ -1982,7 +2136,7 @@ fn build_sql_from_datalog_enriched(
             } else {
                 return Err(format!(
                     ":db.error/unsupported-where-fn Where-function '{}' is not supported. \
-                     Supported functions: fulltext, ground, *, +, -, /",
+                     Supported functions: fulltext, ground, get-else, missing?, *, +, -, /",
                     op_name
                 )
                 .into());
@@ -2034,6 +2188,8 @@ fn build_sql_from_datalog_enriched(
             &enriched_bindings,
             schema_prefix,
             &store_id_param,
+            &get_else_clauses,
+            &missing_clauses,
         )?
     };
 
@@ -2174,6 +2330,8 @@ fn build_sql_from_datalog_enriched(
                 &enriched_bindings,
                 schema_prefix,
                 &arm_store_id_param,
+                &get_else_clauses,
+                &missing_clauses,
             )?;
 
             // Remap $N parameter placeholders so they don't collide
@@ -2361,6 +2519,28 @@ struct FtsJoin {
     /// SQL expression for the relevance score column, if the score variable is bound.
     /// Used to add `ORDER BY score DESC` for relevance-ranked results.
     score_expr: Option<String>,
+}
+
+/// A `get-else` where-function clause: `[(get-else $ ?e :attr default) ?val]`
+/// Resolved to a LEFT JOIN on the typed table with COALESCE for the default.
+struct GetElseClause {
+    /// Variable bound to the entity (e.g., "?e")
+    entity_var: String,
+    /// Attribute keyword (e.g., "person/name")
+    attr_ident: String,
+    /// Default value as SQL literal
+    default_sql: String,
+    /// Result variable name (e.g., "?val")
+    result_var: String,
+}
+
+/// A `missing?` where-function clause: `[(missing? $ ?e :attr)]`
+/// Resolved to a NOT EXISTS subquery.
+struct MissingClause {
+    /// Variable bound to the entity (e.g., "?e")
+    entity_var: String,
+    /// Attribute keyword (e.g., "person/name")
+    attr_ident: String,
 }
 
 /// Resolve the PostgreSQL text search configuration (regconfig) for a fulltext attribute.
@@ -2947,6 +3127,8 @@ fn build_extended_pattern_query(
     enriched_bindings: &[InputBinding],
     schema_prefix: &str,
     store_id_param: &str,
+    get_else_clauses: &[GetElseClause],
+    missing_clauses: &[MissingClause],
 ) -> Result<
     (String, HashMap<String, (String, &'static str)>),
     Box<dyn std::error::Error + Send + Sync>,
@@ -2958,6 +3140,8 @@ fn build_extended_pattern_query(
     let mut var_to_type: HashMap<String, Option<String>> = HashMap::new();
     let mut joins = Vec::new();
     let mut where_clauses = Vec::new();
+    // Mutable copy of extra_var_bindings so get-else can update result expressions
+    let mut extra_var_bindings = extra_var_bindings.clone();
 
     // Pre-populate var_to_alias with rule CTE bindings
     if let Some(ref cte_info) = rule_cte_info {
@@ -3176,9 +3360,30 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
         }
 
+        // Build pushdown conditions for direct index usage in the FROM subquery.
+        // Pushing `added` and constant attribute entid into the subquery lets PG
+        // use partial indexes like (store_id, a, e, tx) WHERE added directly.
+        let pushdown = {
+            let added_true = !temporal.history;
+            let attribute_entid = match &pattern.attribute {
+                PatternNonValuePlace::Entid(id) => Some(format!("{}", id)),
+                PatternNonValuePlace::Ident(kw) => {
+                    let ident_str = keyword_to_ident(kw);
+                    let store_name = store_name_from_prefix(schema_prefix);
+                    let cache = crate::cache::get_cache_for_store(store_name);
+                    cache.resolve_ident(&format!(":{}", ident_str))
+                        .map(|eid| format!("{}", eid))
+                }
+                _ => None,
+            };
+            PushdownConditions { added_true, attribute_entid }
+        };
+
         // Use the typed single-table FROM fragment or fall back to UNION ALL
         if let Some(info) = &typed_info {
-            joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+            joins.push(build_typed_datoms_from_fragment_with_pushdown(
+                &alias, store_id_param, info, Some(&pushdown),
+            ));
             crate::monitoring::record_schema_aware_hit();
         } else {
             joins.push(build_datoms_from_fragment(&alias, store_id_param));
@@ -3190,6 +3395,76 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
     for fj in fts_joins {
         joins.push(fj.from_fragment.clone());
         where_clauses.extend(fj.where_parts.iter().cloned());
+    }
+
+    // Add get-else LEFT JOINs (accumulated separately for proper SQL syntax)
+    let mut left_joins: Vec<String> = Vec::new();
+    for (ge_idx, ge) in get_else_clauses.iter().enumerate() {
+        let ge_alias = format!("ge_{}", ge_idx);
+        // Resolve the attribute to determine the typed table
+        let cache = crate::cache::get_cache();
+        let attr_entid = cache.resolve_ident(&format!(":{}", ge.attr_ident));
+        let attr_info = attr_entid.and_then(|eid| cache.get_attribute(eid));
+
+        if let (Some(entid), Some(info)) = (attr_entid, attr_info) {
+            let table = typed_table_for_value_type(&info.value_type);
+            let value_col = typed_value_col_for_type(&info.value_type);
+
+            // Determine the entity alias from var_to_alias
+            let entity_expr = if let Some((alias, col)) = var_to_alias.get(ge.entity_var.as_str()) {
+                format!("{}.{}", alias, col)
+            } else {
+                // Entity variable not bound yet — skip (will produce NULL)
+                continue;
+            };
+
+            // LEFT JOIN typed_table AS ge_N ON (...)
+            let join_sql = format!(
+                "LEFT JOIN mentat.{table} AS {ge_alias} ON ({ge_alias}.store_id = {sid} AND {ge_alias}.e = {entity} AND {ge_alias}.a = {attr} AND {ge_alias}.added)",
+                table = table,
+                ge_alias = ge_alias,
+                sid = store_id_param,
+                entity = entity_expr,
+                attr = entid,
+            );
+            left_joins.push(join_sql);
+
+            // Register the result variable as COALESCE(ge_N.v, default)::TEXT
+            let coalesce_expr = format!(
+                "COALESCE({ge_alias}.{value_col}::TEXT, {default})",
+                ge_alias = ge_alias,
+                value_col = value_col,
+                default = ge.default_sql,
+            );
+            // Override the placeholder in extra_var_bindings
+            extra_var_bindings.insert(ge.result_var.clone(), coalesce_expr);
+        }
+    }
+
+    // Add missing? NOT EXISTS conditions
+    for mc in missing_clauses {
+        let cache = crate::cache::get_cache();
+        let attr_entid = cache.resolve_ident(&format!(":{}", mc.attr_ident));
+        let attr_info = attr_entid.and_then(|eid| cache.get_attribute(eid));
+
+        if let (Some(entid), Some(info)) = (attr_entid, attr_info) {
+            let table = typed_table_for_value_type(&info.value_type);
+
+            let entity_expr = if let Some((alias, col)) = var_to_alias.get(mc.entity_var.as_str()) {
+                format!("{}.{}", alias, col)
+            } else {
+                continue;
+            };
+
+            let not_exists = format!(
+                "NOT EXISTS (SELECT 1 FROM mentat.{table} WHERE store_id = {sid} AND e = {entity} AND a = {attr} AND added)",
+                table = table,
+                sid = store_id_param,
+                entity = entity_expr,
+                attr = entid,
+            );
+            where_clauses.push(not_exists);
+        }
     }
 
     // Apply :in clause input bindings as WHERE constraints (scalar from HashMap)
@@ -3288,6 +3563,40 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle predicate clauses
     for pred in predicates {
+        let op = pred.operator.0.as_str();
+        if op == "missing?" {
+            // [(missing? $ ?e :attr)] — predicate form (no binding)
+            // args[0] = $ (database), args[1] = entity var, args[2] = attr keyword
+            if pred.args.len() >= 3 {
+                let entity_var = match &pred.args[1] {
+                    FnArg::Variable(v) => format!("{}", v),
+                    _ => continue,
+                };
+                let attr_ident = match &pred.args[2] {
+                    FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+                    _ => continue,
+                };
+                let cache = crate::cache::get_cache();
+                let attr_entid = cache.resolve_ident(&format!(":{}", attr_ident));
+                let attr_info = attr_entid.and_then(|eid| cache.get_attribute(eid));
+
+                if let (Some(entid), Some(info)) = (attr_entid, attr_info) {
+                    let table = typed_table_for_value_type(&info.value_type);
+                    if let Some((alias, col)) = var_to_alias.get(entity_var.as_str()) {
+                        let entity_expr = format!("{}.{}", alias, col);
+                        let not_exists = format!(
+                            "NOT EXISTS (SELECT 1 FROM mentat.{table} WHERE store_id = {sid} AND e = {entity} AND a = {attr} AND added)",
+                            table = table,
+                            sid = store_id_param,
+                            entity = entity_expr,
+                            attr = entid,
+                        );
+                        where_clauses.push(not_exists);
+                    }
+                }
+            }
+            continue;
+        }
         let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, builder)?;
         where_clauses.push(pred_sql);
     }
@@ -3307,12 +3616,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         if is_aggregate {
             // Build aggregate expression
             if let Some(Element::Aggregate(agg)) = elem {
-                let agg_sql = build_aggregate_select(agg, &var_to_alias, extra_var_bindings)?;
+                let agg_sql = build_aggregate_select(agg, &var_to_alias, &extra_var_bindings)?;
                 select_exprs.push(agg_sql);
             }
         } else if let Some(expr) = extra_var_bindings.get(var_display) {
             // Computed variable (from FTS or arithmetic binding)
-            let resolved = resolve_var_refs(expr, &var_to_alias, extra_var_bindings);
+            let resolved = resolve_var_refs(expr, &var_to_alias, &extra_var_bindings);
             select_exprs.push(format!("({})::TEXT", resolved));
             if has_aggregates {
                 group_by_exprs.push(format!("{}", col_idx + 1));
@@ -3365,6 +3674,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         select = select_exprs.join(", "),
         from = joins.join(", "),
     );
+
+    // Append LEFT JOINs (from get-else clauses)
+    for lj in &left_joins {
+        sql.push(' ');
+        sql.push_str(lj);
+    }
 
     if !where_clauses.is_empty() {
         sql.push_str(&format!(" WHERE {}", where_clauses.join(" AND ")));
@@ -3750,9 +4065,28 @@ fn build_not_exists_subquery(
                     sub_where.push(format!("{alias}.tx > {param}"));
                 }
 
+                // Build pushdown conditions for NOT-clause subquery
+                let not_pushdown = {
+                    let added_true = !temporal.history;
+                    let attribute_entid = match &p.attribute {
+                        PatternNonValuePlace::Entid(id) => Some(format!("{}", id)),
+                        PatternNonValuePlace::Ident(kw) => {
+                            let ident_str = keyword_to_ident(kw);
+                            let store_name = store_name_from_prefix(schema_prefix);
+                            let cache = crate::cache::get_cache_for_store(store_name);
+                            cache.resolve_ident(&format!(":{}", ident_str))
+                                .map(|eid| format!("{}", eid))
+                        }
+                        _ => None,
+                    };
+                    PushdownConditions { added_true, attribute_entid }
+                };
+
                 // Use typed single-table FROM or fall back to UNION ALL
                 if let Some(info) = &typed_info {
-                    sub_joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+                    sub_joins.push(build_typed_datoms_from_fragment_with_pushdown(
+                        &alias, store_id_param, info, Some(&not_pushdown),
+                    ));
                 } else {
                     sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
                 }
@@ -3821,6 +4155,21 @@ fn build_predicate_clause(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
 
+    // LIKE/ILIKE operators for text pattern matching
+    if op == "like" || op == "ilike" {
+        if pred.args.len() != 2 {
+            return Err(format!(
+                ":db.error/predicate-arity Predicate '{}' requires exactly 2 arguments, got {}. \
+                 Example: [({} ?name \"Alice%\")]",
+                op, pred.args.len(), op
+            ).into());
+        }
+        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
+        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
+        let sql_op = if op == "like" { "LIKE" } else { "ILIKE" };
+        return Ok(format!("({} {} {})", left, sql_op, right));
+    }
+
     let sql_op = match op {
         "<" => "<",
         ">" => ">",
@@ -3830,7 +4179,7 @@ fn build_predicate_clause(
         "!=" => "!=",
         _ => return Err(format!(
             ":db.error/unsupported-predicate Unsupported predicate operator '{}'. \
-             Supported operators: <, >, <=, >=, =, !=. \
+             Supported operators: <, >, <=, >=, =, !=, like, ilike. \
              Example: [(< ?age 30)]",
             op
         ).into()),
@@ -3844,10 +4193,66 @@ fn build_predicate_clause(
         ).into());
     }
 
+    // Type-safety guard for inequality operators (Mozilla #520):
+    // If the variable has a known type that is incompatible with numeric/ordering
+    // comparison against the literal operand, emit FALSE to prevent nonsensical matches.
+    if matches!(op, "<" | ">" | "<=" | ">=") {
+        if let Some(type_mismatch) = check_predicate_type_mismatch(pred, var_to_type) {
+            if type_mismatch {
+                return Ok("FALSE".to_string());
+            }
+        }
+    }
+
     let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
     let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
+}
+
+/// Check if an inequality predicate has a type mismatch between variable and literal.
+/// Returns Some(true) if types are incompatible (e.g., comparing string var against integer).
+/// Returns Some(false) if types are compatible. Returns None if we can't determine.
+fn check_predicate_type_mismatch(
+    pred: &Predicate,
+    var_to_type: &HashMap<String, Option<String>>,
+) -> Option<bool> {
+    // Identify the variable arg and the literal arg
+    let (var_type, literal_is_numeric, literal_is_string) = {
+        let mut vtype: Option<&str> = None;
+        let mut lit_numeric = false;
+        let mut lit_string = false;
+
+        for arg in &pred.args {
+            match arg {
+                FnArg::Variable(v) => {
+                    let var_name = format!("{}", v);
+                    if let Some(Some(t)) = var_to_type.get(var_name.as_str()) {
+                        vtype = Some(t.as_str());
+                    }
+                }
+                FnArg::EntidOrInteger(_) | FnArg::Constant(NonIntegerConstant::Float(_)) => {
+                    lit_numeric = true;
+                }
+                FnArg::Constant(NonIntegerConstant::Text(_)) => {
+                    lit_string = true;
+                }
+                _ => {}
+            }
+        }
+        (vtype, lit_numeric, lit_string)
+    };
+
+    let vt = var_type?;
+    // String/keyword variables compared against numeric literals → mismatch
+    if matches!(vt, "string" | "keyword") && literal_is_numeric {
+        return Some(true);
+    }
+    // Numeric variables compared against string literals → mismatch
+    if matches!(vt, "long" | "double" | "ref") && literal_is_string {
+        return Some(true);
+    }
+    Some(false)
 }
 
 /// Convert a predicate argument to a SQL expression.
@@ -4412,9 +4817,28 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     where_parts.push(format!("{alias}.tx > {param}"));
                 }
 
+                // Build pushdown conditions for rule-body subquery
+                let rule_pushdown = {
+                    let added_true = !temporal.history;
+                    let attribute_entid = match &p.attribute {
+                        PatternNonValuePlace::Entid(id) => Some(format!("{}", id)),
+                        PatternNonValuePlace::Ident(kw) => {
+                            let ident_str = keyword_to_ident(kw);
+                            let store_name = store_name_from_prefix(schema_prefix);
+                            let cache = crate::cache::get_cache_for_store(store_name);
+                            cache.resolve_ident(&format!(":{}", ident_str))
+                                .map(|eid| format!("{}", eid))
+                        }
+                        _ => None,
+                    };
+                    PushdownConditions { added_true, attribute_entid }
+                };
+
                 // Use typed single-table FROM or fall back to UNION ALL
                 if let Some(info) = &typed_info {
-                    pattern_joins.push(build_typed_datoms_from_fragment(&alias, store_id_param, info));
+                    pattern_joins.push(build_typed_datoms_from_fragment_with_pushdown(
+                        &alias, store_id_param, info, Some(&rule_pushdown),
+                    ));
                 } else {
                     pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
                 }

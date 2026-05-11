@@ -2,6 +2,7 @@ pub mod bootstrap;
 pub mod edn_functions;
 pub mod edn_helpers;
 pub mod entity;
+pub mod excision;
 pub mod helpers;
 pub mod materialized_views;
 pub mod pull;

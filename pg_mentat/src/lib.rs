@@ -432,6 +432,23 @@ extension_sql!(
     requires = ["bootstrap_schema"],
 );
 
+// Excision log: tracks permanent data deletions for audit/compliance purposes
+extension_sql!(
+    r#"
+    CREATE TABLE IF NOT EXISTS mentat.excision_log (
+        id BIGSERIAL PRIMARY KEY,
+        store_name TEXT NOT NULL DEFAULT 'default',
+        excised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        entity_ids BIGINT[] NOT NULL,
+        datoms_removed BIGINT NOT NULL DEFAULT 0,
+        tx_log_entries_removed BIGINT NOT NULL DEFAULT 0,
+        reason TEXT
+    );
+"#,
+    name = "excision_log",
+    requires = ["bootstrap_schema"],
+);
+
 // VIEW helper functions: create SQL VIEWs backed by Datalog queries
 extension_sql!(
     r#"

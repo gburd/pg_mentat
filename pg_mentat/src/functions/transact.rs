@@ -423,12 +423,33 @@ fn execute_retract_entity_fn(
     qs: &str,
     pending_datoms: &mut Vec<PendingDatom>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut visited = std::collections::HashSet::new();
+    execute_retract_entity_recursive(e, qs, pending_datoms, &mut visited)
+}
+
+/// Recursive implementation of entity retraction with cycle detection.
+/// Cascades through `:db/isComponent` ref attributes.
+fn execute_retract_entity_recursive(
+    e: i64,
+    qs: &str,
+    pending_datoms: &mut Vec<PendingDatom>,
+    visited: &mut std::collections::HashSet<i64>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Cycle guard: skip if already processing this entity
+    if !visited.insert(e) {
+        return Ok(());
+    }
+
     let retract_query = format!(
         "SELECT a, value_type_tag, v_ref, v_bool, v_long, v_double, \
                 v_text, v_keyword, v_instant, v_uuid, v_bytes \
          FROM {}.datoms WHERE e = $1 AND added = true",
         qs
     );
+
+    // Collect datoms and identify component refs to cascade
+    let mut component_targets: Vec<i64> = Vec::new();
+
     Spi::connect(|client| {
         let rows = client.select(
             &retract_query,
@@ -441,6 +462,17 @@ fn execute_retract_entity_fn(
             let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
             let v = read_typed_value_from_row(&row, v_type_tag, 3)?;
 
+            // Check if this is a ref with :db/isComponent = true
+            if v_type_tag == crate::types::constants::type_tag::REF {
+                if let Some(attr_info) = crate::cache::get_cache().get_attribute(a) {
+                    if attr_info.component {
+                        if let TypedValue::Ref(target) = &v {
+                            component_targets.push(*target);
+                        }
+                    }
+                }
+            }
+
             pending_datoms.push(PendingDatom {
                 e,
                 a,
@@ -451,6 +483,12 @@ fn execute_retract_entity_fn(
 
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
     })?;
+
+    // Recursively retract component entities
+    for target in component_targets {
+        execute_retract_entity_recursive(target, qs, pending_datoms, visited)?;
+    }
+
     Ok(())
 }
 
@@ -596,10 +634,10 @@ fn execute_cas_fn(
 /// (already in place in `execute_transaction_body`) handles actual data
 /// conflicts (same entity being modified concurrently).
 ///
-/// `basis_t` is derived as `tx_id - 1` because the sequence is monotonically
-/// increasing. Under SERIALIZABLE isolation, `tx_id - 1` is the correct
-/// basis_t representing the last committed transaction visible to this
-/// session's snapshot.
+/// `basis_t` is derived from the actual maximum committed transaction ID
+/// preceding ours, queried via an index-only scan on transactions(tx).
+/// This handles gaps in the sequence (e.g., from rolled-back transactions
+/// or sequence cache eviction on backend restart).
 fn allocate_tx_id(qs: &str) -> Result<(i64, i64, i64), Box<dyn std::error::Error + Send + Sync>> {
     // Allocate transaction ID from the sequence (atomic, no lock needed)
     let tx_id = Spi::get_one::<i64>(&format!("SELECT nextval('{}.partition_tx_seq')", qs))
@@ -609,10 +647,17 @@ fn allocate_tx_id(qs: &str) -> Result<(i64, i64, i64), Box<dyn std::error::Error
             partition: "db.part/tx".to_string(),
         })?;
 
-    // basis_t is the transaction immediately preceding ours in the sequence.
-    // Since sequences are monotonically increasing and gap-free within a
-    // session, tx_id - 1 is always the correct basis_t.
-    let basis_t_before = tx_id - 1;
+    // basis_t is the most recent committed transaction before ours.
+    // We query the actual MAX(tx) rather than assuming tx_id - 1, because
+    // sequences can have gaps (rolled-back txns, cache eviction on restart).
+    // This is an index-only scan on the PRIMARY KEY — negligible cost.
+    let basis_t_before = Spi::get_one::<i64>(&format!(
+        "SELECT COALESCE(MAX(tx), 0) FROM {}.transactions WHERE tx < {}",
+        qs, tx_id
+    ))
+    .ok()
+    .flatten()
+    .unwrap_or(tx_id - 1); // Fallback for empty table (bootstrap)
 
     // Create transaction record and get the timestamp as microseconds since epoch.
     // The PRIMARY KEY constraint on tx guarantees uniqueness.
