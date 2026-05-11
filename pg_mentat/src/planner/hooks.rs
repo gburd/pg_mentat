@@ -203,6 +203,11 @@ pub static MAX_RECURSION_DEPTH: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static TEMP_FILE_LIMIT: GucSetting<Option<CString>> =
     GucSetting::<Option<CString>>::new(Some(c"1GB"));
 
+/// Output format for mentat_explain plans.
+/// Valid values: text, json, yaml, xml. Default: text.
+pub static EXPLAIN_FORMAT: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(Some(c"text"));
+
 /// Read the current value of `mentat.enable_optimizer_hints`.
 pub fn optimizer_hints_enabled() -> bool {
     ENABLE_OPTIMIZER_HINTS.get()
@@ -227,6 +232,7 @@ pub fn max_result_rows() -> i32 {
 }
 
 /// Read the current value of `mentat.max_recursion_depth`.
+#[allow(dead_code)] // GUC reader; may be used by future rule invocation paths
 pub fn max_recursion_depth() -> i32 {
     MAX_RECURSION_DEPTH.get()
 }
@@ -237,6 +243,14 @@ pub fn temp_file_limit() -> String {
         .get()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "1GB".to_string())
+}
+
+/// Read the current value of `mentat.explain_format`.
+pub fn explain_format() -> String {
+    EXPLAIN_FORMAT
+        .get()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "text".to_string())
 }
 
 /// Initialize planner hooks and register GUC settings.
@@ -303,6 +317,15 @@ pub unsafe fn init_planner_hooks() {
         c"Temp file limit for query execution.",
         c"Maximum disk space for temporary files during query execution. Default '1GB'. Applied via SET LOCAL temp_file_limit. Prevents disk exhaustion from large sorts or hash joins.",
         &TEMP_FILE_LIMIT,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        c"mentat.explain_format",
+        c"Output format for mentat_explain plans.",
+        c"Valid values: text, json, yaml, xml. Default: text. Controls the FORMAT argument passed to PostgreSQL's EXPLAIN command in mentat_explain output.",
+        &EXPLAIN_FORMAT,
         GucContext::Userset,
         GucFlags::default(),
     );

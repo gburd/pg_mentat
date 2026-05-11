@@ -155,6 +155,7 @@ fn value_type_name(value: &edn::Value) -> &'static str {
 }
 
 /// Retrieve available attribute idents from the cache for use in error messages.
+#[allow(dead_code)] // Used by error reporting paths not yet wired
 fn get_available_attributes_hint() -> String {
     let available = error::get_available_attributes();
     if available.is_empty() {
@@ -2414,6 +2415,7 @@ fn insert_typed_datom(
 }
 
 /// Get the column name for a TypedValue.
+#[allow(dead_code)] // Utility for future direct-insert optimization
 fn typed_value_column(v: &TypedValue) -> &'static str {
     match v {
         TypedValue::Ref(_) => "v_ref",

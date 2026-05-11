@@ -30,10 +30,11 @@ Legend: **Works** — exercised by tests and usable today.
 | Aggregates | Works | `count`, `sum`, `avg`, `min`, `max`. Other aggregates return `:db.error/unsupported-aggregate`. |
 | Predicates (`<`, `>`, `<=`, `>=`, `=`, `!=`) | Works | Supported at top level and in rule bodies. |
 | Arithmetic where-functions (`*`, `+`, `-`, `/`) | Works | Supported at top level and in rule bodies. |
-| `ground`, `get-else`, `tuple` | Not implemented | Roadmap Phase 3. No workaround today; the older feature table listing these as done was wrong. |
-| Attribute predicates (`[(attribute ?a :db/unique)]`) | Not implemented | Roadmap Phase 3. Read the schema via `mentat_schema()` from SQL as a stopgap. |
-| `or` / `or-join` | Partial | One top-level `or-join` per query; patterns and supported predicates work inside branches; `not` and rule invocations inside branches are rejected. |
-| `not` / `not-join` | Partial | Pattern clauses work with a groundedness check; predicates and function calls inside `not` are rejected. |
+| `ground` | Works | Scalar ground bindings: `[(ground val) ?var]`. Implemented in Phase 3. |
+| `get-else`, `tuple`, `missing?` | Not implemented | No workaround today. |
+| Attribute predicates (`[(attribute ?a :db/unique)]`) | Not implemented | Read the schema via `mentat_schema()` from SQL as a stopgap. |
+| `or` / `or-join` | Partial | One top-level `or-join` per query; patterns, predicates, and arithmetic work inside branches; `not` and rule invocations inside branches are rejected. |
+| `not` / `not-join` | Works | Pattern clauses and predicates work with a groundedness check; function calls inside `not` are rejected. |
 | Full-text search | Works | Backed by PostgreSQL `tsvector` / GIN. Score exposed via `fulltext`. |
 | Pull API | Works | Attribute lists, wildcards, recursive nested pulls, reverse lookups, `:limit`, `:default`. |
 | Time travel (`asOf`, `since`, `history`) | Works | Passed via the `inputs` JSONB argument to `mentat_query`. |
@@ -41,7 +42,7 @@ Legend: **Works** — exercised by tests and usable today.
 | Entity / schema introspection | Partial | `mentat_entity()` returns a JSON snapshot; `mentat_schema()` returns the current schema. There is no lazy `d/entity`-style navigator. |
 | Excision (`:db/excise`) | Not implemented | No roadmap item; retractions are preserved as history. |
 | Clojure peer library (`d/connect`, `d/db`, `d/entity`, …) | Not implemented | Roadmap Phase 5. `pg-mentat-client/` has a stub HTTP client for `mentatd`, not a peer. |
-| `mentatd` HTTP daemon | Partial | EDN wire format works; Transit is stubbed; connection pooling and LRU caching are wired. |
+| `mentatd` HTTP daemon | Works | EDN and Transit+JSON wire formats; connection pooling, WebSocket streaming, circuit breaker, Prometheus metrics. |
 | Value types | Works | `string`, `long`, `double`, `boolean`, `instant`, `keyword`, `ref`, `uuid`, `bytes`. `bigint` is rejected with `:db.error/unsupported-constant`. |
 
 ## Quick Start

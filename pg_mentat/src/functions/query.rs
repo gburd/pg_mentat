@@ -139,6 +139,7 @@ impl<'a> SqlBuilder<'a> {
     }
 
     /// Add a BYTEA parameter and return the placeholder string ($N).
+    #[allow(dead_code)] // Reserved for bytes-type predicate support
     fn bind_bytea(&mut self, value: Vec<u8>) -> String {
         self.params.push(DatumWithOid::from(value));
         format!("${}", self.params.len())
@@ -471,6 +472,56 @@ impl QueryComplexity {
     }
 }
 
+/// Datalog-level query plan exposed by `mentat_explain`.
+/// Captures the clause structure, join variables, and table strategy
+/// before SQL generation, giving users visibility into the Datalog
+/// compilation decisions.
+#[derive(Default, serde::Serialize)]
+struct DatalogPlan {
+    /// Pattern clauses with their table and variable info.
+    patterns: Vec<PatternInfo>,
+    /// Variables that appear in 2+ patterns (join points).
+    join_variables: Vec<String>,
+    /// Predicate expressions (e.g. `[(>= ?age 30)]`).
+    predicates: Vec<String>,
+    /// Number of NOT clauses.
+    not_clauses: usize,
+    /// Number of OR branches.
+    or_branches: usize,
+    /// Ground bindings: variable → constant value.
+    ground_bindings: HashMap<String, String>,
+    /// Where-function expressions (fulltext, arithmetic).
+    where_functions: Vec<String>,
+    /// Complexity summary.
+    complexity: ComplexityInfo,
+}
+
+/// Per-pattern metadata for the Datalog plan.
+#[derive(Default, serde::Serialize)]
+struct PatternInfo {
+    /// Pattern index (0-based).
+    idx: usize,
+    /// Target table (e.g. "datoms_long_new" or "union_all").
+    table: String,
+    /// Attribute (e.g. ":person/age" or "variable").
+    attribute: String,
+    /// Position → variable name mappings (e.g. "entity" → "?e").
+    variables: HashMap<String, String>,
+}
+
+/// Complexity breakdown for the Datalog plan.
+#[derive(Default, serde::Serialize)]
+struct ComplexityInfo {
+    /// Number of pattern joins.
+    joins: usize,
+    /// Whether the query uses aggregates.
+    aggregates: bool,
+    /// Whether the query uses CTEs (rules).
+    cte: bool,
+    /// Whether the query uses UNION (OR clauses).
+    union_all: bool,
+}
+
 /// Apply SET LOCAL optimizer hints and resource limits before executing a Mentat query.
 ///
 /// Uses `Spi::run` to issue SET LOCAL statements in the current
@@ -479,9 +530,11 @@ impl QueryComplexity {
 /// Resource limits applied:
 /// - `statement_timeout`: prevents runaway queries (mentat.query_timeout_ms)
 /// - `temp_file_limit`: prevents disk exhaustion (mentat.temp_file_limit)
-/// - `max_recursive_iterations`: prevents infinite recursion (mentat.max_recursion_depth)
 /// - `enable_seqscan = off`: encourage index usage on datoms table
 /// - `work_mem`: increased for complex queries (mentat.default_work_mem)
+///
+/// Note: Recursive CTE depth is controlled via the LIMIT clause in the CTE
+/// output (see recursive_queries.rs), governed by `mentat.max_recursion_depth`.
 fn apply_optimizer_hints(
     client: &mut pgrx::spi::SpiClient<'_>,
     complexity: &QueryComplexity,
@@ -500,17 +553,6 @@ fn apply_optimizer_hints(
     if temp_limit.chars().all(|c| c.is_ascii_alphanumeric()) {
         let temp_sql = format!("SET LOCAL temp_file_limit = '{}'", temp_limit);
         let _ = client.update(&temp_sql, None, &[]);
-    }
-
-    // Recursion depth limit: prevents infinite loops in recursive rules.
-    // PostgreSQL 14+ supports max_recursive_iterations; older versions
-    // ignore unknown GUCs set via SET LOCAL (no error, just a warning).
-    if complexity.has_cte {
-        let max_depth = crate::planner::max_recursion_depth();
-        if max_depth > 0 {
-            let depth_sql = format!("SET LOCAL max_recursive_iterations = {}", max_depth);
-            let _ = client.update(&depth_sql, None, &[]);
-        }
     }
 
     // --- Optimizer hints (only when enabled) ---
@@ -834,7 +876,7 @@ pub(crate) fn mentat_query_internal(
     let pagination = parse_pagination_options(&inputs.0);
 
     let mut builder = SqlBuilder::new();
-    let (mut sql_query, complexity) = build_sql_from_datalog(
+    let (mut sql_query, complexity, _datalog_plan) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -1029,7 +1071,7 @@ fn mentat_explain_internal(
     let pagination = parse_pagination_options(&inputs.0);
 
     let mut builder = SqlBuilder::new();
-    let (mut sql_query, _complexity) = build_sql_from_datalog(
+    let (mut sql_query, _complexity, datalog_plan) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -1049,13 +1091,14 @@ fn mentat_explain_internal(
         sql_query.push_str(&format!(" OFFSET {}", offset));
     }
 
-    // EXPLAIN (FORMAT TEXT) because pgrx's get::<String>(col) works reliably on
-    // the `text` column type, whereas the JSON format returns the `json` type
-    // which neither String nor JsonB Datum conversion handles cleanly in 0.17.
-    // (Trying FORMAT JSON silently returns 0 rows.)
-    // If callers want JSON-shaped plans, we can parse the text plan, or
-    // switch to `EXPLAIN (FORMAT JSON)::TEXT` once we confirm the cast works.
-    let explain_sql = format!("EXPLAIN (VERBOSE, FORMAT TEXT) {}", sql_query);
+    // Read the explain format GUC. Validate it against supported values.
+    let fmt = crate::planner::hooks::explain_format().to_uppercase();
+    let format_keyword = match fmt.as_str() {
+        "TEXT" | "JSON" | "YAML" | "XML" => &fmt,
+        _ => "TEXT",
+    };
+
+    let explain_sql = format!("EXPLAIN (VERBOSE, FORMAT {}) {}", format_keyword, sql_query);
     let params = builder.params;
 
     let plan_json = Spi::connect(|client| {
@@ -1084,13 +1127,25 @@ fn mentat_explain_internal(
             );
         }
 
-        // Text-format EXPLAIN is one plan-line per row; join them.
-        let plan_text = plan_rows.join("\n");
+        // For JSON format, rows are parts of a single JSON array; concatenate
+        // and parse as structured JSON for a richer explain output.
+        let explain_plan = if format_keyword == "JSON" {
+            let plan_text = plan_rows.join("");
+            if let Ok(plan_json_val) = serde_json::from_str::<serde_json::Value>(&plan_text) {
+                plan_json_val
+            } else {
+                serde_json::Value::String(plan_text)
+            }
+        } else {
+            // TEXT/YAML/XML: one plan-line per row; join with newlines.
+            serde_json::Value::String(plan_rows.join("\n"))
+        };
 
         Ok(json!({
             "datalog_query": query,
+            "datalog_plan": serde_json::to_value(&datalog_plan).unwrap_or_default(),
             "generated_sql": sql_query,
-            "explain_plan": plan_text
+            "explain_plan": explain_plan
         }))
     })?;
 
@@ -1197,7 +1252,7 @@ fn mentat_query_sql_internal(
     let find_vars = extract_find_variables(&parsed_query.find_spec);
 
     let mut builder = SqlBuilder::new();
-    let (sql_query, _complexity) = build_sql_from_datalog(
+    let (sql_query, _complexity, _datalog_plan) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -1310,7 +1365,7 @@ fn mentat_query_view_internal(
     }
 
     let mut builder = SqlBuilder::new();
-    let (mut sql_query, complexity) = build_sql_from_datalog(
+    let (mut sql_query, complexity, _datalog_plan) = build_sql_from_datalog(
         &parsed_query,
         &find_vars,
         &mut builder,
@@ -1699,7 +1754,7 @@ fn build_sql_from_datalog(
     temporal: &TemporalOption,
     input_bindings: &HashMap<String, serde_json::Value>,
     schema_prefix: &str,
-) -> Result<(String, QueryComplexity), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(String, QueryComplexity, DatalogPlan), Box<dyn std::error::Error + Send + Sync>> {
     // Resolve store_id and bind it as a parameter for type-specific table queries.
     let store_id = resolve_store_id(schema_prefix)?;
     let store_id_param = builder.bind_bigint(store_id as i64);
@@ -1817,7 +1872,7 @@ fn build_sql_from_datalog(
         input_bindings.clone()
     } else {
         let mut merged = input_bindings.clone();
-        merged.extend(ground_bindings);
+        merged.extend(ground_bindings.clone());
         merged
     };
 
@@ -2054,7 +2109,114 @@ fn build_sql_from_datalog(
         has_union,
     };
 
-    Ok((query_sql, complexity))
+    // Build the Datalog plan for explain output.
+    let datalog_plan = {
+        // Collect pattern info
+        let mut patterns_info = Vec::with_capacity(pattern_clauses.len());
+        let mut all_pattern_vars: Vec<HashSet<String>> = Vec::new();
+
+        for (idx, pattern) in pattern_clauses.iter().enumerate() {
+            let mut variables = HashMap::new();
+
+            // Entity position
+            if let PatternNonValuePlace::Variable(v) = &pattern.entity {
+                variables.insert("entity".to_string(), format!("{}", v));
+            }
+
+            // Attribute position
+            let attribute = match &pattern.attribute {
+                PatternNonValuePlace::Ident(kw) => format!(":{}", keyword_to_ident(kw)),
+                PatternNonValuePlace::Entid(id) => format!("entid:{}", id),
+                PatternNonValuePlace::Variable(v) => {
+                    variables.insert("attribute".to_string(), format!("{}", v));
+                    "variable".to_string()
+                }
+                PatternNonValuePlace::Placeholder => "_".to_string(),
+            };
+
+            // Value position
+            if let PatternValuePlace::Variable(v) = &pattern.value {
+                variables.insert("value".to_string(), format!("{}", v));
+            }
+
+            // Tx position
+            if let PatternNonValuePlace::Variable(v) = &pattern.tx {
+                variables.insert("tx".to_string(), format!("{}", v));
+            }
+
+            // Determine table from attribute type
+            let table = resolve_pattern_value_type(&pattern.attribute, schema_prefix)
+                .and_then(|vt| value_type_to_table_info(&vt))
+                .map(|info| info.table.to_string())
+                .unwrap_or_else(|| "union_all".to_string());
+
+            // Collect variable names for join detection
+            let var_set: HashSet<String> = variables.values().cloned().collect();
+            all_pattern_vars.push(var_set);
+
+            patterns_info.push(PatternInfo {
+                idx,
+                table,
+                attribute,
+                variables,
+            });
+        }
+
+        // Join variables: appear in 2+ patterns
+        let mut var_counts: HashMap<String, usize> = HashMap::new();
+        for var_set in &all_pattern_vars {
+            for var in var_set {
+                *var_counts.entry(var.clone()).or_insert(0) += 1;
+            }
+        }
+        let join_variables: Vec<String> = var_counts
+            .into_iter()
+            .filter(|(_, count)| *count >= 2)
+            .map(|(var, _)| var)
+            .collect();
+
+        // Collect predicate descriptions
+        let pred_descs: Vec<String> = predicates
+            .iter()
+            .map(|p| format!("[({} {})]", p.operator.0, p.args.iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>().join(" ")))
+            .collect();
+
+        // Collect where-function descriptions
+        let wf_descs: Vec<String> = where_fns
+            .iter()
+            .map(|wf| format!("[({} ...)]", wf.operator.0))
+            .collect();
+
+        // Ground bindings as strings for display
+        let ground_display: HashMap<String, String> = ground_bindings
+            .iter()
+            .map(|(k, v)| (k.clone(), format!("{}", v)))
+            .collect();
+
+        // Count OR branches
+        let or_branch_count: usize = or_joins
+            .iter()
+            .map(|oj| oj.clauses.len())
+            .sum();
+
+        DatalogPlan {
+            patterns: patterns_info,
+            join_variables,
+            predicates: pred_descs,
+            not_clauses: not_joins.len(),
+            or_branches: or_branch_count,
+            ground_bindings: ground_display,
+            where_functions: wf_descs,
+            complexity: ComplexityInfo {
+                joins: pattern_clauses.len(),
+                aggregates: complexity.has_aggregates,
+                cte: complexity.has_cte,
+                union_all: complexity.has_union,
+            },
+        }
+    };
+
+    Ok((query_sql, complexity, datalog_plan))
 }
 
 // ============================================================================
@@ -2495,6 +2657,9 @@ fn build_extended_pattern_query(
 > {
     // Track variable bindings to datom table aliases
     let mut var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
+    // Track the resolved value type for each variable (used by predicate compilation
+    // to select the correct typed column instead of a blanket NUMERIC COALESCE).
+    let mut var_to_type: HashMap<String, Option<String>> = HashMap::new();
     let mut joins = Vec::new();
     let mut where_clauses = Vec::new();
 
@@ -2572,6 +2737,10 @@ fn build_extended_pattern_query(
             PatternNonValuePlace::Placeholder => {}
         }
 
+        // Resolve the attribute's value type early (used for both type-aware
+        // predicate compilation and the FROM fragment optimization below).
+        let pattern_value_type = resolve_pattern_value_type(&pattern.attribute, schema_prefix);
+
         // Handle value position
         match &pattern.value {
             PatternValuePlace::Variable(v) => {
@@ -2600,7 +2769,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                         ));
                     }
                 } else {
-                    var_to_alias.insert(var_name, (alias.clone(), "v"));
+                    var_to_alias.insert(var_name.clone(), (alias.clone(), "v"));
+                    // Record the resolved type so predicates can use the correct column
+                    var_to_type.insert(var_name, pattern_value_type.clone());
                 }
             }
             _ => {
@@ -2625,10 +2796,10 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             where_clauses.push(format!("{alias}.tx = {param}"));
         }
 
-        // Schema-aware optimization: resolve the attribute's value type early so
-        // we can use it for both the FROM fragment and the NOT EXISTS subquery.
-        let typed_info = resolve_pattern_value_type(&pattern.attribute, schema_prefix)
-            .and_then(|vt| value_type_to_table_info(&vt));
+        // Schema-aware optimization: reuse the already-resolved value type for
+        // both the FROM fragment and the NOT EXISTS subquery.
+        let typed_info = pattern_value_type.as_ref()
+            .and_then(|vt| value_type_to_table_info(vt));
 
         // Temporal filtering per datom table
         if temporal.history {
@@ -2759,13 +2930,13 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle NOT clauses as NOT EXISTS subqueries
     for not_join in not_joins {
-        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, builder, temporal, schema_prefix, store_id_param)?;
+        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, &var_to_type, builder, temporal, schema_prefix, store_id_param)?;
         where_clauses.push(not_sql);
     }
 
     // Handle predicate clauses
     for pred in predicates {
-        let pred_sql = build_predicate_clause(pred, &var_to_alias, builder)?;
+        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, builder)?;
         where_clauses.push(pred_sql);
     }
 
@@ -3007,6 +3178,7 @@ fn resolve_var_refs(
 fn build_not_exists_subquery(
     not_join: &edn::query::NotJoin,
     outer_var_to_alias: &HashMap<String, (String, &'static str)>,
+    outer_var_to_type: &HashMap<String, Option<String>>,
     builder: &mut SqlBuilder<'_>,
     temporal: &TemporalOption,
     schema_prefix: &str,
@@ -3077,9 +3249,14 @@ fn build_not_exists_subquery(
     // Local variable-to-alias map for variables bound within the NOT clause.
     // Used by predicates inside the NOT to reference locally-bound values.
     let mut not_var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
+    // Type map for predicates inside the NOT clause.
+    let mut not_var_to_type: HashMap<String, Option<String>> = HashMap::new();
     // Also include outer-bound variables so predicates can reference correlated vars.
     for (k, v) in outer_var_to_alias {
         not_var_to_alias.insert(k.clone(), v.clone());
+    }
+    for (k, v) in outer_var_to_type {
+        not_var_to_type.insert(k.clone(), v.clone());
     }
 
     for (idx, clause) in not_join.clauses.iter().enumerate() {
@@ -3163,9 +3340,10 @@ fn build_not_exists_subquery(
                     }
                 }
 
-                // Schema-aware: resolve type early for both FROM and NOT EXISTS
-                let typed_info = resolve_pattern_value_type(&p.attribute, schema_prefix)
-                    .and_then(|vt| value_type_to_table_info(&vt));
+                // Schema-aware: resolve type early for FROM, NOT EXISTS, and predicates
+                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
+                let typed_info = not_pattern_value_type.as_ref()
+                    .and_then(|vt| value_type_to_table_info(vt));
 
                 // Temporal filtering in subquery too
                 if !temporal.history {
@@ -3239,7 +3417,8 @@ fn build_not_exists_subquery(
                 if let PatternValuePlace::Variable(v) = &p.value {
                     let var_name = format!("{}", v);
                     if !outer_var_to_alias.contains_key(&var_name) {
-                        not_var_to_alias.insert(var_name, (alias.clone(), "v"));
+                        not_var_to_alias.insert(var_name.clone(), (alias.clone(), "v"));
+                        not_var_to_type.insert(var_name, not_pattern_value_type.clone());
                     }
                 }
                 // Tx-position variables are mapped to (alias, "tx").
@@ -3254,7 +3433,7 @@ fn build_not_exists_subquery(
                 // Predicates inside NOT add WHERE conditions to the subquery.
                 // Variables referenced by the predicate must be bound either by
                 // patterns within this NOT clause or by the outer query.
-                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, builder)?;
+                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, builder)?;
                 sub_where.push(pred_sql);
             }
             _ => {
@@ -3285,6 +3464,7 @@ fn build_not_exists_subquery(
 fn build_predicate_clause(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    var_to_type: &HashMap<String, Option<String>>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
@@ -3312,20 +3492,22 @@ fn build_predicate_clause(
         ).into());
     }
 
-    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, builder)?;
-    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, builder)?;
+    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
+    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
 
-    // For value column comparisons, we need to cast the decoded value to numeric
-    // so that comparisons work correctly on the underlying values
     Ok(format!("({} {} {})", left, sql_op, right))
 }
 
 /// Convert a predicate argument to a SQL expression.
-/// With typed columns, value comparisons use COALESCE across the native typed columns,
-/// which gives correct range semantics (numeric < on numbers, text < on strings, etc).
+///
+/// When the variable's value type is known (resolved from the attribute schema),
+/// we select the specific typed column (e.g. `v_text` for strings, `v_long` for
+/// longs). When the type is unknown (variable attribute), we fall back to a TEXT
+/// COALESCE which is safe for equality checks but loses numeric ordering semantics.
 fn pred_arg_to_sql(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    var_to_type: &HashMap<String, Option<String>>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
@@ -3333,24 +3515,45 @@ fn pred_arg_to_sql(
             let var_name = format!("{}", v);
             if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
                 if *col == "v" {
-                    // For value comparisons, use COALESCE across typed columns to
-                    // produce the native typed value.
-                    //
-                    // Subtle: every arm must evaluate to NULL when its column is
-                    // NULL, so COALESCE can actually skip it. The older code
-                    // used `CASE WHEN v_bool THEN 1 ELSE 0 END`, which returns
-                    // 0 for a NULL `v_bool` — that poisons COALESCE and makes
-                    // every `?a > 0` style predicate compare against 0 instead
-                    // of the real value. Keep the IS NULL guards below.
-                    Ok(format!(
-                        "COALESCE({alias}.v_ref::NUMERIC, \
-                         CASE WHEN {alias}.v_bool IS NULL THEN NULL \
-                              WHEN {alias}.v_bool THEN 1::NUMERIC \
-                              ELSE 0::NUMERIC END, \
-                         {alias}.v_long::NUMERIC, \
-                         {alias}.v_double::NUMERIC, \
-                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC)"
-                    ))
+                    // Use type-specific column when the attribute's value type is known
+                    match var_to_type.get(var_name.as_str()) {
+                        Some(Some(vt)) => {
+                            let col_expr = match vt.as_str() {
+                                "string" => format!("{alias}.v_text"),
+                                "keyword" => format!("{alias}.v_keyword"),
+                                "long" => format!("{alias}.v_long"),
+                                "double" => format!("{alias}.v_double"),
+                                "ref" => format!("{alias}.v_ref"),
+                                "boolean" => format!(
+                                    "CASE WHEN {alias}.v_bool IS NULL THEN NULL \
+                                     WHEN {alias}.v_bool THEN 1 ELSE 0 END"
+                                ),
+                                "instant" => format!("{alias}.v_instant"),
+                                "uuid" => format!("{alias}.v_uuid::TEXT"),
+                                "bytes" => format!("encode({alias}.v_bytes, 'hex')"),
+                                _ => {
+                                    // Unknown type string — fall back to TEXT COALESCE
+                                    format!(
+                                        "COALESCE({alias}.v_text, {alias}.v_keyword, \
+                                         {alias}.v_long::TEXT, {alias}.v_double::TEXT, \
+                                         {alias}.v_ref::TEXT, {alias}.v_instant::TEXT, \
+                                         {alias}.v_uuid::TEXT)"
+                                    )
+                                }
+                            };
+                            Ok(col_expr)
+                        }
+                        _ => {
+                            // Type unknown (variable attribute) — fall back to TEXT COALESCE.
+                            // This is safe for equality but loses numeric ordering semantics.
+                            Ok(format!(
+                                "COALESCE({alias}.v_text, {alias}.v_keyword, \
+                                 {alias}.v_long::TEXT, {alias}.v_double::TEXT, \
+                                 {alias}.v_ref::TEXT, {alias}.v_instant::TEXT, \
+                                 {alias}.v_uuid::TEXT)"
+                            ))
+                        }
+                    }
                 } else {
                     Ok(format!("{}.{}", alias, col))
                 }
@@ -3495,6 +3698,7 @@ fn build_rule_ctes(
 fn build_predicate_clause_for_rule(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    var_to_type: &HashMap<String, Option<String>>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
@@ -3522,8 +3726,8 @@ fn build_predicate_clause_for_rule(
         ).into());
     }
 
-    let left = pred_arg_to_sql_for_rule(&pred.args[0], var_to_alias, builder)?;
-    let right = pred_arg_to_sql_for_rule(&pred.args[1], var_to_alias, builder)?;
+    let left = pred_arg_to_sql_for_rule(&pred.args[0], var_to_alias, var_to_type, builder)?;
+    let right = pred_arg_to_sql_for_rule(&pred.args[1], var_to_alias, var_to_type, builder)?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
 }
@@ -3605,6 +3809,7 @@ fn resolve_var_refs_for_rule(
 fn pred_arg_to_sql_for_rule(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
+    var_to_type: &HashMap<String, Option<String>>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
@@ -3612,21 +3817,46 @@ fn pred_arg_to_sql_for_rule(
             let var_name = format!("{}", v);
             if let Some((alias, col)) = var_to_alias.get(var_name.as_str()) {
                 if *col == "v" {
-                    // For value comparisons in rules, use COALESCE across typed
-                    // columns. Each arm must yield NULL when its column is NULL
-                    // (see build_predicate_clause for the full explanation).
-                    Ok(format!(
-                        "COALESCE({alias}.v_ref::NUMERIC, \
-                         CASE WHEN {alias}.v_bool IS NULL THEN NULL \
-                              WHEN {alias}.v_bool THEN 1::NUMERIC \
-                              ELSE 0::NUMERIC END, \
-                         {alias}.v_long::NUMERIC, \
-                         {alias}.v_double::NUMERIC, \
-                         EXTRACT(EPOCH FROM {alias}.v_instant)::NUMERIC)"
-                    ))
+                    // Use type-specific column when the attribute's value type is known
+                    match var_to_type.get(var_name.as_str()) {
+                        Some(Some(vt)) => {
+                            let col_expr = match vt.as_str() {
+                                "string" => format!("{alias}.v_text"),
+                                "keyword" => format!("{alias}.v_keyword"),
+                                "long" => format!("{alias}.v_long"),
+                                "double" => format!("{alias}.v_double"),
+                                "ref" => format!("{alias}.v_ref"),
+                                "boolean" => format!(
+                                    "CASE WHEN {alias}.v_bool IS NULL THEN NULL \
+                                     WHEN {alias}.v_bool THEN 1 ELSE 0 END"
+                                ),
+                                "instant" => format!("{alias}.v_instant"),
+                                "uuid" => format!("{alias}.v_uuid::TEXT"),
+                                "bytes" => format!("encode({alias}.v_bytes, 'hex')"),
+                                _ => {
+                                    format!(
+                                        "COALESCE({alias}.v_text, {alias}.v_keyword, \
+                                         {alias}.v_long::TEXT, {alias}.v_double::TEXT, \
+                                         {alias}.v_ref::TEXT, {alias}.v_instant::TEXT, \
+                                         {alias}.v_uuid::TEXT)"
+                                    )
+                                }
+                            };
+                            Ok(col_expr)
+                        }
+                        _ => {
+                            // Type unknown — fall back to TEXT COALESCE
+                            Ok(format!(
+                                "COALESCE({alias}.v_text, {alias}.v_keyword, \
+                                 {alias}.v_long::TEXT, {alias}.v_double::TEXT, \
+                                 {alias}.v_ref::TEXT, {alias}.v_instant::TEXT, \
+                                 {alias}.v_uuid::TEXT)"
+                            ))
+                        }
+                    }
                 } else if *col == "computed" {
                     // This is from a recursive rule invocation
-                    Ok(format!("{}.col0", alias))  // TODO: handle proper column mapping
+                    Ok(format!("{}.col0", alias))
                 } else {
                     Ok(format!("{}.{}", alias, col))
                 }
@@ -3677,6 +3907,7 @@ fn build_rule_clause_sql(
     let mut pattern_joins = Vec::new();
     let mut where_parts = Vec::new();
     let mut body_var_to_alias: HashMap<String, (String, &'static str)> = HashMap::new();
+    let mut body_var_to_type: HashMap<String, Option<String>> = HashMap::new();
     let mut recursive_join: Option<String> = None;
     let mut recursive_alias = String::new();
 
@@ -3735,6 +3966,9 @@ fn build_rule_clause_sql(
                     PatternNonValuePlace::Placeholder => {}
                 }
 
+                // Resolve attribute type early for predicates and FROM optimization
+                let rule_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
+
                 // Value position
                 match &p.value {
                     PatternValuePlace::Variable(v) => {
@@ -3758,7 +3992,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                                 where_parts.push(format!("{alias}.v_ref = {existing}.{col}"));
                             }
                         } else {
-                            body_var_to_alias.insert(var_name, (alias.clone(), "v"));
+                            body_var_to_alias.insert(var_name.clone(), (alias.clone(), "v"));
+                            body_var_to_type.insert(var_name, rule_pattern_value_type.clone());
                         }
                     }
                     _ => {
@@ -3768,9 +4003,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     }
                 }
 
-                // Schema-aware: resolve type early for both FROM and NOT EXISTS
-                let typed_info = resolve_pattern_value_type(&p.attribute, schema_prefix)
-                    .and_then(|vt| value_type_to_table_info(&vt));
+                // Schema-aware: reuse resolved type for FROM optimization
+                let typed_info = rule_pattern_value_type.as_ref()
+                    .and_then(|vt| value_type_to_table_info(vt));
 
                 // Temporal filtering
                 if !temporal.history {
@@ -3860,12 +4095,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
             }
             WhereClause::Pred(pred) => {
                 // Handle predicates in rule bodies
-                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias, builder)?;
+                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias, &body_var_to_type, builder)?;
                 where_parts.push(pred_sql);
             }
             WhereClause::WhereFn(wf) => {
                 // Handle arithmetic function bindings in rule bodies
-                if let Some((result_var, computed_expr)) = build_where_fn_binding(wf)? {
+                if let Some((result_var, _computed_expr)) = build_where_fn_binding(wf)? {
                     // Store the computed expression for later use in SELECT
                     body_var_to_alias.insert(result_var, ("COMPUTED".to_string(), "expr"));
                     // We'll handle this in the SELECT clause

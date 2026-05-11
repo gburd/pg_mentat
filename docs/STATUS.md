@@ -75,10 +75,12 @@ Aggregates implemented: `count`, `sum`, `avg`, `min`, `max` (see
 `pg_mentat/src/functions/query.rs` around the `unsupported-aggregate`
 error message).
 
-Predicate operators implemented (top level and inside simple rule
-bodies): `<`, `>`, `<=`, `>=`, `=`, `!=`. Arithmetic where-functions:
-`*`, `+`, `-`, `/`. Full-text: `fulltext` is recognised and compiled
-to a PostgreSQL `tsvector` / GIN query.
+Predicate operators implemented (top level, inside simple rule
+bodies, and inside NOT clauses for numeric types): `<`, `>`, `<=`,
+`>=`, `=`, `!=`. Arithmetic where-functions: `*`, `+`, `-`, `/`
+(top level, inside OR branches, inside rule bodies). Where-functions:
+`ground` (scalar binding), `fulltext`. Full-text is compiled to a
+PostgreSQL `tsvector` / GIN query.
 
 Value types encoded: `:db.type/ref`, `:db.type/boolean`, `:db.type/long`,
 `:db.type/double`, `:db.type/instant`, `:db.type/string`,
@@ -100,8 +102,10 @@ answers.
   OR branches: patterns and predicates work; full-text works; `not` /
   `not-join` and rule invocations are rejected.
 - **NOT / not-join clauses.** Pattern clauses inside `not` /
-  `not-join` work with a groundedness check; predicates and function
-  calls inside `not` are rejected.
+  `not-join` work with a groundedness check. Predicates (numeric
+  comparisons) inside NOT work when the predicate variable is bound
+  by a pattern within the NOT clause or correlated from the outer
+  query. Function calls inside NOT remain rejected.
 - **Rules.** Data patterns, `<`/`>`/`<=`/`>=`/`=`/`!=` predicates, the
   four arithmetic where-functions, and recursive rule invocations work
   inside rule bodies. Anything else in a rule body returns
@@ -141,19 +145,17 @@ treat them as missing rather than broken.
 - **Collection / tuple / relation bindings in `:in`.** The Datalog
   parser accepts them; the extension-level query executor does not yet
   materialise them as correlated inputs.
-- **Predicates in OR branches beyond the supported operator set.**
-  Arbitrary where-functions inside `or` are rejected
-  (`:db.error/unsupported-query Function '…' is not supported inside
-  OR branches`).
+- **Predicates in OR branches.** Arithmetic where-functions
+  (`*`, `+`, `-`, `/`) now work inside OR branches. Arbitrary
+  non-arithmetic functions are still rejected.
 - **Predicates in rule bodies beyond the listed operators.** Anything
   other than `<`/`>`/`<=`/`>=`/`=`/`!=` and `*`/`+`/`-`/`/` is rejected
   (`:db.error/unsupported-rule-fn`, `:db.error/unsupported-rule-body`).
-- **`ground`.** Returns a specific
-  `:db.error/unsupported-where-fn ground is not yet implemented`
-  error that points callers at the `:in ?x ... inputs` workaround.
-  A naive implementation was tried and reverted — it silently returned
-  wrong results because the binding did not propagate into pattern-value
-  positions. Correct implementation is Phase 3.
+- **`ground` (scalar).** `[(ground val) ?var]` works for integer,
+  string, boolean, float, and keyword constants. The bound variable
+  is usable both in subsequent patterns (constraining at build time)
+  and in `:find` (projected as a literal). Collection/tuple/relation
+  ground is not yet supported.
 - **`get-else`, `tuple`, `missing?`, `untuple`, `vector`.** Not
   implemented. The README's "Predicates and functions" row is being
   corrected as part of this Phase 0 pass.
@@ -173,12 +175,13 @@ treat them as missing rather than broken.
   indexes. There is no sharded writer.
 - **Schema cache invalidation is coarse.** A schema edit clears more
   cached parses than strictly necessary.
-- **No published load-test results above 100K datoms.** The initial
-  Phase 2 benchmark (`docs/benchmarks/phase2.md`) covers 120K datoms
-  on a developer laptop with 4 query shapes and an EAV baseline.
-  Mentat overhead is 1.7x–3.6x vs raw EAV SQL depending on query
-  shape. The full 10M-datom hermetic benchmark (dedicated host, CSV +
-  flamegraph, scaling curves) remains open work per `docs/ROADMAP.md`.
+- **No published load-test results above 1.2M datoms.** Phase 2
+  benchmarks (`docs/benchmarks/phase2.md`) cover 120K, 369K, and
+  1.2M datoms on a developer laptop with 4 query shapes and an EAV
+  baseline. Mentat overhead is 1.9x–6.2x vs raw EAV SQL depending
+  on query shape and data scale. The full 10M-datom hermetic benchmark
+  (dedicated host, CSV + flamegraph) remains open work per
+  `docs/ROADMAP.md`.
 - **pgrx-tests coverage.** `cargo pgrx test pg16` runs, but many of the
   test files under `pg_mentat/src/*_tests.rs` are end-to-end SQL round
   trips, not unit tests of internal functions. Coverage of the
@@ -226,3 +229,34 @@ treat them as missing rather than broken.
   `benchmarks/BENCHMARKS.md` for the read-path delta (noise); write
   improvement is expected but not yet measured against a pre-Phase-1
   baseline.
+
+---
+
+## Security model
+
+pg_mentat operates in a **trusted schema** model:
+
+- All PostgreSQL roles with access to the database can read and write
+  datoms directly via the narrow storage tables.
+- The `mentat_transact()` and `mentat_query()` functions enforce
+  schema constraints (cardinality, uniqueness, value types) but do NOT
+  prevent users from bypassing them via direct INSERT.
+- There is no row-level security or per-entity ACL.
+- Functions use SECURITY INVOKER (the PostgreSQL default); callers need
+  the same table-level privileges as a direct SQL user.
+
+This is a deliberate design choice: the extension assumes it runs in a
+trusted environment (single application, no multi-tenant isolation
+required). PostgreSQL GRANT/REVOKE on the `mentat` schema is the only
+access gate.
+
+### Future hardening (Phase 5+)
+
+- REVOKE direct table access from application roles; expose only
+  SECURITY DEFINER functions with controlled access.
+- Optional RLS policies keyed on `current_setting('mentat.role')` for
+  entity-level access control.
+- Audit logging via the existing `mentat.transactions` table (captures
+  tx_instant per transaction; could add actor/role).
+- Request size validation in mentatd to prevent DoS via large EDN
+  payloads.

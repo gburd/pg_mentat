@@ -140,6 +140,7 @@ fn build_union_all_datoms_query(
 
 /// Cached schema information for an attribute, loaded in bulk.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // All fields populated during load; not all read yet
 struct SchemaAttrInfo {
     entid: i64,
     ident: String,
@@ -181,6 +182,7 @@ impl SchemaCache {
         Ok(SchemaCache { by_ident, ident_by_entid })
     }
 
+    #[allow(dead_code)] // Public API for attribute lookup by ident
     fn get(&self, ident: &str) -> Option<&SchemaAttrInfo> {
         self.by_ident.get(ident)
     }

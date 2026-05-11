@@ -256,6 +256,7 @@ impl StoreCacheMap {
     }
 
     /// Invalidate all store caches.
+    #[allow(dead_code)] // Public API for future multi-store invalidation
     fn invalidate_all(&self) {
         let caches = self.caches.read();
         for cache in caches.values() {
@@ -293,6 +294,7 @@ pub fn invalidate_store_cache(store_name: &str) {
 /// Invalidate all store schema caches.
 ///
 /// Call this when a global event requires all caches to be refreshed.
+#[allow(dead_code)] // Public API for future multi-store invalidation
 pub fn invalidate_all_caches() {
     STORE_CACHES.invalidate_all();
 }

@@ -1,0 +1,3 @@
+{"columns": ["?name"], "results": [["Alice"]]}
+{"columns": ["?e", "?age"], "results": [[10003, 30]]}
+{"columns": ["?name", "?label"], "results": [["Alice", "senior"], ["Carol", "senior"]]}

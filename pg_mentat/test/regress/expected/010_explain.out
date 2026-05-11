@@ -1,0 +1,12 @@
+datalog_plan
+datalog_query
+explain_plan
+generated_sql
+complexity
+ground_bindings
+join_variables
+not_clauses
+or_branches
+patterns
+predicates
+where_functions

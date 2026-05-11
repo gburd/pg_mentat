@@ -9,3 +9,6 @@ default_version = '1.0.0'
 module_pathname = '$libdir/pg_mentat'
 relocatable = false
 superuser = false
+# Note: `trusted = true` is desired for PG13+ (allows non-superuser install)
+# but pgrx 0.17's control-file parser rejects it as a RedundantField.
+# Re-add once pgrx supports it, or ship a separate .control for production.

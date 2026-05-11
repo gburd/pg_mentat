@@ -1,0 +1,4 @@
+{"columns": ["?name"], "results": [["Alice"]]}
+{"columns": ["?name"], "results": [["Bob"], ["Carol"], ["Dave"]]}
+{"columns": ["?name", "?age"], "results": [["Alice", 30], ["Carol", 35]]}
+{"columns": ["?name"], "results": [["Bob"], ["Carol"], ["Dave"]]}
