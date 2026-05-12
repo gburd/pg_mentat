@@ -4,12 +4,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod regression_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_reg_schema() {
@@ -303,7 +303,7 @@ mod regression_tests {
     #[pg_test]
     fn test_reg_schema_after_bootstrap_twice() {
         setup();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("second bootstrap");
+        Spi::run("SELECT bootstrap_schema()").expect("second bootstrap");
         let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
         assert!(s.contains("db/ident"));
     }

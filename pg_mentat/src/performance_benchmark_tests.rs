@@ -12,12 +12,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod performance_benchmark_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_benchmark_schema() {
@@ -52,7 +52,7 @@ mod performance_benchmark_tests {
                     _ => ":cat/epsilon",
                 };
                 ops.push(format!(
-                    "{{:db/id \"e{i}\" :bench/name \"user-{i}\" :bench/age {age} :bench/email \"user{i}@example.com\" :bench/score {score} :bench/active {active} :bench/cat {cat}}}",
+                    "{{:db/id \"e{i}\" :bench/name \"user-{i}\" :bench/age {age} :bench/email \"user{i}@example.com\" :bench/score {score:?} :bench/active {active} :bench/cat {cat}}}",
                     i = i,
                     age = 20 + (i % 60),
                     score = (i as f64) * 0.01,

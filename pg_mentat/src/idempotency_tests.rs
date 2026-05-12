@@ -3,12 +3,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod idempotency_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_idem_schema() {
@@ -176,7 +176,7 @@ mod idempotency_tests {
     fn test_id_bootstrap_schema_idempotent() {
         setup();
         // Call bootstrap_schema again
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("second bootstrap");
+        Spi::run("SELECT bootstrap_schema()").expect("second bootstrap");
 
         // Should still work
         let result = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")

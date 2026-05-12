@@ -4,12 +4,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod find_spec_exhaustive_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_fs_schema() {
@@ -33,7 +33,7 @@ mod find_spec_exhaustive_tests {
         let statuses = [":active", ":inactive", ":pending"];
         for i in 0..30 {
             ops.push(format!(
-                "{{:db/id \"e{}\" :fs/name \"person-{}\" :fs/val {} :fs/dbl {} :fs/flag {} :fs/status {} :fs/dept \"{}\"}}",
+                "{{:db/id \"e{}\" :fs/name \"person-{}\" :fs/val {} :fs/dbl {:?} :fs/flag {} :fs/status {} :fs/dept \"{}\"}}",
                 i, i, i * 10, (i as f64) * 2.5, if i % 2 == 0 { "true" } else { "false" },
                 statuses[i % 3], depts[i % 5]
             ));

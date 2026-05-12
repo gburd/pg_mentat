@@ -1,14 +1,14 @@
 // Cache performance tests
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod cache_tests {
+mod tests {
     use pgrx::prelude::*;
 
     /// Test that the cache bulk-loads all bootstrap attributes on first access
     #[pg_test]
     fn test_cache_warming() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
         cache.invalidate();
@@ -45,7 +45,7 @@ mod cache_tests {
     fn test_attribute_cache_hit() {
         crate::ensure_extension_loaded();
         // Bootstrap schema should be in place
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -63,7 +63,7 @@ mod cache_tests {
     #[pg_test]
     fn test_ident_cache_hit() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -80,7 +80,7 @@ mod cache_tests {
     #[pg_test]
     fn test_bidirectional_cache() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -101,7 +101,7 @@ mod cache_tests {
     #[pg_test]
     fn test_cache_invalidation() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -133,7 +133,7 @@ mod cache_tests {
     #[pg_test]
     fn test_user_attribute_caching() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Define a new attribute
         let tx = r#"[{:db/ident :person/name
@@ -141,7 +141,7 @@ mod cache_tests {
                       :db/cardinality :db.cardinality/one}]"#;
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat.mentat_transact('{}')",
+            "SELECT mentat_transact('{}')",
             tx.replace('\'', "''")
         ));
         assert!(result.is_ok(), "Transaction should succeed");
@@ -167,7 +167,7 @@ mod cache_tests {
     #[pg_test]
     fn test_cache_miss_nonexistent() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -184,7 +184,7 @@ mod cache_tests {
     #[pg_test]
     fn test_attribute_metadata_fields() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Create attribute with various properties
         let tx = r#"[{:db/ident :test/indexed
@@ -195,7 +195,7 @@ mod cache_tests {
                       :db/fulltext false}]"#;
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat.mentat_transact('{}')",
+            "SELECT mentat_transact('{}')",
             tx.replace('\'', "''")
         ));
         assert!(result.is_ok(), "Transaction should succeed");
@@ -218,7 +218,7 @@ mod cache_tests {
     #[pg_test]
     fn test_concurrent_reads() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -241,7 +241,7 @@ mod cache_tests {
     #[pg_test]
     fn test_cache_across_transactions() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         let cache = crate::cache::get_cache();
 
@@ -252,7 +252,7 @@ mod cache_tests {
                        :db/unique :db.unique/identity}]"#;
 
         Spi::get_one::<String>(&format!(
-            "SELECT mentat.mentat_transact('{}')",
+            "SELECT mentat_transact('{}')",
             tx1.replace('\'', "''")
         ))
         .expect("Transaction 1 should succeed");
@@ -267,7 +267,7 @@ mod cache_tests {
                        :db/cardinality :db.cardinality/one}]"#;
 
         Spi::get_one::<String>(&format!(
-            "SELECT mentat.mentat_transact('{}')",
+            "SELECT mentat_transact('{}')",
             tx2.replace('\'', "''")
         ))
         .expect("Transaction 2 should succeed");
@@ -288,7 +288,7 @@ mod cache_tests {
     #[pg_test]
     fn test_repeated_resolution_performance() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("Failed to bootstrap schema");
+        Spi::run("SELECT bootstrap_schema()").expect("Failed to bootstrap schema");
 
         // Define a few attributes
         let tx = r#"[{:db/ident :perf/attr1
@@ -302,7 +302,7 @@ mod cache_tests {
                       :db/cardinality :db.cardinality/many}]"#;
 
         Spi::get_one::<String>(&format!(
-            "SELECT mentat.mentat_transact('{}')",
+            "SELECT mentat_transact('{}')",
             tx.replace('\'', "''")
         ))
         .expect("Transaction should succeed");

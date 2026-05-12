@@ -3,12 +3,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod generated_value_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_gv_schema() {
@@ -402,7 +402,7 @@ mod generated_value_tests {
         let vals = [0.0, 0.1, 0.5, 1.0, 1.5, 2.0, 3.14, 10.0, 100.0, 999.99];
         for (i, &val) in vals.iter().enumerate() {
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {}]]'::TEXT)", i, val
+                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {:?}]]'::TEXT)", i, val
             )).expect("tx");
         }
         let q = Spi::get_one::<String>(
@@ -418,7 +418,7 @@ mod generated_value_tests {
         for i in 0..10 {
             let val = -(i as f64 + 1.0) * 1.5;
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {}]]'::TEXT)", i, val
+                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {:?}]]'::TEXT)", i, val
             )).expect("tx");
         }
         let q = Spi::get_one::<String>(
@@ -439,7 +439,7 @@ mod generated_value_tests {
         for i in 1..=10 {
             let val = (i as f64) * 0.001;
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add {} :gv/dbl {}]]'::TEXT)", eid, val
+                "SELECT mentat_transact('[[:db/add {} :gv/dbl {:?}]]'::TEXT)", eid, val
             )).expect("update");
         }
         let q = Spi::get_one::<String>(&format!(
@@ -456,7 +456,7 @@ mod generated_value_tests {
         let vals = [1e10, 1e12, 1e15, 1e18, 1e20];
         for (i, &val) in vals.iter().enumerate() {
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {}]]'::TEXT)", i, val
+                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {:?}]]'::TEXT)", i, val
             )).expect("tx");
         }
         let q = Spi::get_one::<String>(
@@ -472,7 +472,7 @@ mod generated_value_tests {
         let vals = [0.1, 0.01, 0.001, 0.0001, 0.00001];
         for (i, &val) in vals.iter().enumerate() {
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {}]]'::TEXT)", i, val
+                "SELECT mentat_transact('[[:db/add \"e{}\" :gv/dbl {:?}]]'::TEXT)", i, val
             )).expect("tx");
         }
         let q = Spi::get_one::<String>(
@@ -830,7 +830,7 @@ mod generated_value_tests {
         let mut ops = vec![];
         for i in 0..100 {
             ops.push(format!(
-                "{{:db/id \"e{}\" :gv/str \"name-{}\" :gv/lng {} :gv/dbl {} :gv/boo {} :gv/kw :type-{}}}",
+                "{{:db/id \"e{}\" :gv/str \"name-{}\" :gv/lng {} :gv/dbl {:?} :gv/boo {} :gv/kw :type-{}}}",
                 i, i, i, (i as f64) * 0.5, if i % 2 == 0 { "true" } else { "false" }, i % 10
             ));
         }

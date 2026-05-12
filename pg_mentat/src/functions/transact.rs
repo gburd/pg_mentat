@@ -1835,31 +1835,31 @@ fn find_current_value_for_ea(
     // Query all type-specific tables with UNION ALL, ordered by tx DESC
     // This finds the most recent value across all types
     let query = "
-        SELECT 0 AS type_tag, v::text AS value, tx FROM mentat.datoms_ref_new
+        SELECT 0::SMALLINT AS type_tag, v::text AS value, tx FROM mentat.datoms_ref_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 1, v::text, tx FROM mentat.datoms_boolean_new
+        SELECT 1::SMALLINT, v::text, tx FROM mentat.datoms_boolean_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 2, v::text, tx FROM mentat.datoms_long_new
+        SELECT 2::SMALLINT, v::text, tx FROM mentat.datoms_long_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 3, v::text, tx FROM mentat.datoms_double_new
+        SELECT 3::SMALLINT, v::text, tx FROM mentat.datoms_double_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 4, (EXTRACT(EPOCH FROM v)::bigint * 1000000)::text AS value, tx FROM mentat.datoms_instant_new
+        SELECT 4::SMALLINT, (EXTRACT(EPOCH FROM v)::bigint * 1000000)::text AS value, tx FROM mentat.datoms_instant_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 7, v, tx FROM mentat.datoms_text_new
+        SELECT 7::SMALLINT, v, tx FROM mentat.datoms_text_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 8, v, tx FROM mentat.datoms_keyword_new
+        SELECT 8::SMALLINT, v, tx FROM mentat.datoms_keyword_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 10, v::text, tx FROM mentat.datoms_uuid_new
+        SELECT 10::SMALLINT, v::text, tx FROM mentat.datoms_uuid_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         UNION ALL
-        SELECT 11, encode(v, 'hex'), tx FROM mentat.datoms_bytes_new
+        SELECT 11::SMALLINT, encode(v, 'hex'), tx FROM mentat.datoms_bytes_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
         ORDER BY tx DESC LIMIT 1
     ";

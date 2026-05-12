@@ -19,8 +19,8 @@ use crate::functions::store_management::get_schema_for_store;
 /// Returns a JSON summary of the operation.
 #[pg_extern]
 pub fn mentat_excise(
-    store: default!(&str, "'default'"),
     entity_ids: Vec<i64>,
+    store: default!(&str, "'default'"),
     reason: default!(Option<&str>, "NULL"),
 ) -> String {
     match excise_internal(store, &entity_ids, reason) {

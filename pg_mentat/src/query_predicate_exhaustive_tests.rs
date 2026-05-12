@@ -3,12 +3,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod query_predicate_exhaustive_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_qpe_schema() {
@@ -33,7 +33,7 @@ mod query_predicate_exhaustive_tests {
         let statuses = [":active", ":inactive", ":pending", ":archived", ":suspended"];
         for i in 0..50 {
             ops.push(format!(
-                "{{:db/id \"e{}\" :qpe/name \"person-{}\" :qpe/val {} :qpe/dbl {} :qpe/flag {} :qpe/status {} :qpe/age {}}}",
+                "{{:db/id \"e{}\" :qpe/name \"person-{}\" :qpe/val {} :qpe/dbl {:?} :qpe/flag {} :qpe/status {} :qpe/age {}}}",
                 i, i, i * 10, (i as f64) * 1.5, if i % 2 == 0 { "true" } else { "false" },
                 statuses[i % 5], 20 + (i % 40)
             ));

@@ -10,144 +10,16 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod concurrency_tests {
+mod tests {
     use pgrx::prelude::*;
     use std::collections::HashSet;
 
     /// Initialize a test database with the pg_mentat schema.
+    /// The extension creates all needed infrastructure; we just ensure it's loaded
+    /// and bootstrapped.
     fn setup_test_db() -> Result<(), Box<dyn std::error::Error>> {
-        Spi::run(
-            r#"
-            CREATE SCHEMA IF NOT EXISTS mentat;
-
-            DO $$ BEGIN
-                CREATE TYPE mentat.value_type AS ENUM (
-                    'ref', 'boolean', 'instant', 'long', 'double', 'string', 'keyword', 'uuid', 'bytes'
-                );
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            DO $$ BEGIN
-                CREATE TYPE mentat.unique_type AS ENUM ('value', 'identity');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            DO $$ BEGIN
-                CREATE TYPE mentat.cardinality_type AS ENUM ('one', 'many');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            CREATE TABLE IF NOT EXISTS mentat.datoms (
-                e BIGINT NOT NULL,
-                a BIGINT NOT NULL,
-                value_type_tag SMALLINT NOT NULL,
-                v_ref BIGINT,
-                v_bool BOOLEAN,
-                v_long BIGINT,
-                v_double DOUBLE PRECISION,
-                v_text TEXT,
-                v_keyword TEXT,
-                v_instant TIMESTAMPTZ,
-                v_uuid UUID,
-                v_bytes BYTEA,
-                tx BIGINT NOT NULL,
-                added BOOLEAN NOT NULL DEFAULT TRUE,
-                CONSTRAINT chk_datom_value CHECK (
-                    (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
-                )
-            ) PARTITION BY LIST (value_type_tag);
-
-            CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
-
-            CREATE TABLE IF NOT EXISTS mentat.schema (
-                entid BIGINT PRIMARY KEY,
-                ident TEXT UNIQUE NOT NULL,
-                value_type mentat.value_type NOT NULL,
-                cardinality mentat.cardinality_type NOT NULL DEFAULT 'one',
-                unique_constraint mentat.unique_type,
-                indexed BOOLEAN NOT NULL DEFAULT FALSE,
-                fulltext BOOLEAN NOT NULL DEFAULT FALSE,
-                component BOOLEAN NOT NULL DEFAULT FALSE,
-                no_history BOOLEAN NOT NULL DEFAULT FALSE
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.idents (
-                ident TEXT PRIMARY KEY,
-                entid BIGINT UNIQUE NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.partitions (
-                name TEXT PRIMARY KEY,
-                start_entid BIGINT NOT NULL,
-                end_entid BIGINT NOT NULL,
-                next_entid BIGINT NOT NULL,
-                allow_excision BOOLEAN NOT NULL DEFAULT FALSE
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.transactions (
-                tx BIGINT PRIMARY KEY,
-                tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
-            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
-            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
-
-            CREATE TABLE IF NOT EXISTS mentat.fulltext (
-                text_value TEXT NOT NULL,
-                search_vector TSVECTOR
-            );
-
-            INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-                ('db.part/db', 0, 10000, 100, FALSE),
-                ('db.part/user', 10000, 1000000, 10000, FALSE),
-                ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
-            ON CONFLICT (name) DO NOTHING;
-
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
-
-            INSERT INTO mentat.transactions (tx, tx_instant)
-            VALUES (1000000, '2025-01-01T00:00:00Z')
-            ON CONFLICT (tx) DO NOTHING;
-
-            CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
-            RETURNS BIGINT AS $$
-            BEGIN
-                CASE partition_name
-                    WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
-                    WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
-                    WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
-                    ELSE RAISE EXCEPTION 'Partition % not found', partition_name;
-                END CASE;
-            END; $$ LANGUAGE plpgsql;
-
-            CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)
-            RETURNS BIGINT AS $$
-            BEGIN
-                RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
-            END; $$ LANGUAGE plpgsql;
-            "#,
-        )?;
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        crate::ensure_extension_loaded();
+        Spi::run("SELECT bootstrap_schema()")?;
         Ok(())
     }
 

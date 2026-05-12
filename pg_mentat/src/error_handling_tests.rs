@@ -3,12 +3,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod error_handling_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_eh_schema() {
@@ -393,9 +393,9 @@ mod error_handling_tests {
     fn test_eh_bootstrap_idempotent() {
         setup();
         // Second bootstrap should not error
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("second bootstrap");
+        Spi::run("SELECT bootstrap_schema()").expect("second bootstrap");
         // Third for good measure
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("third bootstrap");
+        Spi::run("SELECT bootstrap_schema()").expect("third bootstrap");
     }
 
     #[pg_test]

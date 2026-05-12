@@ -10,12 +10,12 @@
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod speculative_transaction_tests {
+mod tests {
     use pgrx::prelude::*;
 
     fn setup() {
         crate::ensure_extension_loaded();
-        Spi::run("SELECT mentat.bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
     }
 
     fn setup_schema() {
@@ -530,7 +530,7 @@ mod speculative_transaction_tests {
     #[pg_test]
     fn test_transaction_fns_returns_valid_json() {
         setup();
-        let result = Spi::get_one::<String>("SELECT mentat.transaction_fns()")
+        let result = Spi::get_one::<String>("SELECT transaction_fns()")
             .expect("fn")
             .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&result).expect("parse");
@@ -542,7 +542,7 @@ mod speculative_transaction_tests {
     #[pg_test]
     fn test_transaction_fns_lists_cas() {
         setup();
-        let result = Spi::get_one::<String>("SELECT mentat.transaction_fns()")
+        let result = Spi::get_one::<String>("SELECT transaction_fns()")
             .expect("fn")
             .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&result).expect("parse");
@@ -560,7 +560,7 @@ mod speculative_transaction_tests {
     #[pg_test]
     fn test_transaction_fns_lists_retract_entity() {
         setup();
-        let result = Spi::get_one::<String>("SELECT mentat.transaction_fns()")
+        let result = Spi::get_one::<String>("SELECT transaction_fns()")
             .expect("fn")
             .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&result).expect("parse");

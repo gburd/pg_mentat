@@ -1,7 +1,18 @@
+//! Integration tests requiring a running PostgreSQL instance with pg_mentat installed.
+//!
+//! These tests are ignored by default. Run with:
+//!   cargo test -p mentatd --test integration_test -- --ignored
+//!
+//! Prerequisites:
+//!   - PostgreSQL running locally
+//!   - DATABASE_URL environment variable set (or defaults to postgresql://localhost/mentat)
+//!   - pg_mentat extension available in the PostgreSQL instance
+
 mod helpers;
 use helpers::TestServer;
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_server_health_check() {
     let server = TestServer::start().await;
     let response = server.client.get("/health").await;
@@ -11,6 +22,7 @@ async fn test_server_health_check() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_connect_operation() {
     let server = TestServer::start().await;
 
@@ -25,6 +37,7 @@ async fn test_connect_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_list_databases_operation() {
     let server = TestServer::start().await;
 
@@ -37,6 +50,7 @@ async fn test_list_databases_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_query_operation() {
     let server = TestServer::start().await;
 
@@ -48,6 +62,7 @@ async fn test_query_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transact_operation() {
     let server = TestServer::start().await;
 
@@ -61,6 +76,7 @@ async fn test_transact_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_health_operation() {
     let server = TestServer::start().await;
 
@@ -73,6 +89,7 @@ async fn test_health_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_invalid_operation() {
     let server = TestServer::start().await;
 
@@ -85,6 +102,7 @@ async fn test_invalid_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_missing_op_field() {
     let server = TestServer::start().await;
 
@@ -97,6 +115,7 @@ async fn test_missing_op_field() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_invalid_edn_format() {
     let server = TestServer::start().await;
 
@@ -108,6 +127,7 @@ async fn test_invalid_edn_format() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_content_type_header() {
     let server = TestServer::start().await;
 
@@ -119,6 +139,7 @@ async fn test_content_type_header() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_db_operation() {
     let server = TestServer::start().await;
 
@@ -133,6 +154,7 @@ async fn test_db_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_db_operation_invalid_uuid() {
     let server = TestServer::start().await;
 
@@ -144,6 +166,7 @@ async fn test_db_operation_invalid_uuid() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_query_with_timeout() {
     let server = TestServer::start().await;
 
@@ -155,6 +178,7 @@ async fn test_query_with_timeout() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_query_with_limit_and_offset() {
     let server = TestServer::start().await;
 
@@ -166,6 +190,7 @@ async fn test_query_with_limit_and_offset() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_multiple_concurrent_requests() {
     let server = TestServer::start().await;
 
@@ -187,6 +212,7 @@ async fn test_multiple_concurrent_requests() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_edn_response_format() {
     let server = TestServer::start().await;
 
@@ -200,6 +226,7 @@ async fn test_edn_response_format() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_connect_nonexistent_database() {
     let server = TestServer::start().await;
 
@@ -212,6 +239,7 @@ async fn test_connect_nonexistent_database() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_create_and_delete_database() {
     let server = TestServer::start().await;
 
@@ -236,6 +264,7 @@ async fn test_create_and_delete_database() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_invalid_database_name() {
     let server = TestServer::start().await;
 
@@ -247,6 +276,7 @@ async fn test_invalid_database_name() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_datomic_catalog_namespace() {
     let server = TestServer::start().await;
 
@@ -259,6 +289,7 @@ async fn test_datomic_catalog_namespace() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_empty_request_body() {
     let server = TestServer::start().await;
 
@@ -270,6 +301,7 @@ async fn test_empty_request_body() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_whitespace_only_request() {
     let server = TestServer::start().await;
 
@@ -285,6 +317,7 @@ async fn test_whitespace_only_request() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_json_health() {
     let server = TestServer::start().await;
 
@@ -306,6 +339,7 @@ async fn test_transit_json_health() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_json_list_dbs() {
     let server = TestServer::start().await;
 
@@ -324,6 +358,7 @@ async fn test_transit_json_list_dbs() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_json_invalid_operation() {
     let server = TestServer::start().await;
 
@@ -339,6 +374,7 @@ async fn test_transit_json_invalid_operation() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_json_connect() {
     let server = TestServer::start().await;
 
@@ -355,6 +391,7 @@ async fn test_transit_json_connect() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_json_malformed() {
     let server = TestServer::start().await;
 
@@ -373,6 +410,7 @@ async fn test_transit_json_malformed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_msgpack_health() {
     let server = TestServer::start().await;
 
@@ -404,6 +442,7 @@ async fn test_transit_msgpack_health() {
 }
 
 #[tokio::test]
+#[ignore = "requires live PostgreSQL"]
 async fn test_transit_msgpack_list_dbs() {
     let server = TestServer::start().await;
 

@@ -39,7 +39,7 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
             -- Unique constraint enum entities (used as values for :db/unique)
             (32, ':db.unique/value', 'ref', 'one', NULL, false),
             (33, ':db.unique/identity', 'ref', 'one', NULL, false)
-        ON CONFLICT (entid) DO NOTHING;
+        ON CONFLICT DO NOTHING;
 
         INSERT INTO mentat.idents (ident, entid) VALUES
             (':db/ident', 1),
@@ -100,7 +100,8 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
             (30, 1, 8, 'db.cardinality/one',   1000000, true),
             (31, 1, 8, 'db.cardinality/many',  1000000, true),
             (32, 1, 8, 'db.unique/value',      1000000, true),
-            (33, 1, 8, 'db.unique/identity',   1000000, true);
+            (33, 1, 8, 'db.unique/identity',   1000000, true)
+        ON CONFLICT DO NOTHING;
 
         -- :db/valueType datoms (a=2, ref stored in v_ref as entity ID)
         INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
@@ -123,7 +124,8 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
             -- Entity 9 (:db/noHistory) -> :db.type/boolean (entity 25)
             (9,  2, 0, 25, 1000000, true),
             -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26)
-            (10, 2, 0, 26, 1000000, true);
+            (10, 2, 0, 26, 1000000, true)
+        ON CONFLICT DO NOTHING;
 
         -- :db/cardinality datoms (a=3, ref stored in v_ref as entity ID)
         -- All core attrs have cardinality :db.cardinality/one (entity 30)
@@ -137,7 +139,8 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
             (7,  3, 0, 30, 1000000, true),
             (8,  3, 0, 30, 1000000, true),
             (9,  3, 0, 30, 1000000, true),
-            (10, 3, 0, 30, 1000000, true);
+            (10, 3, 0, 30, 1000000, true)
+        ON CONFLICT DO NOTHING;
         ",
     )?;
     Ok(())
