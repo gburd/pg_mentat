@@ -98,10 +98,12 @@ CREATE EXTENSION pg_mentat;
 
 ## Usage
 
+All examples use the **convenience aliases** (`mentat.t`, `mentat.q`, `mentat.pull`, etc.) which are the recommended way to interact with the extension. See [Function Naming](#function-naming) for details.
+
 ### Define a Schema
 
 ```sql
-SELECT mentat.mentat_transact('[
+SELECT mentat.t('[
   {:db/ident       :person/name
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
@@ -109,6 +111,10 @@ SELECT mentat.mentat_transact('[
   {:db/ident       :person/age
    :db/valueType   :db.type/long
    :db/cardinality :db.cardinality/one}
+  {:db/ident       :person/email
+   :db/valueType   :db.type/string
+   :db/cardinality :db.cardinality/one
+   :db/unique      :db.unique/value}
   {:db/ident       :person/friends
    :db/valueType   :db.type/ref
    :db/cardinality :db.cardinality/many}
@@ -118,9 +124,10 @@ SELECT mentat.mentat_transact('[
 ### Transact Data
 
 ```sql
-SELECT mentat.mentat_transact('[
-  {:person/name "Alice" :person/age 30}
-  {:person/name "Bob"   :person/age 25}
+SELECT mentat.t('[
+  {:person/name "Alice" :person/age 30 :person/email "alice@example.com"}
+  {:person/name "Bob"   :person/age 25 :person/email "bob@example.com"}
+  {:person/name "Carol" :person/age 35 :person/email "carol@example.com"}
 ]');
 ```
 
@@ -128,7 +135,7 @@ SELECT mentat.mentat_transact('[
 
 ```sql
 -- Find all people over 28
-SELECT mentat.mentat_query('
+SELECT mentat.q('
   [:find ?name ?age
    :where [?e :person/name ?name]
           [?e :person/age ?age]
@@ -136,7 +143,7 @@ SELECT mentat.mentat_query('
 ');
 
 -- With input bindings
-SELECT mentat.mentat_q('default', '
+SELECT mentat.q('
   [:find ?name
    :in $ ?min-age
    :where [?e :person/name ?name]
@@ -148,11 +155,11 @@ SELECT mentat.mentat_q('default', '
 ### Pull API
 
 ```sql
--- Pull all attributes for entity 10001
-SELECT mentat.mentat_pull('[*]', 10001);
+-- Pull all attributes for an entity
+SELECT mentat.pull('[*]', 10001);
 
 -- Nested pull with reverse refs and limits
-SELECT mentat.mentat_pull('[
+SELECT mentat.pull('[
   :person/name
   {:person/friends [:person/name :person/age]}
   {(:person/_friends :as :admirers :limit 5) [:person/name]}
@@ -163,28 +170,13 @@ SELECT mentat.mentat_pull('[
 
 ```sql
 -- Query the database as it was at transaction 1000005
-SELECT mentat.mentat_q('default', '
+SELECT mentat.q('
   [:find ?name
    :where [?e :person/name ?name]]
 ', '[]', 1000005, NULL);
 
 -- View transaction log
 SELECT mentat.log('default', 1000001, 1000010);
-```
-
-### Rules
-
-```sql
-SELECT mentat.mentat_query('
-  [:find ?name
-   :where (ancestor ?e 10001)
-          [?e :person/name ?name]
-   :rules [[(ancestor ?x ?y)
-             [?x :person/friends ?y]]
-            [(ancestor ?x ?y)
-             [?x :person/friends ?z]
-             (ancestor ?z ?y)]]]
-');
 ```
 
 ### Excision (GDPR)
@@ -197,33 +189,194 @@ SELECT mentat.mentat_excise('default', 10042, NULL);
 SELECT mentat.mentat_excise('default', 10042, ':person/email');
 ```
 
-## SQL Functions
+---
+
+## Examples That Will Make SQL Programmers Rethink Everything
+
+### Graph traversal without JOINs
+
+Find all friends-of-friends using recursive rules — no self-joins, no CTEs, no depth limits baked into the query:
+
+```sql
+-- "Who can Alice reach through any chain of friendships?"
+SELECT mentat.q('
+  [:find ?name
+   :in $ ?start
+   :where [?start :person/name ?start-name]
+          (reachable ?start ?friend)
+          [?friend :person/name ?name]
+   :rules [[(reachable ?a ?b)
+              [?a :person/friends ?b]]
+           [(reachable ?a ?b)
+              [?a :person/friends ?c]
+              (reachable ?c ?b)]]]
+', '["Alice"]');
+```
+
+The SQL equivalent would require a recursive CTE with cycle detection, explicit join conditions, and careful termination logic — easily 20+ lines. The Datalog version is declarative: *state the relationship, not the algorithm*.
+
+### Schema-as-data: query your own schema
+
+In pg_mentat, schema IS data — it lives in the same datom store as your application data:
+
+```sql
+-- "What attributes does the system know about?"
+SELECT mentat.q('
+  [:find ?ident ?type ?cardinality
+   :where [?a :db/ident ?ident]
+          [?a :db/valueType ?vt]
+          [?vt :db/ident ?type]
+          [?a :db/cardinality ?card]
+          [?card :db/ident ?cardinality]]
+');
+```
+
+No `information_schema`. No `pg_catalog`. Your schema and your data are queried with the same language.
+
+### Temporal diff: what changed between two transactions?
+
+```sql
+-- Show exactly what changed between tx 1000003 and 1000007
+SELECT mentat.diff('default', 1000003, 1000007);
+```
+
+Returns every datom that was added or retracted between those two points in time. In traditional SQL, you'd need audit tables, triggers, temporal extensions, or CDC infrastructure. Here it's built into the storage model.
+
+### Speculative transactions: "what if?" without committing
+
+```sql
+-- Try a transaction without persisting it
+SELECT mentat.mentat_with('[
+  {:person/name "Alice" :person/age 99}
+]');
+```
+
+Returns the full transaction report (tempid resolution, new datoms) but writes nothing. Use this for validation, conflict detection, or previewing the effect of a batch import.
+
+### Upsert by identity: no INSERT ON CONFLICT gymnastics
+
+```sql
+-- If "Alice" already exists (by :db.unique/identity), update her age.
+-- If she doesn't exist, create her. One transaction, no conditional logic.
+SELECT mentat.t('[
+  {:person/name "Alice" :person/age 31}
+]');
+```
+
+Because `:person/name` has `:db.unique/identity`, this is automatically an upsert. No `ON CONFLICT`, no `MERGE`, no `WHERE EXISTS` subquery.
+
+### Pull API: reshape query results without application code
+
+```sql
+-- Get a nested JSON document in one round-trip
+SELECT mentat.pull('[
+  :person/name
+  :person/email
+  {:person/friends [
+    :person/name
+    :person/age
+    {:person/friends [:person/name]}
+  ]}
+]', 10001);
+```
+
+Returns:
+
+```json
+{
+  "person/name": "Alice",
+  "person/email": "alice@example.com",
+  "person/friends": [
+    {
+      "person/name": "Bob",
+      "person/age": 25,
+      "person/friends": [{"person/name": "Carol"}]
+    }
+  ]
+}
+```
+
+No GraphQL server. No ORM. No N+1 queries. One SQL call, arbitrarily nested results.
+
+### Combine Datalog with SQL: the best of both worlds
+
+Create a PostgreSQL VIEW backed by a Datalog query, then join it with relational tables:
+
+```sql
+-- Create a view powered by Datalog
+SELECT mentat.mentat_query_view('people_over_30', '
+  [:find ?name ?age ?email
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [?e :person/email ?email]
+          [(> ?age 30)]]
+');
+
+-- Now use it like any SQL view — join with relational data
+SELECT v.name, v.email, o.total
+FROM mentat.people_over_30 v
+JOIN orders o ON o.customer_email = v.email
+WHERE o.total > 100.00
+ORDER BY o.total DESC;
+```
+
+Your Datalog knowledge graph and your relational tables, queryable together in a single SQL statement.
+
+---
+
+## Function Naming
+
+pg_mentat installs into the `mentat` schema by default. Functions are available in two forms:
+
+### Convenience aliases (recommended)
+
+For the default `mentat` schema, short aliases avoid redundancy:
 
 | Function | Description |
 |----------|-------------|
-| `mentat_transact(edn)` | Execute an EDN transaction against the default store |
-| `mentat_query(datalog)` | Run a Datalog query against the default store |
-| `mentat_q(store, datalog, inputs)` | Run a parameterized query with input bindings |
-| `mentat_q_full(store, datalog, inputs, as_of_tx, since_tx)` | Query with time travel parameters |
-| `mentat_pull(pattern, eid)` | Pull attributes for a single entity |
-| `mentat_pull_many(pattern, eids)` | Pull attributes for multiple entities |
-| `mentat_with(edn)` | Speculative transaction (returns result without committing) |
-| `mentat_explain(datalog)` | Show the generated SQL for a Datalog query |
-| `mentat_schema()` | Return the current schema as JSON |
-| `mentat_entity(eid)` | Return all current datoms for an entity |
-| `mentat_excise(store, eid, attr)` | Permanently delete datoms (GDPR excision) |
-| `mentat_query_sql(datalog)` | Return the SQL that would be generated (no execution) |
-| `mentat_query_view(name, datalog)` | Create a PostgreSQL VIEW from a Datalog query |
-| `t(store, edn)` | Short alias for `mentat_transact` with store |
-| `q(store, datalog, inputs)` | Short alias for `mentat_q` |
-| `log(store, from_tx, to_tx)` | Transaction log for a tx range |
-| `diff(store, from_tx, to_tx)` | Diff between two transactions |
-| `subscribe(store, name, query)` | Register a reactive subscription |
-| `create_store(name, desc)` | Create an isolated named store |
-| `materialize(store, name, query)` | Create a materialized Datalog view |
-| `recursive(store, name, query, depth)` | Register a recursive query |
-| `mentat_backend_stats()` | Runtime statistics (cache hits, query counts) |
-| `mentat_health_check()` | Extension health check |
+| `mentat.t(edn)` | Transact EDN data |
+| `mentat.q(query, inputs)` | Run a Datalog query |
+| `mentat.pull(pattern, eid)` | Pull attributes for an entity |
+| `mentat.pull_many(pattern, eids)` | Pull for multiple entities |
+| `mentat.entity(eid)` | All datoms for an entity as JSON |
+| `mentat.schema()` | Current schema as JSON |
+| `mentat.explain(query)` | Show generated SQL for a query |
+| `mentat.stats()` | Query execution statistics |
+| `mentat.storage()` | Storage and index statistics |
+| `mentat.cache_stats()` | Prepared statement cache info |
+| `mentat.cache_clear()` | Clear the statement cache |
+| `mentat.log(store, from_tx, to_tx)` | Transaction log |
+| `mentat.diff(store, from_tx, to_tx)` | Diff between transactions |
+| `mentat.subscribe(store, name, query)` | Reactive subscription |
+| `mentat.create_store(name, desc)` | Create an isolated store |
+
+### Full-name functions
+
+The underlying pgrx-exported functions use a `mentat_` prefix. These are always available and are what you'd use if you install the extension into a custom schema:
+
+```sql
+-- Default schema: use convenience aliases
+SELECT mentat.q('[:find ?e :where [?e :person/name "Alice"]]');
+
+-- Custom schema: full names are natural
+CREATE EXTENSION pg_mentat SCHEMA myapp;
+SELECT myapp.mentat_query('[:find ?e :where [?e :person/name "Alice"]]');
+```
+
+| Full function | Convenience alias |
+|---------------|-------------------|
+| `mentat_transact(edn)` | `t(edn)` |
+| `mentat_query(query, inputs)` | `q(query, inputs)` |
+| `mentat_pull(pattern, eid)` | `pull(pattern, eid)` |
+| `mentat_pull_many(pattern, eids)` | `pull_many(pattern, eids)` |
+| `mentat_entity(eid)` | `entity(eid)` |
+| `mentat_schema()` | `schema()` |
+| `mentat_explain(query)` | `explain(query)` |
+| `mentat_with(edn)` | *(speculative transaction)* |
+| `mentat_excise(store, eid, attr)` | *(GDPR excision)* |
+| `mentat_query_view(name, query)` | *(create Datalog-backed VIEW)* |
+| `mentat_query_sql(query)` | *(show generated SQL)* |
+| `mentat_health_check()` | *(extension health)* |
 
 ## PostgreSQL Compatibility
 
@@ -243,10 +396,16 @@ CI currently tests against PostgreSQL 16. The extension compiles cleanly for all
 
 ## Documentation
 
-- [Getting Started](docs/GETTING_STARTED.md) — installation and first steps
-- [Datalog Reference](docs/DATALOG_REFERENCE.md) — full query language documentation
-- [Schema Reference](docs/SCHEMA_REFERENCE.md) — attribute types and constraints
-- [Migration from Datomic](docs/MIGRATION_FROM_DATOMIC.md) — porting guide
+Full documentation is available as an [mdBook](https://gburd.github.io/pg_mentat/):
+
+- [Getting Started](docs/src/getting-started.md)
+- [Datalog Query Language](docs/src/datalog.md)
+- [Pull API](docs/src/pull-api.md)
+- [Time Travel](docs/src/time-travel.md)
+- [Schema Reference](docs/src/schema.md)
+- [SQL Function Reference](docs/src/sql-functions.md)
+- [Configuration](docs/src/configuration.md)
+- [Datomic Compatibility](docs/src/datomic-compat.md)
 
 ## Contributing
 
@@ -268,4 +427,4 @@ pg_mentat is derived from Mozilla's [Mentat](https://github.com/mozilla/mentat) 
 
 This project rewrites Mentat as a PostgreSQL extension using pgrx, replacing the SQLite backend with PostgreSQL's storage engine, MVCC, and indexing infrastructure. The Datalog compiler, EDN parser, and query planner have been substantially rewritten to generate native PostgreSQL SQL instead of SQLite queries, and to take advantage of PostgreSQL features (GIN indexes for full-text search, advisory locks for concurrency, LISTEN/NOTIFY for subscriptions, and partitioned narrow tables for type-specific storage).
 
-The fork lineage is: `mozilla/mentat` -> `qpdb/mentat` -> `gburd/pg_mentat`.
+The fork lineage is: `mozilla/mentat` → `qpdb/mentat` → `gburd/pg_mentat`.

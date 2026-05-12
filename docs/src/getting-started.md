@@ -68,7 +68,7 @@ This creates the `mentat` schema with all required tables, types, indexes, and f
 Schema attributes describe the shape of your data. Every attribute needs an ident (namespaced keyword), a value type, and a cardinality.
 
 ```sql
-SELECT mentat_transact('[
+SELECT mentat.t('[
   {:db/ident       :person/name
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
@@ -93,7 +93,7 @@ SELECT mentat_transact('[
 Use tempids (string identifiers) to create new entities. References between entities in the same transaction resolve automatically.
 
 ```sql
-SELECT mentat_transact('[
+SELECT mentat.t('[
   {:db/id "alice"
    :person/name "Alice"
    :person/age 30
@@ -112,35 +112,31 @@ The return value is a JSON report containing the transaction ID, timestamp, and 
 
 ```sql
 -- Find all people over 25
-SELECT mentat_query(
-  '[:find ?name ?age
-    :where
-    [?e :person/name ?name]
-    [?e :person/age ?age]
-    [(> ?age 25)]]',
-  '{}'
-);
+SELECT mentat.q('
+  [:find ?name ?age
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(> ?age 25)]]
+');
 
--- Find friends-of-friends
-SELECT mentat_query(
-  '[:find ?friend-name
-    :in ?name
-    :where
-    [?e :person/name ?name]
-    [?e :person/friends ?f]
-    [?f :person/name ?friend-name]]',
-  '{"inputs": ["Alice"]}'
-);
+-- Find friends-of-friends (with input binding)
+SELECT mentat.q('
+  [:find ?friend-name
+   :in $ ?name
+   :where [?e :person/name ?name]
+          [?e :person/friends ?f]
+          [?f :person/name ?friend-name]]
+', '["Alice"]');
 ```
 
 ### 5. Pull Entity Data
 
 ```sql
 -- Pull all attributes for entity 10001
-SELECT mentat_pull('[*]', 10001);
+SELECT mentat.pull('[*]', 10001);
 
 -- Pull specific attributes with nested navigation
-SELECT mentat_pull(
+SELECT mentat.pull(
   '[:person/name :person/age {:person/friends [:person/name]}]',
   10001
 );
@@ -150,13 +146,13 @@ SELECT mentat_pull(
 
 ```sql
 -- Query the database as it was at transaction 1000
-SELECT mentat_query(
-  '[:find ?name :where [?e :person/name ?name]]',
-  '{"as_of": 1000}'
-);
+SELECT mentat.q('[:find ?name :where [?e :person/name ?name]]', '[]', 1000, NULL);
 
--- View full history of an entity's name changes
-SELECT mentat_history('default', 10001, ':person/name');
+-- View transaction log
+SELECT mentat.log('default', 1000, 1010);
+
+-- What changed between two transactions?
+SELECT mentat.diff('default', 1000, 1005);
 ```
 
 ## Next Steps

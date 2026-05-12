@@ -41,18 +41,24 @@ pg_mentat stores facts (datoms) in nine type-specific narrow tables, each with f
 CREATE EXTENSION pg_mentat;
 
 -- Define a schema attribute
-SELECT mentat_transact('[
+SELECT mentat.t('[
   {:db/ident       :person/name
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one}
 ]');
 
 -- Assert a fact
-SELECT mentat_transact('[
-  {:db/id "tempid-1"
-   :person/name "Alice"}
-]');
+SELECT mentat.t('[{:person/name "Alice"}]');
 
 -- Query
-SELECT mentat_query('[:find ?name :where [?e :person/name ?name]]', '{}');
+SELECT mentat.q('[:find ?name :where [?e :person/name ?name]]');
+
+-- Pull all attributes for the entity
+SELECT mentat.pull('[*]', 10001);
 ```
+
+> **Note:** `mentat.t`, `mentat.q`, and `mentat.pull` are convenience aliases for the
+> underlying `mentat.mentat_transact`, `mentat.mentat_query`, and `mentat.mentat_pull`
+> functions. The `mentat_` prefix exists so names read naturally when the extension is
+> installed into a non-default schema (e.g., `myapp.mentat_query(...)`). See
+> [SQL Function Reference](sql-functions.md) for the full mapping.

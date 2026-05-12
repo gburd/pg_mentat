@@ -1,248 +1,222 @@
 # SQL Function Reference
 
-All pg_mentat functions live in the `mentat` schema. After `CREATE EXTENSION pg_mentat`, they are accessible as `mentat.function_name()` or (if the schema is in your `search_path`) as `function_name()`.
+All pg_mentat functions live in the `mentat` schema. After `CREATE EXTENSION pg_mentat`, they are accessible as `mentat.function_name()`.
 
-Most functions come in two forms: a default-store variant and a store-aware variant that takes a store name as the first argument.
+## Function Naming Convention
+
+pg_mentat provides two sets of function names:
+
+**Convenience aliases** (recommended for everyday use in the default `mentat` schema):
+
+```sql
+SELECT mentat.t('[{:person/name "Alice"}]');
+SELECT mentat.q('[:find ?e :where [?e :person/name "Alice"]]');
+SELECT mentat.pull('[*]', 10001);
+```
+
+**Full-name functions** use a `mentat_` prefix. These read naturally when installed into a custom schema:
+
+```sql
+-- If you install into a custom schema:
+CREATE EXTENSION pg_mentat SCHEMA myapp;
+SELECT myapp.mentat_transact('[{:person/name "Alice"}]');
+SELECT myapp.mentat_query('[:find ?e :where [?e :person/name "Alice"]]');
+SELECT myapp.mentat_pull('[*]', 10001);
+```
+
+The full-name functions exist because pgrx derives the SQL function name from the Rust function name. Since any schema can host the extension, the `mentat_` prefix ensures the function names read sensibly regardless of the schema choice. The convenience aliases eliminate redundancy for the common default case.
+
+### Quick Reference
+
+| Convenience alias | Full function | Description |
+|-------------------|--------------|-------------|
+| `mentat.t(edn)` | `mentat_transact(edn)` | Transact EDN data |
+| `mentat.q(query, inputs)` | `mentat_query(query, inputs)` | Run a Datalog query |
+| `mentat.pull(pattern, eid)` | `mentat_pull(pattern, eid)` | Pull entity attributes |
+| `mentat.pull_many(pattern, eids)` | `mentat_pull_many(pattern, eids)` | Pull multiple entities |
+| `mentat.entity(eid)` | `mentat_entity(eid)` | All attributes as JSON |
+| `mentat.schema()` | `mentat_schema()` | Current schema |
+| `mentat.explain(query)` | `mentat_explain(query)` | Show generated SQL |
+| `mentat.stats()` | `mentat_query_stats()` | Execution statistics |
+| `mentat.storage()` | `mentat_storage_stats()` | Storage statistics |
+| `mentat.cache_stats()` | `mentat_stmt_cache_stats()` | Statement cache info |
+| `mentat.cache_clear()` | `mentat_stmt_cache_clear()` | Clear statement cache |
+
+---
 
 ## Transaction Functions
 
-### `mentat_transact(edn_tx TEXT) -> TEXT`
+### `mentat.t(edn)` / `mentat_transact(edn)`
 
-Execute a transaction against the default store. Returns a JSON transaction report.
+Execute a transaction. Returns a JSON transaction report with `tx_id`, `tx_instant`, and `tempids`.
 
 ```sql
-SELECT mentat_transact('[
+SELECT mentat.t('[
   {:db/id "tempid-1"
    :person/name "Alice"
    :person/age 30}
 ]');
 ```
 
-**Returns:** JSON with `tx_id`, `tx_instant`, `tempids` (mapping tempid strings to allocated entity IDs).
-
-### `mentat.t(store_name TEXT, edn_tx TEXT) -> TEXT`
-
-Execute a transaction against a named store.
+The `t` alias transacts against the default store. Use the full function with a store argument for named stores:
 
 ```sql
-SELECT mentat.t('mystore', '[{:db/id "t1" :item/name "Widget"}]');
+SELECT mentat.mentat_transact_store('analytics', '[{:event/type "click"}]');
 ```
 
-### `mentat_with(edn_tx TEXT) -> TEXT`
+### `mentat_with(edn)` — Speculative Transaction
 
-Execute a speculative (dry-run) transaction against the default store. The transaction is computed but not persisted. Useful for validation or "what-if" analysis.
+Execute a transaction without persisting it. Returns the same report format, but writes nothing. Useful for validation or "what-if" analysis.
 
 ```sql
-SELECT mentat_with('[
-  {:db/id "t1" :person/name "Test"}
+SELECT mentat.mentat_with('[
+  {:person/name "Test" :person/age 99}
 ]');
 ```
-
-**Returns:** Same format as `mentat_transact`, but no data is written.
 
 ---
 
 ## Query Functions
 
-### `mentat_query(query TEXT, inputs JSONB) -> JSONB`
+### `mentat.q(query, inputs)` / `mentat_query(query, inputs)`
 
-Execute a Datalog query against the default store.
-
-```sql
-SELECT mentat_query(
-  '[:find ?name ?age
-    :where
-    [?e :person/name ?name]
-    [?e :person/age ?age]
-    [(> ?age 21)]]',
-  '{}'
-);
-```
-
-**Parameters:**
-- `query` -- EDN Datalog query string
-- `inputs` -- JSON object with optional keys:
-  - `"inputs"` -- array of input binding values (positional, matching `:in` clause order)
-  - `"as_of"` -- transaction ID for point-in-time query
-  - `"since"` -- transaction ID for "changes since" query
-  - `"limit"` -- maximum result rows
-
-**Returns:** JSONB with `columns` (array of variable names) and `results` (array of result tuples).
-
-### `mentat.q(store_name TEXT, query TEXT, inputs JSONB) -> JSONB`
-
-Execute a query against a named store.
+Execute a Datalog query. Returns JSONB with `columns` and `results`.
 
 ```sql
-SELECT mentat.q('analytics', '[:find ?e :where [?e :event/type "click"]]', '{}');
+-- Simple query
+SELECT mentat.q('
+  [:find ?name ?age
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(> ?age 21)]]
+');
+
+-- With input bindings (positional, matching :in clause order)
+SELECT mentat.q('
+  [:find ?name
+   :in $ ?min-age
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [(>= ?age ?min-age)]]
+', '[25]');
 ```
 
-### `mentat.mentat_q_full(store_name TEXT, query TEXT, inputs JSONB, limit INT) -> JSONB`
+The `inputs` parameter is a JSON value:
+- Simple array for positional bindings: `'[25]'`
+- Empty for no inputs: `'{}'` or `'[]'`
 
-Query with explicit limit parameter (overrides any limit in inputs JSON).
+### `mentat.explain(query)` / `mentat_explain(query)`
 
-### `mentat.mentat_q_default(query TEXT, inputs JSONB, limit INT) -> JSONB`
-
-Default-store query with explicit limit.
-
-### `mentat_explain(query TEXT, inputs JSONB) -> JSONB`
-
-Show the query execution plan without running the query. Returns the generated SQL and PostgreSQL's EXPLAIN output.
+Show the generated SQL and PostgreSQL's EXPLAIN output without executing the query.
 
 ```sql
-SELECT mentat_explain(
-  '[:find ?name :where [?e :person/name ?name]]',
-  '{}'
-);
+SELECT mentat.explain('[:find ?name :where [?e :person/name ?name]]');
 ```
 
-### `mentat.mentat_explain_store(store_name TEXT, query TEXT, inputs JSONB) -> JSONB`
+### `mentat_query_sql(query)` — Generated SQL
 
-Explain a query against a named store.
-
-### `mentat_query_sql(query TEXT, inputs JSONB) -> TEXT`
-
-Return the generated SQL without executing it. Useful for debugging or integration with external tools.
+Return only the generated SQL string (no execution, no EXPLAIN).
 
 ```sql
-SELECT mentat_query_sql(
-  '[:find ?name :where [?e :person/name ?name]]',
-  '{}'
-);
+SELECT mentat.mentat_query_sql('[:find ?name :where [?e :person/name ?name]]');
 ```
 
-### `mentat.mentat_query_sql_store(store_name TEXT, query TEXT, inputs JSONB) -> TEXT`
+### `mentat_query_view(name, query)` — Create SQL VIEW from Datalog
 
-Return generated SQL for a named store.
-
-### `mentat_query_view(query TEXT, inputs JSONB, view_name TEXT) -> TEXT`
-
-Create a PostgreSQL VIEW from a Datalog query. The view can then be used in regular SQL.
+Create a PostgreSQL VIEW backed by a Datalog query:
 
 ```sql
-SELECT mentat_query_view(
-  '[:find ?e ?name :where [?e :person/name ?name]]',
-  '{}',
-  'people_view'
-);
+SELECT mentat.mentat_query_view('people_over_30', '
+  [:find ?name ?age ?email
+   :where [?e :person/name ?name]
+          [?e :person/age ?age]
+          [?e :person/email ?email]
+          [(> ?age 30)]]
+');
 
--- Now usable as a regular view
-SELECT * FROM mentat.people_view WHERE name = 'Alice';
+-- Now use it like any SQL view
+SELECT * FROM mentat.people_over_30 WHERE name LIKE 'A%';
 ```
-
-### `mentat.mentat_query_view_store(store_name TEXT, query TEXT, inputs JSONB, view_name TEXT) -> TEXT`
-
-Create a view for a named store.
-
----
-
-## Statement Cache Functions
-
-### `mentat_stmt_cache_stats() -> JSONB`
-
-Return statistics about the prepared statement cache (size, capacity, hit counts).
-
-### `mentat_stmt_cache_clear() -> TEXT`
-
-Clear the prepared statement cache. Call after schema changes or when debugging query plan issues.
 
 ---
 
 ## Pull Functions
 
-### `mentat_pull(pattern TEXT, entity_id BIGINT) -> JSONB`
+### `mentat.pull(pattern, eid)` / `mentat_pull(pattern, eid)`
 
-Pull attributes for a single entity from the default store.
+Pull attributes for a single entity. Returns a nested JSON document.
 
 ```sql
--- Pull all attributes
-SELECT mentat_pull('[*]', 10001);
+-- Pull everything
+SELECT mentat.pull('[*]', 10001);
 
 -- Pull specific attributes with nested refs
-SELECT mentat_pull(
-  '[:person/name :person/age {:person/friends [:person/name]}]',
-  10001
-);
+SELECT mentat.pull('[
+  :person/name
+  :person/age
+  {:person/friends [:person/name :person/age]}
+]', 10001);
 
--- Reverse lookup
-SELECT mentat_pull('[:person/name :person/_friends]', 10001);
+-- Reverse lookup: who has this entity as a friend?
+SELECT mentat.pull('[:person/name :person/_friends]', 10001);
+
+-- With modifiers
+SELECT mentat.pull('[
+  :person/name
+  {(:person/friends :limit 5 :as :top-friends) [:person/name]}
+  {(:person/_friends :as :admirers) [:person/name]}
+]', 10001);
 ```
 
-### `mentat.pull(store_name TEXT, pattern TEXT, entity_id BIGINT) -> JSONB`
+### `mentat.pull_many(pattern, eids)` / `mentat_pull_many(pattern, eids)`
 
-Pull from a named store.
-
-### `mentat_pull_many(pattern TEXT, entity_ids BIGINT[]) -> JSONB`
-
-Pull the same pattern for multiple entities. Returns an array of entity maps.
+Pull the same pattern for multiple entities. Returns a JSON array.
 
 ```sql
-SELECT mentat_pull_many('[:person/name :person/age]', ARRAY[10001, 10002, 10003]);
+SELECT mentat.pull_many('[:person/name :person/age]', ARRAY[10001, 10002, 10003]);
 ```
 
-### `mentat.pull_many(store_name TEXT, pattern TEXT, entity_ids BIGINT[]) -> JSONB`
+### `mentat.entity(eid)` / `mentat_entity(eid)`
 
-Pull many from a named store.
-
-### `mentat_entity(entity_id BIGINT) -> JSONB`
-
-Return all attributes for an entity as a flat JSON map (equivalent to `mentat_pull('[*]', id)`).
+Return all current attributes for an entity as a flat JSON map (equivalent to `pull('[*]', eid)`).
 
 ```sql
-SELECT mentat_entity(10001);
+SELECT mentat.entity(10001);
 ```
-
-### `mentat.entity(store_name TEXT, entity_id BIGINT) -> JSONB`
-
-Entity lookup for a named store.
 
 ---
 
 ## Schema Functions
 
-### `mentat_schema() -> JSONB`
+### `mentat.schema()` / `mentat_schema()`
 
-Return the full schema for the default store as JSON.
+Return the full schema as JSON, keyed by attribute ident.
 
 ```sql
-SELECT mentat_schema();
+SELECT mentat.schema();
 ```
-
-**Returns:** JSON object keyed by attribute ident, with value type, cardinality, uniqueness, and other properties.
-
-### `mentat.schema(store_name TEXT) -> JSONB`
-
-Return schema for a named store.
 
 ---
 
-## Store Management Functions
+## Store Management
 
-### `mentat.create_store(store_name TEXT, description TEXT DEFAULT NULL) -> TEXT`
+### `mentat.create_store(name, description)`
 
-Create a new isolated store. This creates a new PostgreSQL schema with all required tables and indexes.
+Create a new isolated store with its own schema, tables, and indexes.
 
 ```sql
 SELECT mentat.create_store('analytics', 'Event tracking store');
 ```
 
-### `mentat.drop_store(store_name TEXT) -> TEXT`
+### `mentat.drop_store(name)`
 
-Drop a store and all its data. This is irreversible.
+Drop a store and all its data (irreversible).
 
-```sql
-SELECT mentat.drop_store('analytics');
-```
+### `mentat.list_stores()`
 
-### `mentat.list_stores() -> JSONB`
+List all stores with metadata.
 
-List all stores with their metadata.
-
-```sql
-SELECT mentat.list_stores();
-```
-
-### `mentat.rename_store(old_name TEXT, new_name TEXT) -> TEXT`
+### `mentat.rename_store(old_name, new_name)`
 
 Rename an existing store.
 
@@ -250,63 +224,56 @@ Rename an existing store.
 
 ## Time Travel Functions
 
-### `mentat_as_of(store TEXT, tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB`
+### `mentat.log(store, from_tx, to_tx)`
 
-Query the database as it existed at a specific transaction. Only datoms asserted at or before `tx_id` are visible.
-
-This is also accessible via the `"as_of"` key in the inputs JSON of `mentat_query`.
-
-### `mentat_since(store TEXT, tx_id BIGINT, query TEXT, inputs JSONB) -> JSONB`
-
-Query only datoms asserted after `tx_id`.
-
-### `mentat_history(store TEXT, entity_id BIGINT, attribute TEXT) -> JSONB`
-
-Return the complete history of an attribute for an entity, including retractions.
+Return the transaction log for a range of transactions.
 
 ```sql
-SELECT mentat_history('default', 10001, ':person/name');
+SELECT mentat.log('default', 1000001, 1000010);
 ```
 
-**Returns:** Array of `{value, tx, added}` objects showing each assertion and retraction.
+### `mentat.diff(store, from_tx, to_tx)`
 
-### `mentat_tx_range(store TEXT, start_tx BIGINT, end_tx BIGINT) -> JSONB`
+Compute the diff between two points in time — what was added and retracted.
 
-Return all datoms asserted or retracted in a range of transactions.
+```sql
+SELECT mentat.diff('default', 1000003, 1000007);
+```
 
-### `mentat.log(store_name TEXT, start_tx BIGINT, end_tx BIGINT) -> JSONB`
+### Time-travel via query parameters
 
-Return the transaction log for a range. Each entry includes the transaction ID, timestamp, and all datoms in that transaction.
+Pass `as_of_tx` or `since_tx` to query functions:
 
-### `mentat.diff(store_name TEXT, from_tx BIGINT, to_tx BIGINT) -> JSONB`
-
-Compute the diff between two points in time. Shows what was added and retracted.
+```sql
+-- Query the database as of transaction 1000005
+SELECT mentat.q('
+  [:find ?name :where [?e :person/name ?name]]
+', '[]', 1000005, NULL);
+```
 
 ---
 
 ## Excision Functions
 
-### `mentat_excise(store TEXT DEFAULT 'default', entity_ids BIGINT[]) -> JSONB`
+### `mentat_excise(store, entity_id, attribute)`
 
-Permanently remove entities from the database, including all history. This is the only operation that truly deletes data. Requires `allow_excision = true` on the entity's partition.
+Permanently remove datoms from the database, including all history. This is the only operation that truly deletes data (GDPR compliance).
 
 ```sql
--- Enable excision on the user partition
-UPDATE mentat.partitions SET allow_excision = true WHERE name = 'db.part/user';
+-- Remove all data for an entity
+SELECT mentat.mentat_excise('default', 10042, NULL);
 
--- Excise entities
-SELECT mentat_excise('default', ARRAY[10001, 10002]);
+-- Remove only a specific attribute
+SELECT mentat.mentat_excise('default', 10042, ':person/email');
 ```
-
-**Returns:** JSON summary with count of deleted datoms, affected transactions, and any dangling reference warnings.
 
 ---
 
 ## Subscription Functions
 
-### `mentat.subscribe(store_name TEXT, subscription_name TEXT, query TEXT) -> TEXT`
+### `mentat.subscribe(store, name, query)`
 
-Subscribe to changes matching a Datalog query. Uses PostgreSQL LISTEN/NOTIFY to push notifications when matching datoms are transacted.
+Subscribe to changes matching a Datalog query pattern. Uses PostgreSQL `LISTEN`/`NOTIFY`.
 
 ```sql
 SELECT mentat.subscribe('default', 'new_people',
@@ -316,19 +283,15 @@ SELECT mentat.subscribe('default', 'new_people',
 LISTEN mentat_subscription_new_people;
 ```
 
-### `mentat.unsubscribe(store_name TEXT, subscription_name TEXT) -> TEXT`
+### `mentat.unsubscribe(store, name)`
 
 Remove a subscription.
-
-### `mentat.list_subscriptions(store_name TEXT DEFAULT NULL) -> JSONB`
-
-List active subscriptions, optionally filtered by store.
 
 ---
 
 ## Materialized View Functions
 
-### `mentat.materialize(store_name TEXT, view_name TEXT, query TEXT) -> TEXT`
+### `mentat.materialize(store, name, query)`
 
 Create a materialized view from a Datalog query for faster repeated access.
 
@@ -337,96 +300,59 @@ SELECT mentat.materialize('default', 'active_users',
   '[:find ?e ?name :where [?e :person/name ?name] [?e :person/active true]]');
 ```
 
-### `mentat.refresh(store_name TEXT, view_name TEXT) -> TEXT`
+### `mentat.refresh(store, name)`
 
 Refresh a materialized view with current data.
 
-### `mentat.drop_matview(store_name TEXT, view_name TEXT) -> TEXT`
-
-Drop a materialized view.
-
-### `mentat.list_matviews(store_name TEXT DEFAULT NULL) -> JSONB`
-
-List materialized views.
-
 ---
 
-## Recursive Query Functions
+## Statistics & Monitoring
 
-### `mentat.recursive(store_name TEXT, view_name TEXT, ...) -> TEXT`
+### `mentat.stats()` / `mentat_query_stats()`
 
-Create a recursive view for graph traversal queries.
+Query execution statistics: call counts, timing, cache hit rates.
 
-### `mentat.drop_recursive(store_name TEXT, view_name TEXT) -> TEXT`
+### `mentat.storage()` / `mentat_storage_stats()`
 
-Drop a recursive view.
+Storage statistics: row counts, table sizes, index sizes.
 
-### `mentat.list_recursive(store_name TEXT) -> JSONB`
+### `mentat.cache_stats()` / `mentat_stmt_cache_stats()`
 
-List recursive views for a store.
+Prepared statement cache statistics.
 
----
+### `mentat.cache_clear()` / `mentat_stmt_cache_clear()`
 
-## Virtual Table Functions
+Clear the statement cache.
 
-### `mentat.create_virtual_tables(store_name TEXT) -> TEXT`
+### `mentat_health_check()`
 
-Create PostgreSQL views that expose datoms in a relational-friendly format for SQL integration.
+Extension health check (returns JSON with status, version, store count).
 
----
-
-## Statistics Functions
-
-### `mentat_query_stats() -> JSONB`
-
-Return query execution statistics: call counts, timing percentiles, and cache hit rates for all mentat functions.
-
-### `mentat_slow_queries(threshold_ms FLOAT DEFAULT 100.0) -> JSONB`
+### `mentat_slow_queries(threshold_ms)`
 
 Return recently logged slow queries exceeding the given threshold.
-
-### `mentat_storage_stats() -> JSONB`
-
-Return storage statistics: row counts, table sizes, and index sizes for all mentat tables.
 
 ---
 
 ## EDN Helper Functions
 
-These functions operate on EDN-formatted text values.
+These operate on EDN-formatted text values and are installed in the `public` schema for convenience.
 
-### `edn_get(edn TEXT, key TEXT) -> TEXT`
-
-Extract a value from an EDN map by key.
-
-### `edn_nth(edn TEXT, index INT) -> TEXT`
-
-Extract the Nth element from an EDN vector.
-
-### `edn_count(edn TEXT) -> INT`
-
-Count elements in an EDN collection.
-
-### `edn_keys(edn TEXT) -> TEXT`
-
-Return the keys of an EDN map as an EDN vector.
-
-### `edn_values(edn TEXT) -> TEXT`
-
-Return the values of an EDN map as an EDN vector.
-
-### `edn_contains(edn TEXT, key TEXT) -> BOOLEAN`
-
-Check if an EDN map contains a key.
-
-### `edn_type(edn TEXT) -> TEXT`
-
-Return the type of an EDN value (map, vector, list, keyword, string, long, double, boolean, nil).
+| Function | Description |
+|----------|-------------|
+| `edn_get(edn, key)` | Extract a value from an EDN map |
+| `edn_nth(edn, index)` | Extract Nth element from an EDN vector |
+| `edn_count(edn)` | Count elements in an EDN collection |
+| `edn_keys(edn)` | Keys of an EDN map as a vector |
+| `edn_values(edn)` | Values of an EDN map as a vector |
+| `edn_contains(edn, key)` | Check if a map contains a key |
+| `edn_type(edn)` | Type of an EDN value |
+| `edn_pretty(edn, width)` | Pretty-print EDN with indentation |
 
 ---
 
 ## Bootstrap Functions
 
-### `mentat.bootstrap_schema() -> VOID`
+### `mentat.bootstrap_schema()`
 
-Re-run the bootstrap schema installation. Called automatically during `CREATE EXTENSION` but can be invoked manually to repair a corrupted schema.
+Re-run the bootstrap schema installation. Called automatically during `CREATE EXTENSION` but can be invoked to repair a corrupted schema.
