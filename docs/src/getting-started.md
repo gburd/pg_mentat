@@ -2,56 +2,80 @@
 
 ## Installation
 
+### From Source
+
+Prerequisites:
+- Rust 1.88+ (install via [rustup](https://rustup.rs/))
+- PostgreSQL 15-17 with development headers
+- LLVM/Clang development libraries (for pgrx bindgen)
+- `pkg-config`, `build-essential` (or equivalent)
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt-get install -y postgresql-16 postgresql-server-dev-16 \
+    libpq-dev build-essential pkg-config libclang-dev clang
+```
+
+On Fedora/RHEL:
+
+```bash
+sudo dnf install -y postgresql16-server postgresql16-devel \
+    clang-devel llvm-devel pkg-config
+```
+
+On macOS (Homebrew):
+
+```bash
+brew install postgresql@16 llvm pkg-config
+```
+
+Then build and install:
+
+```bash
+git clone https://github.com/gburd/pg_mentat.git
+cd pg_mentat
+
+# Install cargo-pgrx (the PostgreSQL extension build tool)
+cargo install --locked cargo-pgrx --version 0.17.0
+
+# Tell pgrx where your PostgreSQL is installed
+cargo pgrx init --pg16 $(which pg_config)
+
+# Build and install the extension into your PostgreSQL
+cd pg_mentat
+cargo pgrx install --release --no-default-features --features pg16
+```
+
+### Docker
+
+```bash
+docker build -t pg_mentat .
+docker run -d --name pg_mentat \
+  -e POSTGRES_PASSWORD=secret \
+  -p 5432:5432 \
+  pg_mentat
+```
+
+Or use Docker Compose for the full stack (pg_mentat + mentatd + Prometheus + Grafana):
+
+```bash
+docker compose -f docker/docker-compose.yml up -d
+```
+
 ### From Source (Nix)
 
-The recommended development environment uses Nix with the provided flake:
+If you use Nix, the provided flake handles all dependencies:
 
 ```bash
 git clone https://github.com/gburd/pg_mentat.git
 cd pg_mentat
 nix develop
 
-# Build and install into pgrx-managed PostgreSQL
-cargo pgrx install --features pg16
-```
-
-### From Source (Manual)
-
-Prerequisites:
-- Rust 1.88+ (with cargo)
-- PostgreSQL 13-18 development headers
-- LLVM/Clang (for pgrx bindgen)
-
-```bash
-git clone https://github.com/gburd/pg_mentat.git
+# Everything is pre-configured — just build
 cd pg_mentat
-
-# Install cargo-pgrx if not already present
-cargo install cargo-pgrx --version 0.17.0
-cargo pgrx init --pg16 $(which pg_config)
-
-# Build and install
-cargo pgrx install --release --features pg16
+cargo pgrx install --release --no-default-features --features pg16
 ```
-
-### Docker
-
-```bash
-docker run -d \
-  --name pg_mentat \
-  -e POSTGRES_PASSWORD=secret \
-  -p 5432:5432 \
-  ghcr.io/gburd/pg_mentat:latest
-```
-
-Or use Docker Compose with the included configuration:
-
-```bash
-cd docker
-docker compose up -d
-```
-
-This starts PostgreSQL with pg_mentat, the mentatd HTTP server, Prometheus, and Grafana.
 
 ## Quick Start
 

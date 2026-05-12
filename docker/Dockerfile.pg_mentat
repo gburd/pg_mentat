@@ -25,7 +25,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH="/usr/local/cargo/bin:${PATH}"
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.90.0
+    sh -s -- -y --default-toolchain 1.88.0
 
 # Install cargo-pgrx matching the version in pg_mentat/Cargo.toml
 RUN cargo install --locked cargo-pgrx --version '~0.17'
