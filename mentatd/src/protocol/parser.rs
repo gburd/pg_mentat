@@ -190,7 +190,7 @@ fn parse_operation(
 
         "pull" => {
             let args_map = extract_args_map(map)?;
-            let pattern = extract_value_as_string(&args_map, input,"pattern")?;
+            let pattern = extract_value_as_string(&args_map, "pattern", input)?;
             let entity_id = extract_required_int(&args_map, "entity-id")?;
 
             Ok(Operation::Pull { pattern, entity_id })
@@ -198,9 +198,9 @@ fn parse_operation(
 
         "datoms" => {
             let args_map = extract_args_map(map)?;
-            let index_str = extract_value_as_string(&args_map, input,"index")?;
+            let index_str = extract_value_as_string(&args_map, "index", input)?;
             let index = parse_datoms_index(&index_str)?;
-            let components = extract_optional_vector(&args_map, input,"components")
+            let components = extract_optional_vector(&args_map, "components", input)
                 .unwrap_or_default();
 
             Ok(Operation::Datoms { index, components })
@@ -208,8 +208,8 @@ fn parse_operation(
 
         "as-of" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, input,"query")?;
-            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, "query", input)?;
+            let args = extract_optional_vector(&args_map, "args", input).unwrap_or_default();
             let t = extract_required_int(&args_map, "t")?;
 
             Ok(Operation::AsOf { query, args, t })
@@ -217,8 +217,8 @@ fn parse_operation(
 
         "since" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, input,"query")?;
-            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, "query", input)?;
+            let args = extract_optional_vector(&args_map, "args", input).unwrap_or_default();
             let t = extract_required_int(&args_map, "t")?;
 
             Ok(Operation::Since { query, args, t })
@@ -226,8 +226,8 @@ fn parse_operation(
 
         "history" => {
             let args_map = extract_args_map(map)?;
-            let query = extract_value_as_string(&args_map, input,"query")?;
-            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, "query", input)?;
+            let args = extract_optional_vector(&args_map, "args", input).unwrap_or_default();
 
             Ok(Operation::History { query, args })
         }
@@ -255,8 +255,8 @@ fn parse_operation(
         "filter" => {
             let args_map = extract_args_map(map)?;
             let predicate = parse_filter_predicate(&args_map)?;
-            let query = extract_value_as_string(&args_map, input,"query")?;
-            let args = extract_optional_vector(&args_map, input,"args").unwrap_or_default();
+            let query = extract_value_as_string(&args_map, "query", input)?;
+            let args = extract_optional_vector(&args_map, "args", input).unwrap_or_default();
 
             Ok(Operation::Filter {
                 predicate,

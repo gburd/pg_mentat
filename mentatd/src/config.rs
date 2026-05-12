@@ -215,7 +215,7 @@ mod tests {
         let config = Config::from_env();
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
-        assert_eq!(config.database.pool_size, 10);
+        assert_eq!(config.database.pool_size, 100);
         assert!(config.cache.enabled);
         assert_eq!(config.cache.capacity, 1000);
         assert_eq!(config.cache.ttl_secs, 300);
@@ -315,7 +315,7 @@ mod tests {
         let config: Config = toml::from_str(toml_str).expect("should parse");
         assert_eq!(config.server.host, "127.0.0.1");
         assert_eq!(config.server.port, 8080);
-        assert_eq!(config.database.pool_size, 10);
+        assert_eq!(config.database.pool_size, 100);
         // Cache should use Default impl
         assert!(config.cache.enabled);
         assert_eq!(config.cache.capacity, 1000);

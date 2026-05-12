@@ -33,7 +33,7 @@ fn test_parse_list_dbs_catalog_form() {
 
 #[test]
 fn test_parse_create_db() {
-    let req = parse_request("{:op :create-db :db-name \"mydb\"}").expect("parse failed");
+    let req = parse_request("{:op :create-db :args {:db-name \"mydb\"}}").expect("parse failed");
     match req.op {
         Operation::CreateDatabase { db_name } => assert_eq!(db_name, "mydb"),
         _ => panic!("Expected CreateDatabase"),
@@ -43,7 +43,7 @@ fn test_parse_create_db() {
 #[test]
 fn test_parse_create_db_catalog_form() {
     let req =
-        parse_request("{:op :datomic.catalog/create-db :db-name \"testdb\"}").expect("parse failed");
+        parse_request("{:op :datomic.catalog/create-db :args {:db-name \"testdb\"}}").expect("parse failed");
     match req.op {
         Operation::CreateDatabase { db_name } => assert_eq!(db_name, "testdb"),
         _ => panic!("Expected CreateDatabase"),
@@ -62,7 +62,7 @@ fn test_parse_create_db_missing_name() {
 
 #[test]
 fn test_parse_delete_db() {
-    let req = parse_request("{:op :delete-db :db-name \"olddb\"}").expect("parse failed");
+    let req = parse_request("{:op :delete-db :args {:db-name \"olddb\"}}").expect("parse failed");
     match req.op {
         Operation::DeleteDatabase { db_name } => assert_eq!(db_name, "olddb"),
         _ => panic!("Expected DeleteDatabase"),
@@ -81,7 +81,7 @@ fn test_parse_delete_db_missing_name() {
 
 #[test]
 fn test_parse_connect() {
-    let req = parse_request("{:op :connect :db-name \"mydb\"}").expect("parse failed");
+    let req = parse_request("{:op :connect :args {:db-name \"mydb\"}}").expect("parse failed");
     match req.op {
         Operation::Connect { db_name } => assert_eq!(db_name, "mydb"),
         _ => panic!("Expected Connect"),
@@ -95,7 +95,7 @@ fn test_parse_connect() {
 #[test]
 fn test_parse_db() {
     let req = parse_request(
-        "{:op :db :connection-id \"550e8400-e29b-41d4-a716-446655440000\"}",
+        "{:op :db :args {:connection-id \"550e8400-e29b-41d4-a716-446655440000\"}}",
     )
     .expect("parse failed");
     match req.op {
@@ -466,7 +466,7 @@ fn test_parse_extra_fields_ignored() {
 
 #[test]
 fn test_parse_unicode_in_db_name() {
-    let req = parse_request("{:op :create-db :db-name \"日本語db\"}").expect("parse failed");
+    let req = parse_request("{:op :create-db :args {:db-name \"日本語db\"}}").expect("parse failed");
     match req.op {
         Operation::CreateDatabase { db_name } => assert_eq!(db_name, "日本語db"),
         _ => panic!("Expected CreateDatabase"),
