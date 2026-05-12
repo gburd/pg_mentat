@@ -1,5 +1,0 @@
-;; Q1 point lookup: find the user with a given email (returns id + name)
-[:find ?e ?name
- :where
- [?e :user/email "user100000@example.com"]
- [?e :user/name ?name]]

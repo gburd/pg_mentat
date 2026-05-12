@@ -1,8 +1,0 @@
-target/
-.tmp/
-.git/
-*.log
-*.bak
-*.rs.bk
-core.*
-node_modules/

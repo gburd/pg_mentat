@@ -1,7 +1,0 @@
-;; Q4 predicate: open high-priority issues (state = :state/open, priority >= 4)
-[:find ?i ?title ?priority
- :where
- [?i :issue/state :state/open]
- [?i :issue/priority ?priority]
- [?i :issue/title ?title]
- [(>= ?priority 4)]]
