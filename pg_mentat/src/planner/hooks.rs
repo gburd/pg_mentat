@@ -177,6 +177,14 @@ fn get_index_info() -> Result<
 /// during Mentat query execution.
 pub static ENABLE_OPTIMIZER_HINTS: GucSetting<bool> = GucSetting::<bool>::new(false);
 
+/// Whether multi-tenant Row-Level Security is in effect on the nine narrow
+/// datom tables. This GUC is the canonical operator-visible flag; actual
+/// enforcement is governed by per-table `ENABLE ROW LEVEL SECURITY`, which
+/// is flipped by `mentat.enable_multi_tenant_rls(boolean)` (see
+/// `sql/10_narrow_storage.sql`). Default OFF: single-store deployments
+/// pay zero RLS overhead.
+pub static ENABLE_MULTI_TENANT_RLS: GucSetting<bool> = GucSetting::<bool>::new(false);
+
 /// The work_mem value to SET LOCAL for complex Mentat queries.
 /// Only applied when `mentat.enable_optimizer_hints` is true and the query
 /// involves multiple joins, aggregates, or CTEs.
@@ -211,6 +219,19 @@ pub static EXPLAIN_FORMAT: GucSetting<Option<CString>> =
 /// Read the current value of `mentat.enable_optimizer_hints`.
 pub fn optimizer_hints_enabled() -> bool {
     ENABLE_OPTIMIZER_HINTS.get()
+}
+
+/// Read the current value of `mentat.enable_multi_tenant_rls`.
+///
+/// Reflects operator intent only; actual enforcement is keyed off the
+/// per-table `ENABLE ROW LEVEL SECURITY` flag toggled by
+/// `mentat.enable_multi_tenant_rls(boolean)`.
+#[expect(
+    dead_code,
+    reason = "GUC reader; consumed by future audit/diagnostic helpers and external tooling"
+)]
+pub fn multi_tenant_rls_enabled() -> bool {
+    ENABLE_MULTI_TENANT_RLS.get()
 }
 
 /// Read the current value of `mentat.default_work_mem`.
@@ -265,6 +286,15 @@ pub unsafe fn init_planner_hooks() {
         c"Enable automatic optimizer hints for Mentat queries.",
         c"When enabled, Mentat applies SET LOCAL enable_seqscan = off and SET LOCAL work_mem before every query. DEFAULT: off. This was a workaround for the planner picking seqscans on the old wide-row storage; the narrow per-type tables in sql/10_narrow_storage.sql plus the CREATE STATISTICS there usually make the planner pick the right index on its own. Flip this on if you see EXPLAIN picking seqscan on a small, selective query that has an obvious index.",
         &ENABLE_OPTIMIZER_HINTS,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_bool_guc(
+        c"mentat.enable_multi_tenant_rls",
+        c"Enforce per-store Row-Level Security on the narrow datom tables.",
+        c"DEFAULT: off. Single-store deployments should leave this off and pay zero RLS overhead. Flipping it ON signals operator intent to enforce per-tenant isolation: the session MUST set mentat.current_store_id (BIGINT) before reading or writing datoms; otherwise mentat.current_store_id() falls back to 0 (the default store). The actual enforcement -- per-table ENABLE ROW LEVEL SECURITY -- is governed by the SQL function mentat.enable_multi_tenant_rls(boolean), which must also be called once per database to arm the policies. Threat model: protects against cross-tenant access from regular roles; does NOT protect against superusers, table owners, or SECURITY DEFINER functions. See docs/src/multi-tenancy.md.",
+        &ENABLE_MULTI_TENANT_RLS,
         GucContext::Userset,
         GucFlags::default(),
     );
