@@ -2215,10 +2215,11 @@ fn build_sql_from_datalog_enriched(
         let mut union_parts = Vec::new();
 
         for or_clause in &or_join.clauses {
-            // Extract patterns, predicates, and where-functions from each OR branch
+            // Extract patterns, predicates, where-functions, and NOT joins from each OR branch
             let mut arm_patterns: Vec<&edn::query::Pattern> = Vec::new();
             let mut arm_predicates: Vec<&Predicate> = Vec::new();
             let mut arm_where_fns: Vec<&WhereFn> = Vec::new();
+            let mut arm_not_joins: Vec<&edn::query::NotJoin> = Vec::new();
 
             match or_clause {
                 OrWhereClause::Clause(clause) => {
@@ -2226,10 +2227,7 @@ fn build_sql_from_datalog_enriched(
                         WhereClause::Pattern(p) => arm_patterns.push(p),
                         WhereClause::Pred(pred) => arm_predicates.push(pred),
                         WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
-                        WhereClause::NotJoin(_) => return Err(
-                            ":db.error/unsupported-query NOT clauses inside OR branches are not yet supported."
-                                .into(),
-                        ),
+                        WhereClause::NotJoin(nj) => arm_not_joins.push(nj),
                         WhereClause::RuleExpr(_) => return Err(
                             ":db.error/unsupported-query Rule invocations inside OR branches are not yet supported."
                                 .into(),
@@ -2243,10 +2241,7 @@ fn build_sql_from_datalog_enriched(
                             WhereClause::Pattern(p) => arm_patterns.push(p),
                             WhereClause::Pred(pred) => arm_predicates.push(pred),
                             WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
-                            WhereClause::NotJoin(_) => return Err(
-                                ":db.error/unsupported-query NOT clauses inside (or (and ...)) are not yet supported."
-                                    .into(),
-                            ),
+                            WhereClause::NotJoin(nj) => arm_not_joins.push(nj),
                             WhereClause::RuleExpr(_) => return Err(
                                 ":db.error/unsupported-query Rule invocations inside (or (and ...)) are not yet supported."
                                     .into(),
@@ -2317,9 +2312,14 @@ fn build_sql_from_datalog_enriched(
                 }
             }
 
+            // Combine top-level NOT joins with the ones found in this OR arm so
+            // build_extended_pattern_query emits NOT EXISTS subqueries for both.
+            let mut combined_not_joins: Vec<&edn::query::NotJoin> = not_joins.clone();
+            combined_not_joins.extend(arm_not_joins);
+
             let (arm_sql, _arm_var_to_alias) = build_extended_pattern_query(
                 &combined_patterns,
-                &not_joins,
+                &combined_not_joins,
                 &combined_predicates,
                 &arm_fts_joins,
                 &arm_extra_var_bindings,
