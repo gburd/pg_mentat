@@ -824,6 +824,8 @@ mod datalog_feature_tests;
 mod fulltext_bm25_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod or_not_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod ground_collection_tests;
 pub mod error;
 pub mod functions;
 mod operators;

@@ -1967,6 +1967,10 @@ fn build_sql_from_datalog_enriched(
     let mut fts_joins: Vec<FtsJoin> = Vec::new();
     let mut extra_var_bindings: HashMap<String, String> = HashMap::new();
     let mut ground_bindings: HashMap<String, serde_json::Value> = HashMap::new();
+    // Collection / tuple / relation ground forms turn into enriched
+    // InputBinding entries so they can reuse the same JOIN/IN/VALUES plumbing
+    // already used for `:in` clause collection bindings.
+    let mut ground_enriched: Vec<InputBinding> = Vec::new();
     let mut get_else_clauses: Vec<GetElseClause> = Vec::new();
     let mut missing_clauses: Vec<MissingClause> = Vec::new();
 
@@ -2072,65 +2076,139 @@ fn build_sql_from_datalog_enriched(
                 attr_ident,
             });
         } else if op_name == "ground" {
-            // ground injects a constant value as if it were an :in binding,
-            // so the pattern compiler constrains the variable at build time.
-            let bound_var = match &wf.binding {
-                Binding::BindScalar(v) => format!("{}", v),
-                _ => return Err(
-                    ":db.error/unsupported-where-fn ground only supports scalar binding \
-                     [(ground val) ?var]. Collection/tuple/relation ground is not yet supported."
-                        .into(),
-                ),
-            };
-            if wf.args.is_empty() {
-                return Err(
-                    ":db.error/fn-arity ground requires exactly 1 argument. \
-                     Example: [(ground 42) ?x]"
-                        .into(),
-                );
+            // ground injects a constant value (or collection / tuple / relation)
+            // as if it were an :in binding, so the pattern compiler constrains
+            // the variable(s) at build time.
+            if wf.args.len() != 1 {
+                return Err(format!(
+                    ":db.error/fn-arity ground requires exactly 1 argument, got {}. \
+                     Example: [(ground 42) ?x] or [(ground [1 2 3]) [?x ...]]",
+                    wf.args.len()
+                )
+                .into());
             }
-            let ground_value = match &wf.args[0] {
-                FnArg::EntidOrInteger(i) => serde_json::Value::Number((*i).into()),
-                FnArg::Constant(NonIntegerConstant::Text(s)) => {
-                    serde_json::Value::String(s.as_ref().to_string())
+            let arg = &wf.args[0];
+            match &wf.binding {
+                Binding::BindScalar(v) => {
+                    let bound_var = format!("{}", v);
+                    let ground_value = ground_arg_to_json_scalar(arg)?;
+                    // Also make ground vars available as SELECT expressions
+                    // for cases where the variable appears only in :find,
+                    // not in any pattern.
+                    let select_expr = match &ground_value {
+                        serde_json::Value::Number(n) => format!("{}::TEXT", n),
+                        serde_json::Value::String(s) if s.starts_with(':') => {
+                            let p = builder.bind_text(s[1..].to_string());
+                            format!("(':' || {})::TEXT", p)
+                        }
+                        serde_json::Value::String(s) => {
+                            let p = builder.bind_text(s.clone());
+                            format!("{}::TEXT", p)
+                        }
+                        serde_json::Value::Bool(b) => {
+                            format!("'{}'::TEXT", if *b { "true" } else { "false" })
+                        }
+                        _ => "NULL::TEXT".to_string(),
+                    };
+                    extra_var_bindings.insert(bound_var.clone(), select_expr);
+                    ground_bindings.insert(bound_var, ground_value);
                 }
-                FnArg::Constant(NonIntegerConstant::Float(f)) => {
-                    json!(f.into_inner())
+                Binding::BindColl(v) => {
+                    let items = match arg {
+                        FnArg::Vector(items) => items,
+                        _ => return Err(
+                            ":db.error/fn-arg ground collection binding requires a vector value. \
+                             Example: [(ground [v1 v2 v3]) [?x ...]]"
+                                .into(),
+                        ),
+                    };
+                    let mut values: Vec<serde_json::Value> = Vec::with_capacity(items.len());
+                    for it in items {
+                        values.push(ground_arg_to_json_scalar(it)?);
+                    }
+                    ground_check_homogeneous_kind(&values)?;
+                    ground_enriched.push(InputBinding::Collection {
+                        var: format!("{}", v),
+                        values,
+                    });
                 }
-                FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
-                    serde_json::Value::Bool(*b)
+                Binding::BindTuple(vops) => {
+                    let items = match arg {
+                        FnArg::Vector(items) => items,
+                        _ => return Err(
+                            ":db.error/fn-arg ground tuple binding requires a vector value. \
+                             Example: [(ground [v1 v2 v3]) [?x ?y ?z]]"
+                                .into(),
+                        ),
+                    };
+                    if items.len() != vops.len() {
+                        return Err(format!(
+                            ":db.error/fn-arg ground tuple binding requires a {}-tuple value, \
+                             got {} elements. Example: [(ground [v1 v2 v3]) [?x ?y ?z]]",
+                            vops.len(),
+                            items.len()
+                        )
+                        .into());
+                    }
+                    let vars: Vec<String> = vops
+                        .iter()
+                        .map(|vp| match vp {
+                            VariableOrPlaceholder::Variable(v) => format!("{}", v),
+                            VariableOrPlaceholder::Placeholder => "_".to_string(),
+                        })
+                        .collect();
+                    let mut values: Vec<serde_json::Value> = Vec::with_capacity(items.len());
+                    for it in items {
+                        values.push(ground_arg_to_json_scalar(it)?);
+                    }
+                    ground_enriched.push(InputBinding::Tuple { vars, values });
                 }
-                FnArg::IdentOrKeyword(kw) => {
-                    // Keywords are stored with leading colon stripped in Mentat
-                    serde_json::Value::String(format!(":{}", keyword_to_ident(kw)))
+                Binding::BindRel(vops) => {
+                    let outer = match arg {
+                        FnArg::Vector(items) => items,
+                        _ => return Err(
+                            ":db.error/fn-arg ground relation binding requires a vector of \
+                             vectors. Example: [(ground [[v1 v2] [v3 v4]]) [[?x ?y]]]"
+                                .into(),
+                        ),
+                    };
+                    let mut rows: Vec<Vec<serde_json::Value>> = Vec::with_capacity(outer.len());
+                    for row in outer {
+                        let row_items = match row {
+                            FnArg::Vector(rv) => rv,
+                            _ => return Err(
+                                ":db.error/fn-arg ground relation binding requires each row to \
+                                 be a vector. Example: [(ground [[v1 v2] [v3 v4]]) [[?x ?y]]]"
+                                    .into(),
+                            ),
+                        };
+                        if row_items.len() != vops.len() {
+                            return Err(format!(
+                                ":db.error/fn-arg ground relation binding requires {}-tuple \
+                                 rows, got row with {} elements. \
+                                 Example: [(ground [[v1 v2] [v3 v4]]) [[?x ?y]]]",
+                                vops.len(),
+                                row_items.len()
+                            )
+                            .into());
+                        }
+                        let mut row_vals: Vec<serde_json::Value> =
+                            Vec::with_capacity(row_items.len());
+                        for it in row_items {
+                            row_vals.push(ground_arg_to_json_scalar(it)?);
+                        }
+                        rows.push(row_vals);
+                    }
+                    let vars: Vec<String> = vops
+                        .iter()
+                        .map(|vp| match vp {
+                            VariableOrPlaceholder::Variable(v) => format!("{}", v),
+                            VariableOrPlaceholder::Placeholder => "_".to_string(),
+                        })
+                        .collect();
+                    ground_enriched.push(InputBinding::Relation { vars, rows });
                 }
-                _ => {
-                    return Err(
-                        ":db.error/unsupported-where-fn ground argument must be a constant \
-                         (integer, string, float, boolean, or keyword)."
-                            .into(),
-                    );
-                }
-            };
-            // Also make ground vars available as SELECT expressions for cases
-            // where the variable appears only in :find, not in any pattern.
-            let select_expr = match &ground_value {
-                serde_json::Value::Number(n) => format!("{}::TEXT", n),
-                serde_json::Value::String(s) if s.starts_with(':') => {
-                    let p = builder.bind_text(s[1..].to_string());
-                    format!("(':' || {})::TEXT", p)
-                }
-                serde_json::Value::String(s) => {
-                    let p = builder.bind_text(s.clone());
-                    format!("{}::TEXT", p)
-                }
-                serde_json::Value::Bool(b) => {
-                    format!("'{}'::TEXT", if *b { "true" } else { "false" })
-                }
-                _ => "NULL::TEXT".to_string(),
-            };
-            extra_var_bindings.insert(bound_var.clone(), select_expr);
-            ground_bindings.insert(bound_var, ground_value);
+            }
         } else {
             // Arithmetic binding functions: [(* ?age 2) ?double-age]
             if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
@@ -2158,7 +2236,17 @@ fn build_sql_from_datalog_enriched(
 
     // Enriched :in bindings (collection, tuple, relation) are passed from the
     // caller. Scalar bindings flow through the effective_bindings HashMap.
-    let enriched_bindings = enriched_input_bindings;
+    // Collection/tuple/relation forms of `ground` are appended here so they
+    // share the same SQL plumbing (build_collection_in_clause /
+    // build_relation_values_join / per-tuple bind_input_value).
+    let merged_enriched: Vec<InputBinding> = if ground_enriched.is_empty() {
+        enriched_input_bindings.to_vec()
+    } else {
+        let mut m = enriched_input_bindings.to_vec();
+        m.extend(ground_enriched);
+        m
+    };
+    let enriched_bindings: &[InputBinding] = &merged_enriched;
 
     // Build CTEs from rule definitions and rule invocations
     let mut cte_prefix = String::new();
@@ -2751,6 +2839,99 @@ fn build_fulltext_join(
 }
 
 // ============================================================================
+// `ground` where-function helpers (collection / tuple / relation forms)
+// ============================================================================
+
+/// Convert a single `FnArg` from a `(ground ...)` call into a JSON scalar.
+///
+/// Reused for the scalar form, each element of a collection, each cell of a
+/// tuple, and each cell of every row of a relation. Vectors here would mean
+/// nested collections in a non-relation position, which we reject.
+fn ground_arg_to_json_scalar(
+    arg: &FnArg,
+) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
+    match arg {
+        FnArg::EntidOrInteger(i) => Ok(serde_json::Value::Number((*i).into())),
+        FnArg::Constant(NonIntegerConstant::Text(s)) => {
+            Ok(serde_json::Value::String(s.as_ref().to_string()))
+        }
+        FnArg::Constant(NonIntegerConstant::Float(f)) => Ok(json!(f.into_inner())),
+        FnArg::Constant(NonIntegerConstant::Boolean(b)) => Ok(serde_json::Value::Bool(*b)),
+        FnArg::IdentOrKeyword(kw) => {
+            // Match the existing scalar-ground encoding: prefix with ':' so
+            // bind_input_value's keyword branch picks up the value via v_keyword.
+            Ok(serde_json::Value::String(format!(":{}", keyword_to_ident(kw))))
+        }
+        FnArg::Vector(_) => Err(
+            ":db.error/fn-arg ground does not accept nested vectors except in the relation \
+             form [(ground [[v1 v2] [v3 v4]]) [[?x ?y]]]."
+                .into(),
+        ),
+        FnArg::Variable(_) | FnArg::SrcVar(_) => Err(
+            ":db.error/fn-arg ground arguments must be constants (integer, string, float, \
+             boolean, or keyword), not variables or source vars."
+                .into(),
+        ),
+        FnArg::Constant(_) => Err(
+            ":db.error/fn-arg ground argument must be a constant of a supported type \
+             (integer, string, float, boolean, or keyword)."
+                .into(),
+        ),
+    }
+}
+
+/// Reject collection ground bindings whose values mix incompatible kinds.
+///
+/// `[(ground [1 "two"]) [?x ...]]` cannot be compiled into a single typed IN
+/// clause because each datom value column is single-typed. Mixing integers
+/// with floats in the same Datalog collection is also rejected today: the
+/// column would need a common SQL type and a runtime coercion that we do not
+/// implement.
+fn ground_check_homogeneous_kind(
+    values: &[serde_json::Value],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if values.len() <= 1 {
+        return Ok(());
+    }
+    let first_kind = ground_value_kind(&values[0]);
+    for v in &values[1..] {
+        let k = ground_value_kind(v);
+        if k != first_kind {
+            return Err(format!(
+                ":db.error/fn-arg ground does not support mixed-type collections; got an \
+                 element of kind '{}' after an element of kind '{}'. Use a single value type \
+                 (all integers, all strings, all keywords, all floats, or all booleans).",
+                k, first_kind
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Classify a JSON value into the kinds the `ground` collection path supports.
+fn ground_value_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(n) => {
+            if n.is_i64() || n.is_u64() {
+                "integer"
+            } else {
+                "float"
+            }
+        }
+        serde_json::Value::String(s) => {
+            if s.starts_with(':') {
+                "keyword"
+            } else {
+                "string"
+            }
+        }
+        _ => "other",
+    }
+}
+
+// ============================================================================
 // Arithmetic where-function bindings
 // ============================================================================
 
@@ -3041,13 +3222,13 @@ fn build_collection_in_clause(
     }
 }
 
-/// Build a VALUES join for a relation binding `[[?x ?y]]`.
+/// Build a VALUES sub-query for a relation binding `[[?x ?y]]`.
 ///
-/// Generates:
-/// ```sql
-/// INNER JOIN (VALUES ($1::BIGINT, $2::BIGINT), ($3::BIGINT, $4::BIGINT))
-///   AS _in_rel(c0, c1) ON alias_x.e = _in_rel.c0 AND alias_y.e = _in_rel.c1
-/// ```
+/// Generates a FROM-list entry of the form
+/// `(VALUES ($1::BIGINT, $2::TEXT), ($3::BIGINT, $4::TEXT)) AS _in_rel(c0, c1)`,
+/// to be joined implicitly (cross-join) with the surrounding pattern aliases.
+/// The ON-style equalities like `alias_x.e = _in_rel.c0` are returned as a
+/// single WHERE-clause string for the caller to push into `where_clauses`.
 fn build_relation_values_join(
     vars: &[String],
     rows: &[Vec<serde_json::Value>],
@@ -3082,22 +3263,46 @@ fn build_relation_values_join(
     let col_names: Vec<String> = (0..vars.len()).map(|i| format!("c{}", i)).collect();
     let values_alias = "_in_rel";
 
-    // Build the JOIN clause
+    // Build the FROM-list fragment.  We use the implicit cross-join syntax
+    // (comma-separated FROM list) because the surrounding query already joins
+    // pattern aliases with `,`; an explicit `INNER JOIN ... ON` would not be
+    // syntactically valid in that position.  The ON conditions below become
+    // WHERE constraints in the outer scope, which has the same semantics.
     let join_sql = format!(
-        "INNER JOIN (VALUES {}) AS {}({})",
+        "(VALUES {}) AS {}({})",
         value_rows.join(", "),
         values_alias,
         col_names.join(", ")
     );
     joins.push(join_sql);
 
-    // Build ON conditions
+    // Build ON conditions.  When a value-position variable maps to the `v`
+    // placeholder column, pick the typed column (v_long / v_text / v_keyword /
+    // v_double / v_bool) from the first row's i-th cell so the equality is
+    // applied against the column that actually carries the data.
     let mut on_parts = Vec::new();
     for (i, var) in vars.iter().enumerate() {
         if var == "_" {
             continue;
         }
-        if let Some((alias, col)) = var_to_alias.get(var.as_str()) {
+        let Some((alias, col)) = var_to_alias.get(var.as_str()) else {
+            continue;
+        };
+        if *col == "v" {
+            let sample = rows.first().and_then(|r| r.get(i));
+            let typed_col = match sample {
+                Some(serde_json::Value::Number(n)) if n.is_i64() || n.is_u64() => "v_long",
+                Some(serde_json::Value::Number(_)) => "v_double",
+                Some(serde_json::Value::String(s)) if s.starts_with(':') => "v_keyword",
+                Some(serde_json::Value::String(_)) => "v_text",
+                Some(serde_json::Value::Bool(_)) => "v_bool",
+                _ => continue,
+            };
+            on_parts.push(format!(
+                "{}.{} = {}.c{}",
+                alias, typed_col, values_alias, i
+            ));
+        } else {
             on_parts.push(format!("{}.{} = {}.c{}", alias, col, values_alias, i));
         }
     }
