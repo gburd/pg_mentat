@@ -378,7 +378,7 @@ impl FromValue<PatternValuePlace> for PatternValuePlace {
             crate::SpannedValue::PlainSymbol(ref x) => {
                 Variable::from_symbol(x).map(PatternValuePlace::Variable)
             }
-            crate::SpannedValue::Keyword(ref x) if x.is_namespaced() => Some(x.clone().into()),
+            crate::SpannedValue::Keyword(ref x) => Some(x.clone().into()),
             crate::SpannedValue::Boolean(x) => {
                 Some(PatternValuePlace::Constant(NonIntegerConstant::Boolean(x)))
             }
@@ -403,7 +403,6 @@ impl FromValue<PatternValuePlace> for PatternValuePlace {
             // These don't appear in queries.
             crate::SpannedValue::Nil => None,
             crate::SpannedValue::NamespacedSymbol(_) => None,
-            crate::SpannedValue::Keyword(_) => None, // … yet.
             crate::SpannedValue::Map(_) => None,
             crate::SpannedValue::List(_) => None,
             crate::SpannedValue::Set(_) => None,
