@@ -407,6 +407,13 @@ Full documentation is available as an [mdBook](https://gburd.github.io/pg_mentat
 - [Configuration](docs/src/configuration.md)
 - [Datomic Compatibility](docs/src/datomic-compat.md)
 
+### Performance
+
+- [Phase 2 benchmark](docs/benchmarks/phase2.md) — 100K / 300K / 1M
+  datom workload comparing pg_mentat to a hand-written EAV baseline,
+  with raw CSVs, EXPLAIN plans, and a CPU flamegraph. Reproducible
+  via `bash benchmarks/phase2/run.sh`.
+
 ## Contributing
 
 1. Fork the repository
