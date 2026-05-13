@@ -1,0 +1,27 @@
+      relname       | total_size | heap_size  | idx_size 
+--------------------+------------+------------+----------
+ datoms_ref_new     | 64 MB      | 11 MB      | 53 MB
+ ref                | 36 MB      | 9736 kB    | 26 MB
+ datoms_text_new    | 23 MB      | 5544 kB    | 18 MB
+ datoms_keyword_new | 22 MB      | 4600 kB    | 18 MB
+ datoms_instant_new | 18 MB      | 4096 kB    | 14 MB
+ datoms_long_new    | 15 MB      | 4088 kB    | 11 MB
+ keyword            | 11 MB      | 3304 kB    | 8080 kB
+ text               | 7312 kB    | 4136 kB    | 3144 kB
+ long               | 6280 kB    | 2784 kB    | 3472 kB
+ instant            | 6280 kB    | 2784 kB    | 3472 kB
+ stores             | 64 kB      | 8192 bytes | 48 kB
+ schema             | 48 kB      | 8192 bytes | 32 kB
+ idents             | 48 kB      | 8192 bytes | 32 kB
+ attrs              | 48 kB      | 8192 bytes | 32 kB
+ datoms_bytes_new   | 40 kB      | 0 bytes    | 32 kB
+ datoms_double_new  | 32 kB      | 0 bytes    | 32 kB
+ partitions         | 32 kB      | 8192 bytes | 16 kB
+ datoms_boolean_new | 32 kB      | 0 bytes    | 32 kB
+ datoms_uuid_new    | 32 kB      | 0 bytes    | 32 kB
+ materialized_views | 24 kB      | 0 bytes    | 16 kB
+ transactions       | 24 kB      | 8192 bytes | 16 kB
+ fulltext           | 24 kB      | 0 bytes    | 16 kB
+ subscriptions      | 24 kB      | 0 bytes    | 16 kB
+(23 rows)
+

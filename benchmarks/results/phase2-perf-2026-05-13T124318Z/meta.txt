@@ -1,0 +1,16 @@
+date:             2026-05-13T12:44:03Z
+host:             arnold
+kernel:           7.0.4-200.fc44.x86_64
+cpu_model:        12th Gen Intel(R) Core(TM) i9-12900H
+pg_mentat_commit: c8d4af6
+pg_mentat_branch: main
+perf_event_paranoid: -1
+perf_record_seconds: 10
+iters_per_query:  300
+n_users:          50
+n_issues:         1000
+n_labels:         10
+n_datoms:         7574
+perf_data_bytes:  90828
+perf_folded_bytes: 50521
+flame_svg_bytes:  102493
