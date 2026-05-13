@@ -1979,6 +1979,18 @@ fn build_sql_from_datalog_enriched(
         if op_name == "fulltext" {
             let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix, &store_id_param)?;
             fts_joins.push(fj);
+        } else if op_name == "fuzzy-match" {
+            // (fuzzy-match $ :attr "pattern" k)  — approximate-regex search
+            // backed by the optional pg_tre extension. See build_fuzzy_match_join.
+            let fj = build_fuzzy_match_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2431,6 +2443,17 @@ fn build_sql_from_datalog_enriched(
                     let fts_idx = fts_joins.len() + idx;
                     let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix, &arm_store_id_param)?;
                     arm_fts_joins.push(fts_join);
+                } else if op_name == "fuzzy-match" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_fuzzy_match_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(op_name, "*" | "+" | "-" | "/") {
                     // Arithmetic binding functions work the same as in the main query
                     if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
@@ -2439,7 +2462,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, *, +, -, /.",
+                         Supported: fulltext, fuzzy-match, *, +, -, /.",
                         op_name
                     ).into());
                 }
@@ -2880,6 +2903,126 @@ fn build_fulltext_join(
         from_fragment,
         where_parts,
         score_expr,
+    })
+}
+
+/// Build a JOIN-fragment for `(fuzzy-match $ :attr "pattern" k)`.
+///
+/// Compiles to a JOIN against `mentat.datoms_text_new` filtered by the
+/// attribute's entid plus a `v %~~ tre_pattern(<pattern>, <k>)` predicate
+/// from the optional pg_tre extension. If pg_tre is not installed in the
+/// current database the SQL will fail with a clear PostgreSQL error
+/// ("function tre_pattern(...) does not exist"); the caller can either
+/// `CREATE EXTENSION pg_tre;` (PG18+, requires shared_preload_libraries)
+/// or rewrite the query to use `(fulltext ...)` or LIKE/ILIKE predicates.
+///
+/// Binding shape mirrors `fulltext`:
+///   `[(fuzzy-match $ :attr "pat" k) [[?e ?val]]]`
+/// where `?e` is the entity id (text-cast) and `?val` is the matched
+/// string. The store_id and added=true filters are applied automatically;
+/// matches against the partial TRE index `(v) WHERE store_id = 0 AND
+/// a = <entid> AND added` if such an index exists.
+fn build_fuzzy_match_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+    schema_prefix: &str,
+    store_id_param: &str,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    if wf.args.len() != 4 {
+        return Err(format!(
+            ":db.error/fn-arity fuzzy-match requires exactly 4 arguments \
+             ($ attr-keyword pattern-text k-int), got {}. \
+             Example: [(fuzzy-match $ :issue/title \"databse\" 1) [[?e ?val]]]",
+            wf.args.len()
+        )
+        .into());
+    }
+
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(":db.error/fn-arg fuzzy-match second argument must be a keyword \
+                        attribute (e.g. :issue/title). Format: \
+                        (fuzzy-match $ :attr \"pattern\" k)"
+                .into());
+        }
+    };
+
+    let pattern = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(":db.error/fn-arg fuzzy-match third argument must be a string \
+                        pattern (TRE regex syntax with optional `{~k}` edit budgets). \
+                        Format: (fuzzy-match $ :attr \"databse\" 1)"
+                .into());
+        }
+    };
+
+    let k_edits: i64 = match &wf.args[3] {
+        FnArg::EntidOrInteger(i) => *i,
+        _ => {
+            return Err(":db.error/fn-arg fuzzy-match fourth argument must be an integer \
+                        edit budget (k >= 0). Format: (fuzzy-match $ :attr \"pat\" 1)"
+                .into());
+        }
+    };
+    if !(0..=8).contains(&k_edits) {
+        return Err(format!(
+            ":db.error/fn-arg fuzzy-match k must be in [0, 8], got {}. Larger edit \
+             distances are rejected to keep regex compilation bounded.",
+            k_edits
+        )
+        .into());
+    }
+
+    let dt_alias = format!("fuzzy_d{}", fts_idx);
+    let attr_param = builder.bind_text(attr_ident);
+    let pattern_param = builder.bind_text(pattern);
+    let k_param = builder.bind_bigint(k_edits);
+
+    let mut where_parts = Vec::new();
+    where_parts.push(format!(
+        "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
+    ));
+    where_parts.push(format!("{dt_alias}.added = true"));
+    where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
+    // The %~~ operator and tre_pattern() function are provided by the
+    // pg_tre extension. Cast k to int4 since tre_pattern's two-arg variant
+    // takes (text, int4); using ::INT in SQL avoids a binding-OID mismatch.
+    where_parts.push(format!(
+        "{dt_alias}.v %~~ tre_pattern({pattern_param}, ({k_param})::INT)"
+    ));
+
+    // Bind result variables from a [[?e ?val]] relation pattern.
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.v"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts,
+        // pg_tre's %~~ is a boolean operator; there is no built-in score.
+        // Leaving score_expr None means ORDER BY relevance is unavailable
+        // for fuzzy-match results; explicit ORDER BY in the :find / :order
+        // clauses still works on bound variables.
+        score_expr: None,
     })
 }
 

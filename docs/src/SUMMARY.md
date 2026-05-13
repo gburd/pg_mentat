@@ -18,6 +18,7 @@
 # Cookbook
 
 - [JOIN Datalog Results With Postgres Tables](./cookbook-postgres-join.md)
+- [Approximate-Regex Search via pg_tre](./fuzzy-search.md)
 
 ---
 

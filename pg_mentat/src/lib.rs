@@ -827,6 +827,8 @@ pub mod or_not_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod or_rule_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod fuzzy_match_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -927,6 +929,18 @@ extension_sql_file!(
     "../sql/monitoring_views.sql",
     name = "monitoring_views",
     requires = ["view_helpers"],
+);
+
+// Optional pg_tre integration helpers (mentat.has_pg_tre,
+// mentat.create_tre_index, mentat.drop_tre_index). pg_tre itself is a
+// SOFT dependency: this SQL only declares helpers; it does not require
+// pg_tre to be installed at CREATE EXTENSION pg_mentat time. Callers that
+// want approximate-regex indexes opt in by installing pg_tre and calling
+// mentat.create_tre_index('<:attr/ident>'). See docs/src/fuzzy-search.md.
+extension_sql_file!(
+    "../sql/11_pg_tre_helpers.sql",
+    name = "pg_tre_helpers",
+    requires = ["narrow_storage"],
 );
 
 // Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)
