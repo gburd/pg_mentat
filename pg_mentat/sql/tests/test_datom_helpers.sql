@@ -18,7 +18,7 @@ BEGIN;
 -- =========================================================================
 
 -- Define test schema attributes
-SELECT mentat.mentat_transact('[
+SELECT public.mentat_transact('[
   {:db/ident       :person/name
    :db/valueType   :db.type/string
    :db/cardinality :db.cardinality/one
@@ -47,14 +47,14 @@ SELECT mentat.mentat_transact('[
 ]');
 
 -- Insert test data: departments
-SELECT mentat.mentat_transact('[
+SELECT public.mentat_transact('[
   {:db/id "eng"  :dept/name "Engineering"}
   {:db/id "mkt"  :dept/name "Marketing"}
   {:db/id "hr"   :dept/name "Human Resources"}
 ]');
 
 -- Insert test data: people
-SELECT mentat.mentat_transact('[
+SELECT public.mentat_transact('[
   {:db/id "alice" :person/name "Alice"   :person/age 30 :person/email "alice@example.com"}
   {:db/id "bob"   :person/name "Bob"     :person/age 25 :person/email "bob@example.com"}
   {:db/id "carol" :person/name "Carol"   :person/age 35 :person/email "carol@test.org"}
@@ -241,14 +241,14 @@ DECLARE
     cnt INT;
 BEGIN
     -- Assign Alice to Engineering
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :dept/name "Engineering"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO eng_id;
 
     IF eng_id IS NOT NULL THEN
         -- Assign people to departments
-        PERFORM mentat.mentat_transact(format(
+        PERFORM public.mentat_transact(format(
             '[[:db/add [:person/name "Alice"] :person/department %s]
               [:db/add [:person/name "Bob"]   :person/department %s]]',
             eng_id, eng_id
@@ -310,14 +310,14 @@ DECLARE
     cnt INT;
 BEGIN
     -- Get Alice's entity ID
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
 
     IF alice_id IS NOT NULL THEN
         -- Add aliases
-        PERFORM mentat.mentat_transact(format(
+        PERFORM public.mentat_transact(format(
             '[[:db/add %s :person/alias "Ali"]
               [:db/add %s :person/alias "A"]]',
             alice_id, alice_id
@@ -362,7 +362,7 @@ DECLARE
     alice_id BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
@@ -398,23 +398,23 @@ DECLARE
     carol_id BIGINT;
     cnt INT;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
 
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Bob"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO bob_id;
 
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Carol"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO carol_id;
 
     IF alice_id IS NOT NULL AND bob_id IS NOT NULL AND carol_id IS NOT NULL THEN
-        PERFORM mentat.mentat_transact(format(
+        PERFORM public.mentat_transact(format(
             '[[:db/add %s :person/friend %s]
               [:db/add %s :person/friend %s]]',
             alice_id, bob_id, alice_id, carol_id
@@ -459,7 +459,7 @@ DECLARE
     alice_id BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
@@ -494,7 +494,7 @@ DECLARE
     max_tx BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
@@ -526,7 +526,7 @@ DECLARE
     first_tx BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
@@ -565,7 +565,7 @@ DECLARE
     alice_id BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;
@@ -623,7 +623,7 @@ DECLARE
     max_tx BIGINT;
     rec RECORD;
 BEGIN
-    SELECT (mentat.mentat_query(
+    SELECT (public.mentat_query(
         '[:find ?e . :where [?e :person/name "Alice"]]',
         '{}'::jsonb
     )->'results'->0->0)::BIGINT INTO alice_id;

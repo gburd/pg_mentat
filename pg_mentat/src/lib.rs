@@ -486,7 +486,7 @@ extension_sql!(
         col_name TEXT;
     BEGIN
         -- Validate the Datalog query by generating SQL (checks for parse errors)
-        query_info := mentat.mentat_query_sql(datalog, inputs);
+        query_info := public.mentat_query_sql(datalog, inputs);
         columns := query_info->'columns';
         col_count := jsonb_array_length(columns);
 
@@ -515,7 +515,7 @@ extension_sql!(
         END LOOP;
 
         view_sql := format(
-            'CREATE OR REPLACE VIEW %s AS SELECT %s FROM mentat.mentat_query_view(%L, %L::jsonb)',
+            'CREATE OR REPLACE VIEW %s AS SELECT %s FROM public.mentat_query_view(%L, %L::jsonb)',
             safe_view_name,
             col_defs,
             datalog,
@@ -562,7 +562,7 @@ extension_sql!(
         i INTEGER;
         col_name TEXT;
     BEGIN
-        query_info := mentat.mentat_query_sql(datalog, inputs);
+        query_info := public.mentat_query_sql(datalog, inputs);
         columns := query_info->'columns';
         col_count := jsonb_array_length(columns);
 
@@ -589,7 +589,7 @@ extension_sql!(
         END LOOP;
 
         view_sql := format(
-            'CREATE MATERIALIZED VIEW %s AS SELECT %s FROM mentat.mentat_query_view(%L, %L::jsonb)',
+            'CREATE MATERIALIZED VIEW %s AS SELECT %s FROM public.mentat_query_view(%L, %L::jsonb)',
             safe_view_name,
             col_defs,
             datalog,

@@ -12,73 +12,73 @@
 CREATE OR REPLACE FUNCTION mentat.q(query TEXT, inputs JSONB DEFAULT '{}'::JSONB)
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_query(query, inputs); $$;
+AS $$ SELECT public.mentat_query(query, inputs); $$;
 
 -- t: transact EDN data
 CREATE OR REPLACE FUNCTION mentat.t(edn_tx TEXT)
 RETURNS TEXT
 LANGUAGE SQL VOLATILE
-AS $$ SELECT mentat.mentat_transact(edn_tx); $$;
+AS $$ SELECT public.mentat_transact(edn_tx); $$;
 
 -- pull: pull an attribute pattern for a single entity
 CREATE OR REPLACE FUNCTION mentat.pull(pattern TEXT, entity_id BIGINT)
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_pull(pattern, entity_id); $$;
+AS $$ SELECT public.mentat_pull(pattern, entity_id); $$;
 
 -- pull_many: pull an attribute pattern for multiple entities
 CREATE OR REPLACE FUNCTION mentat.pull_many(pattern TEXT, entity_ids BIGINT[])
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_pull_many(pattern, entity_ids); $$;
+AS $$ SELECT public.mentat_pull_many(pattern, entity_ids); $$;
 
 -- entity: get all attributes for an entity as JSON
 CREATE OR REPLACE FUNCTION mentat.entity(entity_id BIGINT)
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_entity(entity_id); $$;
+AS $$ SELECT public.mentat_entity(entity_id); $$;
 
 -- schema: inspect the current schema
 CREATE OR REPLACE FUNCTION mentat.schema()
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_schema(); $$;
+AS $$ SELECT public.mentat_schema(); $$;
 
 -- explain: show the query plan for a Datalog query
 CREATE OR REPLACE FUNCTION mentat.explain(query TEXT, inputs JSONB DEFAULT '{}'::JSONB)
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_explain(query, inputs); $$;
+AS $$ SELECT public.mentat_explain(query, inputs); $$;
 
 -- stats: query execution statistics
 CREATE OR REPLACE FUNCTION mentat.stats()
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_query_stats(); $$;
+AS $$ SELECT public.mentat_query_stats(); $$;
 
 -- slow_queries: find slow mentat functions
 CREATE OR REPLACE FUNCTION mentat.slow_queries(threshold_ms FLOAT8 DEFAULT 100.0)
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_slow_queries(threshold_ms); $$;
+AS $$ SELECT public.mentat_slow_queries(threshold_ms); $$;
 
 -- storage: storage and index statistics
 CREATE OR REPLACE FUNCTION mentat.storage()
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_storage_stats(); $$;
+AS $$ SELECT public.mentat_storage_stats(); $$;
 
 -- cache_stats: prepared statement cache statistics
 CREATE OR REPLACE FUNCTION mentat.cache_stats()
 RETURNS JSONB
 LANGUAGE SQL STABLE
-AS $$ SELECT mentat.mentat_stmt_cache_stats(); $$;
+AS $$ SELECT public.mentat_stmt_cache_stats(); $$;
 
 -- cache_clear: clear the prepared statement cache
 CREATE OR REPLACE FUNCTION mentat.cache_clear()
 RETURNS TEXT
 LANGUAGE SQL VOLATILE
-AS $$ SELECT mentat.mentat_stmt_cache_clear(); $$;
+AS $$ SELECT public.mentat_stmt_cache_clear(); $$;
 
 -- edn_pretty: backwards compatibility alias (moved to public schema)
 CREATE OR REPLACE FUNCTION mentat.edn_pretty(edn_input TEXT, width INT DEFAULT NULL)
