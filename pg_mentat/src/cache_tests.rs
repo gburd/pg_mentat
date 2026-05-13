@@ -21,7 +21,7 @@ mod tests {
 
         // First access triggers bulk load
         let entid = cache.resolve_ident(":db/ident");
-        assert_eq!(entid, Some(1), "Should resolve :db/ident");
+        assert_eq!(entid, Some(10), "Should resolve :db/ident to entid 10");
         assert!(
             cache.is_warmed(),
             "Cache should be warmed after first access"
@@ -33,7 +33,7 @@ mod tests {
         assert!(cache.resolve_ident(":db/unique").is_some());
 
         // Attribute metadata should also be loaded
-        let attr = cache.get_attribute(1);
+        let attr = cache.get_attribute(10);
         assert!(
             attr.is_some(),
             "Attribute metadata should be cached after warming"
@@ -50,11 +50,11 @@ mod tests {
         let cache = crate::cache::get_cache();
 
         // First lookup (cache miss, triggers bulk load)
-        let attr1 = cache.get_attribute(1); // :db/ident
+        let attr1 = cache.get_attribute(10); // :db/ident
         assert!(attr1.is_some(), "Should find :db/ident in schema");
 
         // Second lookup (cache hit, no DB query)
-        let attr2 = cache.get_attribute(1);
+        let attr2 = cache.get_attribute(10);
         assert!(attr2.is_some(), "Should find cached :db/ident");
         assert_eq!(attr1, attr2, "Cached values should be identical");
     }
@@ -69,11 +69,11 @@ mod tests {
 
         // First lookup (triggers bulk load)
         let entid1 = cache.resolve_ident(":db/ident");
-        assert_eq!(entid1, Some(1), "Should resolve :db/ident to entid 1");
+        assert_eq!(entid1, Some(10), "Should resolve :db/ident to entid 10");
 
         // Second lookup (cache hit)
         let entid2 = cache.resolve_ident(":db/ident");
-        assert_eq!(entid2, Some(1), "Should find cached :db/ident");
+        assert_eq!(entid2, Some(10), "Should find cached :db/ident");
     }
 
     /// Test bidirectional ident/entid cache consistency
@@ -86,15 +86,15 @@ mod tests {
 
         // Resolve ident to entid
         let entid = cache.resolve_ident(":db/ident");
-        assert_eq!(entid, Some(1));
+        assert_eq!(entid, Some(10));
 
         // Reverse lookup should be cached
-        let ident = cache.get_ident(1);
+        let ident = cache.get_ident(10);
         assert_eq!(ident, Some(":db/ident".to_string()));
 
         // Both directions should be in cache now
         let entid2 = cache.resolve_ident(":db/ident");
-        assert_eq!(entid2, Some(1));
+        assert_eq!(entid2, Some(10));
     }
 
     /// Test cache invalidation after schema changes
@@ -107,7 +107,7 @@ mod tests {
 
         // Populate cache
         let _ = cache.resolve_ident(":db/ident");
-        let _ = cache.get_attribute(1);
+        let _ = cache.get_attribute(10);
         assert!(cache.is_warmed(), "Cache should be warmed");
 
         // Invalidate cache
@@ -119,10 +119,10 @@ mod tests {
 
         // Next lookup re-warms the cache
         let entid = cache.resolve_ident(":db/ident");
-        assert_eq!(entid, Some(1), "Should still resolve after invalidation");
+        assert_eq!(entid, Some(10), "Should still resolve after invalidation");
         assert!(cache.is_warmed(), "Cache should be re-warmed after access");
 
-        let attr = cache.get_attribute(1);
+        let attr = cache.get_attribute(10);
         assert!(
             attr.is_some(),
             "Should still find attribute after invalidation"
@@ -224,17 +224,17 @@ mod tests {
 
         // Populate cache
         let _ = cache.resolve_ident(":db/ident");
-        let _ = cache.get_attribute(1);
+        let _ = cache.get_attribute(10);
 
         // Multiple concurrent reads (in single-threaded test, just verify no panics)
         for _ in 0..100 {
             let _ = cache.resolve_ident(":db/ident");
-            let _ = cache.get_ident(1);
-            let _ = cache.get_attribute(1);
+            let _ = cache.get_ident(10);
+            let _ = cache.get_attribute(10);
         }
 
         // Verify cache still works
-        assert_eq!(cache.resolve_ident(":db/ident"), Some(1));
+        assert_eq!(cache.resolve_ident(":db/ident"), Some(10));
     }
 
     /// Test cache behavior across schema transactions

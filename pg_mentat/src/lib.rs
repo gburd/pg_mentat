@@ -2125,7 +2125,7 @@ mod tests {
         setup_test_db().expect("Failed to setup test db");
         bootstrap_schema().expect("Failed to bootstrap schema");
 
-        // :db/ident attribute has entid 1; querying for it by two different
+        // :db/ident attribute has entid 10; querying for it by two different
         // values that both resolve to the same entity should deduplicate.
         let result = Spi::get_one::<String>(
             "SELECT mentat_query(

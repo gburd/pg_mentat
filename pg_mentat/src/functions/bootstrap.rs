@@ -4,142 +4,179 @@ use pgrx::prelude::*;
 /// Bootstrap the core Mentat schema.
 /// This function initializes the core schema attributes (:db/ident, :db/valueType, etc.)
 /// and should be called automatically when the extension is created.
+///
+/// Entid numbering MUST match pg_mentat/sql/06_bootstrap_data.sql:
+///   10-19: Core schema attributes (:db/ident, :db/valueType, etc.)
+///   50:    :db/txInstant
+///   60-61: :db.install/partition, :db.install/attribute
+///   70-78: :db.type/* value type enum entities
+///   80-81: :db.cardinality/one, :db.cardinality/many
+///   82-83: :db.unique/value, :db.unique/identity
+///   90-92: :db.part/db, :db.part/user, :db.part/tx
 #[pg_extern]
 pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Spi::run(
         r"
-        INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed) VALUES
+        INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed, fulltext, component, no_history) VALUES
             -- Core schema attributes
-            (1, ':db/ident', 'keyword', 'one', 'identity', true),
-            (2, ':db/valueType', 'ref', 'one', NULL, false),
-            (3, ':db/cardinality', 'ref', 'one', NULL, false),
-            (4, ':db/unique', 'ref', 'one', NULL, false),
-            (5, ':db/doc', 'string', 'one', NULL, false),
-            (6, ':db/isComponent', 'boolean', 'one', NULL, false),
-            (7, ':db/fulltext', 'boolean', 'one', NULL, false),
-            (8, ':db/index', 'boolean', 'one', NULL, false),
-            (9, ':db/noHistory', 'boolean', 'one', NULL, false),
-            (10, ':db/txInstant', 'instant', 'one', NULL, true),
+            (10, ':db/ident', 'keyword', 'one', 'identity', TRUE, FALSE, FALSE, FALSE),
+            (11, ':db/valueType', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (12, ':db/cardinality', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (13, ':db/unique', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (14, ':db/index', 'boolean', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (15, ':db/fulltext', 'boolean', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (16, ':db/component', 'boolean', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (17, ':db/noHistory', 'boolean', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (18, ':db/isComponent', 'boolean', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (19, ':db/doc', 'string', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            -- Transaction attributes
+            (50, ':db/txInstant', 'instant', 'one', NULL, TRUE, FALSE, FALSE, FALSE),
+            -- Partition attributes
+            (60, ':db.install/partition', 'ref', 'many', NULL, FALSE, FALSE, FALSE, FALSE),
+            (61, ':db.install/attribute', 'ref', 'many', NULL, FALSE, FALSE, FALSE, FALSE),
+            -- Value type references
+            (70, ':db.type/ref', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (71, ':db.type/keyword', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (72, ':db.type/long', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (73, ':db.type/double', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (74, ':db.type/string', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (75, ':db.type/boolean', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (76, ':db.type/instant', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (77, ':db.type/uuid', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (78, ':db.type/bytes', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            -- Cardinality references
+            (80, ':db.cardinality/one', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (81, ':db.cardinality/many', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            -- Unique references
+            (82, ':db.unique/value', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (83, ':db.unique/identity', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            -- Partition entities
+            (90, ':db.part/db', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (91, ':db.part/user', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE),
+            (92, ':db.part/tx', 'ref', 'one', NULL, FALSE, FALSE, FALSE, FALSE)
+        ON CONFLICT (entid) DO NOTHING;
 
-            -- Value type enum entities (used as values for :db/valueType)
-            (20, ':db.type/ref', 'ref', 'one', NULL, false),
-            (21, ':db.type/keyword', 'ref', 'one', NULL, false),
-            (22, ':db.type/long', 'ref', 'one', NULL, false),
-            (23, ':db.type/double', 'ref', 'one', NULL, false),
-            (24, ':db.type/string', 'ref', 'one', NULL, false),
-            (25, ':db.type/boolean', 'ref', 'one', NULL, false),
-            (26, ':db.type/instant', 'ref', 'one', NULL, false),
-            (27, ':db.type/uuid', 'ref', 'one', NULL, false),
-            (28, ':db.type/bytes', 'ref', 'one', NULL, false),
-
-            -- Cardinality enum entities (used as values for :db/cardinality)
-            (30, ':db.cardinality/one', 'ref', 'one', NULL, false),
-            (31, ':db.cardinality/many', 'ref', 'one', NULL, false),
-
-            -- Unique constraint enum entities (used as values for :db/unique)
-            (32, ':db.unique/value', 'ref', 'one', NULL, false),
-            (33, ':db.unique/identity', 'ref', 'one', NULL, false)
-        ON CONFLICT DO NOTHING;
-
-        INSERT INTO mentat.idents (ident, entid) VALUES
-            (':db/ident', 1),
-            (':db/valueType', 2),
-            (':db/cardinality', 3),
-            (':db/unique', 4),
-            (':db/doc', 5),
-            (':db/isComponent', 6),
-            (':db/fulltext', 7),
-            (':db/index', 8),
-            (':db/noHistory', 9),
-            (':db/txInstant', 10),
-            -- Value type enums
-            (':db.type/ref', 20),
-            (':db.type/keyword', 21),
-            (':db.type/long', 22),
-            (':db.type/double', 23),
-            (':db.type/string', 24),
-            (':db.type/boolean', 25),
-            (':db.type/instant', 26),
-            (':db.type/uuid', 27),
-            (':db.type/bytes', 28),
-            -- Cardinality enums
-            (':db.cardinality/one', 30),
-            (':db.cardinality/many', 31),
-            -- Unique constraint enums
-            (':db.unique/value', 32),
-            (':db.unique/identity', 33)
+        INSERT INTO mentat.idents (ident, entid)
+        SELECT ident, entid FROM mentat.schema
+        WHERE entid < 100
         ON CONFLICT (ident) DO NOTHING;
 
-        -- Bootstrap datoms in the datoms table so queries can find them.
-        -- a=1 is :db/ident (keyword type_tag=8, stored in v_keyword)
-        -- a=2 is :db/valueType (ref type_tag=0, stored in v_ref as entity ID)
-        -- a=3 is :db/cardinality (ref type_tag=0, stored in v_ref as entity ID)
+        -- Initialize default partitions
+        INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
+            ('db.part/db', 0, 10000, 100, FALSE),
+            ('db.part/user', 10000, 1000000, 10000, FALSE),
+            ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+        ON CONFLICT (name) DO NOTHING;
+
+        -- Advance sequences past bootstrap-allocated IDs.
+        SELECT setval('mentat.partition_db_seq', 100, false);
+
+        -- Bootstrap datoms: EAV facts describing each bootstrap entity.
+        -- a=10 is :db/ident (keyword type_tag=8, stored in v_keyword)
+        -- a=11 is :db/valueType (ref type_tag=0, stored in v_ref as entity ID)
+        -- a=12 is :db/cardinality (ref type_tag=0, stored in v_ref as entity ID)
+        -- a=14 is :db/index (boolean type_tag=1, stored in v_bool)
+        -- a=13 is :db/unique (ref type_tag=0, stored in v_ref)
         -- tx=1000000 is the bootstrap transaction.
 
-        -- :db/ident datoms (a=1, keyword stored in v_keyword)
+        -- :db/ident datoms (a=10, keyword stored in v_keyword)
         INSERT INTO mentat.datoms (e, a, value_type_tag, v_keyword, tx, added) VALUES
-            (1,  1, 8, 'db/ident',            1000000, true),
-            (2,  1, 8, 'db/valueType',        1000000, true),
-            (3,  1, 8, 'db/cardinality',      1000000, true),
-            (4,  1, 8, 'db/unique',            1000000, true),
-            (5,  1, 8, 'db/doc',               1000000, true),
-            (6,  1, 8, 'db/isComponent',       1000000, true),
-            (7,  1, 8, 'db/fulltext',          1000000, true),
-            (8,  1, 8, 'db/index',             1000000, true),
-            (9,  1, 8, 'db/noHistory',         1000000, true),
-            (10, 1, 8, 'db/txInstant',         1000000, true),
-            (20, 1, 8, 'db.type/ref',          1000000, true),
-            (21, 1, 8, 'db.type/keyword',      1000000, true),
-            (22, 1, 8, 'db.type/long',         1000000, true),
-            (23, 1, 8, 'db.type/double',       1000000, true),
-            (24, 1, 8, 'db.type/string',       1000000, true),
-            (25, 1, 8, 'db.type/boolean',      1000000, true),
-            (26, 1, 8, 'db.type/instant',      1000000, true),
-            (27, 1, 8, 'db.type/uuid',         1000000, true),
-            (28, 1, 8, 'db.type/bytes',        1000000, true),
-            (30, 1, 8, 'db.cardinality/one',   1000000, true),
-            (31, 1, 8, 'db.cardinality/many',  1000000, true),
-            (32, 1, 8, 'db.unique/value',      1000000, true),
-            (33, 1, 8, 'db.unique/identity',   1000000, true)
+            (10, 10, 8, 'db/ident',               1000000, true),
+            (11, 10, 8, 'db/valueType',            1000000, true),
+            (12, 10, 8, 'db/cardinality',          1000000, true),
+            (13, 10, 8, 'db/unique',               1000000, true),
+            (14, 10, 8, 'db/index',                1000000, true),
+            (15, 10, 8, 'db/fulltext',             1000000, true),
+            (16, 10, 8, 'db/component',            1000000, true),
+            (17, 10, 8, 'db/noHistory',            1000000, true),
+            (18, 10, 8, 'db/isComponent',          1000000, true),
+            (19, 10, 8, 'db/doc',                  1000000, true),
+            (50, 10, 8, 'db/txInstant',            1000000, true),
+            (60, 10, 8, 'db.install/partition',    1000000, true),
+            (61, 10, 8, 'db.install/attribute',    1000000, true),
+            (70, 10, 8, 'db.type/ref',             1000000, true),
+            (71, 10, 8, 'db.type/keyword',         1000000, true),
+            (72, 10, 8, 'db.type/long',            1000000, true),
+            (73, 10, 8, 'db.type/double',          1000000, true),
+            (74, 10, 8, 'db.type/string',          1000000, true),
+            (75, 10, 8, 'db.type/boolean',         1000000, true),
+            (76, 10, 8, 'db.type/instant',         1000000, true),
+            (77, 10, 8, 'db.type/uuid',            1000000, true),
+            (78, 10, 8, 'db.type/bytes',           1000000, true),
+            (80, 10, 8, 'db.cardinality/one',      1000000, true),
+            (81, 10, 8, 'db.cardinality/many',     1000000, true),
+            (82, 10, 8, 'db.unique/value',         1000000, true),
+            (83, 10, 8, 'db.unique/identity',      1000000, true),
+            (90, 10, 8, 'db.part/db',              1000000, true),
+            (91, 10, 8, 'db.part/user',            1000000, true),
+            (92, 10, 8, 'db.part/tx',              1000000, true)
         ON CONFLICT DO NOTHING;
 
-        -- :db/valueType datoms (a=2, ref stored in v_ref as entity ID)
+        -- :db/valueType datoms (a=11, ref stored in v_ref as entity ID)
         INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-            -- Entity 1 (:db/ident) -> :db.type/keyword (entity 21)
-            (1,  2, 0, 21, 1000000, true),
-            -- Entity 2 (:db/valueType) -> :db.type/ref (entity 20)
-            (2,  2, 0, 20, 1000000, true),
-            -- Entity 3 (:db/cardinality) -> :db.type/ref (entity 20)
-            (3,  2, 0, 20, 1000000, true),
-            -- Entity 4 (:db/unique) -> :db.type/ref (entity 20)
-            (4,  2, 0, 20, 1000000, true),
-            -- Entity 5 (:db/doc) -> :db.type/string (entity 24)
-            (5,  2, 0, 24, 1000000, true),
-            -- Entity 6 (:db/isComponent) -> :db.type/boolean (entity 25)
-            (6,  2, 0, 25, 1000000, true),
-            -- Entity 7 (:db/fulltext) -> :db.type/boolean (entity 25)
-            (7,  2, 0, 25, 1000000, true),
-            -- Entity 8 (:db/index) -> :db.type/boolean (entity 25)
-            (8,  2, 0, 25, 1000000, true),
-            -- Entity 9 (:db/noHistory) -> :db.type/boolean (entity 25)
-            (9,  2, 0, 25, 1000000, true),
-            -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26)
-            (10, 2, 0, 26, 1000000, true)
+            -- Entity 10 (:db/ident) -> :db.type/keyword (entity 71)
+            (10, 11, 0, 71, 1000000, true),
+            -- Entity 11 (:db/valueType) -> :db.type/ref (entity 70)
+            (11, 11, 0, 70, 1000000, true),
+            -- Entity 12 (:db/cardinality) -> :db.type/ref (entity 70)
+            (12, 11, 0, 70, 1000000, true),
+            -- Entity 13 (:db/unique) -> :db.type/ref (entity 70)
+            (13, 11, 0, 70, 1000000, true),
+            -- Entity 14 (:db/index) -> :db.type/boolean (entity 75)
+            (14, 11, 0, 75, 1000000, true),
+            -- Entity 15 (:db/fulltext) -> :db.type/boolean (entity 75)
+            (15, 11, 0, 75, 1000000, true),
+            -- Entity 16 (:db/component) -> :db.type/boolean (entity 75)
+            (16, 11, 0, 75, 1000000, true),
+            -- Entity 17 (:db/noHistory) -> :db.type/boolean (entity 75)
+            (17, 11, 0, 75, 1000000, true),
+            -- Entity 18 (:db/isComponent) -> :db.type/boolean (entity 75)
+            (18, 11, 0, 75, 1000000, true),
+            -- Entity 19 (:db/doc) -> :db.type/string (entity 74)
+            (19, 11, 0, 74, 1000000, true),
+            -- Entity 50 (:db/txInstant) -> :db.type/instant (entity 76)
+            (50, 11, 0, 76, 1000000, true),
+            -- Entity 60 (:db.install/partition) -> :db.type/ref (entity 70)
+            (60, 11, 0, 70, 1000000, true),
+            -- Entity 61 (:db.install/attribute) -> :db.type/ref (entity 70)
+            (61, 11, 0, 70, 1000000, true)
         ON CONFLICT DO NOTHING;
 
-        -- :db/cardinality datoms (a=3, ref stored in v_ref as entity ID)
-        -- All core attrs have cardinality :db.cardinality/one (entity 30)
+        -- :db/cardinality datoms (a=12, ref stored in v_ref as entity ID)
         INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-            (1,  3, 0, 30, 1000000, true),
-            (2,  3, 0, 30, 1000000, true),
-            (3,  3, 0, 30, 1000000, true),
-            (4,  3, 0, 30, 1000000, true),
-            (5,  3, 0, 30, 1000000, true),
-            (6,  3, 0, 30, 1000000, true),
-            (7,  3, 0, 30, 1000000, true),
-            (8,  3, 0, 30, 1000000, true),
-            (9,  3, 0, 30, 1000000, true),
-            (10, 3, 0, 30, 1000000, true)
+            -- Core attrs: cardinality one (entity 80)
+            (10, 12, 0, 80, 1000000, true),
+            (11, 12, 0, 80, 1000000, true),
+            (12, 12, 0, 80, 1000000, true),
+            (13, 12, 0, 80, 1000000, true),
+            (14, 12, 0, 80, 1000000, true),
+            (15, 12, 0, 80, 1000000, true),
+            (16, 12, 0, 80, 1000000, true),
+            (17, 12, 0, 80, 1000000, true),
+            (18, 12, 0, 80, 1000000, true),
+            (19, 12, 0, 80, 1000000, true),
+            (50, 12, 0, 80, 1000000, true),
+            -- install attrs: cardinality many (entity 81)
+            (60, 12, 0, 81, 1000000, true),
+            (61, 12, 0, 81, 1000000, true)
+        ON CONFLICT DO NOTHING;
+
+        -- :db/unique datoms (a=13, ref stored in v_ref)
+        -- :db/ident has unique identity (entity 83)
+        INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
+            (10, 13, 0, 83, 1000000, true)
+        ON CONFLICT DO NOTHING;
+
+        -- :db/index datoms (a=14, boolean stored in v_bool)
+        -- :db/ident and :db/txInstant are indexed
+        INSERT INTO mentat.datoms (e, a, value_type_tag, v_bool, tx, added) VALUES
+            (10, 14, 1, true, 1000000, true),
+            (50, 14, 1, true, 1000000, true)
+        ON CONFLICT DO NOTHING;
+
+        -- Record bootstrap transaction
+        INSERT INTO mentat.transactions (tx, tx_instant)
+        VALUES (1000000, '1970-01-01T00:00:00Z')
         ON CONFLICT DO NOTHING;
         ",
     )?;
