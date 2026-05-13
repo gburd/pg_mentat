@@ -2248,14 +2248,49 @@ fn build_sql_from_datalog_enriched(
     };
     let enriched_bindings: &[InputBinding] = &merged_enriched;
 
-    // Build CTEs from rule definitions and rule invocations
+    // Build CTEs from rule definitions and rule invocations.
+    //
+    // Rule invocations may live at the top level OR inside an OR branch.
+    // We must emit one CTE definition per unique rule referenced ANYWHERE
+    // in the query, so the union below scans both. Per-scope `RuleCteInfo`
+    // (which JOINs and which variable bindings the consumer needs) is
+    // computed separately by `make_per_arm_rule_cte_info`.
+    let mut all_rule_invocations: Vec<&RuleInvocation> = rule_invocations.clone();
+    if let Some(or_join) = or_joins.first() {
+        for or_clause in &or_join.clauses {
+            match or_clause {
+                OrWhereClause::Clause(WhereClause::RuleExpr(ri)) => {
+                    all_rule_invocations.push(ri);
+                }
+                OrWhereClause::And(clauses) => {
+                    for c in clauses {
+                        if let WhereClause::RuleExpr(ri) = c {
+                            all_rule_invocations.push(ri);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     let mut cte_prefix = String::new();
     let mut rule_cte_info: Option<RuleCteInfo> = None;
-    if !rule_invocations.is_empty() && !parsed.rules.is_empty() {
-        let (cte_sql, cte_info) =
-            build_rule_ctes(&parsed.rules, &rule_invocations, builder, temporal, schema_prefix, &store_id_param)?;
+    if !all_rule_invocations.is_empty() && !parsed.rules.is_empty() {
+        let (cte_sql, _cte_info) = build_rule_ctes(
+            &parsed.rules,
+            &all_rule_invocations,
+            builder,
+            temporal,
+            schema_prefix,
+            &store_id_param,
+        )?;
         cte_prefix = cte_sql;
-        rule_cte_info = Some(cte_info);
+        // The base scope (the query's main FROM list) sees only top-level
+        // invocations. Each OR arm computes its own scope below.
+        if !rule_invocations.is_empty() {
+            rule_cte_info = Some(make_per_arm_rule_cte_info(&rule_invocations));
+        }
     }
 
     // Build the base query (skip if we only have OR clauses)
@@ -2308,6 +2343,7 @@ fn build_sql_from_datalog_enriched(
             let mut arm_predicates: Vec<&Predicate> = Vec::new();
             let mut arm_where_fns: Vec<&WhereFn> = Vec::new();
             let mut arm_not_joins: Vec<&edn::query::NotJoin> = Vec::new();
+            let mut arm_rule_invocations: Vec<&RuleInvocation> = Vec::new();
 
             match or_clause {
                 OrWhereClause::Clause(clause) => {
@@ -2316,10 +2352,7 @@ fn build_sql_from_datalog_enriched(
                         WhereClause::Pred(pred) => arm_predicates.push(pred),
                         WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
                         WhereClause::NotJoin(nj) => arm_not_joins.push(nj),
-                        WhereClause::RuleExpr(_) => return Err(
-                            ":db.error/unsupported-query Rule invocations inside OR branches are not yet supported."
-                                .into(),
-                        ),
+                        WhereClause::RuleExpr(ri) => arm_rule_invocations.push(ri),
                         _ => {} // Ignore type annotations
                     }
                 }
@@ -2330,25 +2363,37 @@ fn build_sql_from_datalog_enriched(
                             WhereClause::Pred(pred) => arm_predicates.push(pred),
                             WhereClause::WhereFn(wf) => arm_where_fns.push(wf),
                             WhereClause::NotJoin(nj) => arm_not_joins.push(nj),
-                            WhereClause::RuleExpr(_) => return Err(
-                                ":db.error/unsupported-query Rule invocations inside (or (and ...)) are not yet supported."
-                                    .into(),
-                            ),
+                            WhereClause::RuleExpr(ri) => arm_rule_invocations.push(ri),
                             _ => {} // Ignore type annotations
                         }
                     }
                 }
             };
 
-            // Check groundedness: all variables in predicates must be bound by patterns
+            // Per-arm rule invocations: top-level invocations are visible
+            // in every arm (the base scope is implicitly AND-ed with each
+            // branch), plus this arm's own invocations.
+            let mut combined_rule_invocations: Vec<&RuleInvocation> = rule_invocations.clone();
+            combined_rule_invocations.extend(arm_rule_invocations.iter().copied());
+            let arm_rule_cte_info: Option<RuleCteInfo> = if combined_rule_invocations.is_empty() {
+                None
+            } else {
+                Some(make_per_arm_rule_cte_info(&combined_rule_invocations))
+            };
+
+            // Check groundedness: all variables in predicates must be
+            // bound by patterns OR by a rule invocation in scope (top-level
+            // or arm-local). Rule invocations bind their argument variables.
             for pred in &arm_predicates {
                 for arg in &pred.args {
                     if let FnArg::Variable(v) = arg {
                         let var_name = format!("{}", v);
-                        // Check if this variable will be bound by patterns in this branch
                         let bound_in_base = pattern_clauses.iter().any(|p| pattern_binds_var(p, &var_name));
                         let bound_in_arm = arm_patterns.iter().any(|p| pattern_binds_var(p, &var_name));
-                        if !bound_in_base && !bound_in_arm {
+                        let bound_in_rule = combined_rule_invocations.iter().any(|ri| {
+                            ri.args.iter().any(|a| matches!(a, FnArg::Variable(rv) if format!("{}", rv) == var_name))
+                        });
+                        if !bound_in_base && !bound_in_arm && !bound_in_rule {
                             return Err(format!(
                                 ":db.error/unbound-var Variable '{}' used in predicate inside OR branch \
                                  is not bound by any pattern. All variables in predicates must appear in \
@@ -2415,7 +2460,7 @@ fn build_sql_from_datalog_enriched(
                 &parsed.find_spec,
                 &mut arm_builder,
                 temporal,
-                &rule_cte_info,
+                &arm_rule_cte_info,
                 &effective_bindings,
                 &enriched_bindings,
                 schema_prefix,
@@ -3352,7 +3397,9 @@ fn build_extended_pattern_query(
 
     // Pre-populate var_to_alias with rule CTE bindings
     if let Some(ref cte_info) = rule_cte_info {
-        joins.push(cte_info.from_fragment.clone());
+        for frag in &cte_info.from_fragments {
+            joins.push(frag.clone());
+        }
         for (var_name, (alias, col)) in &cte_info.var_to_col {
             var_to_alias.insert(var_name.clone(), (alias.clone(), col));
         }
@@ -4548,10 +4595,17 @@ fn pred_arg_to_sql(
 // ============================================================================
 
 /// Information about a rule CTE needed to join it into the main query.
+///
+/// `from_fragments` is a Vec because a single SQL query may need to JOIN
+/// against multiple rule CTEs simultaneously (e.g. an OR branch that
+/// invokes both `(adult ?p)` and `(parent ?p ?c)` rules). All entries are
+/// comma-joinable rule-table names like `ancestor` or `adult`.
 struct RuleCteInfo {
-    /// FROM fragment, e.g., "ancestor"
-    from_fragment: String,
-    /// Map of variable name to (alias, column_name) for var_to_alias
+    /// FROM-list fragments, e.g. `["ancestor", "adult"]`. Each fragment
+    /// is a comma-joinable expression added to the consuming query's
+    /// FROM list.
+    from_fragments: Vec<String>,
+    /// Map of variable name to (alias, column_name) for var_to_alias.
     var_to_col: HashMap<String, (String, &'static str)>,
 }
 
@@ -4570,10 +4624,37 @@ fn build_rule_ctes(
 ) -> Result<(String, RuleCteInfo), Box<dyn std::error::Error + Send + Sync>> {
     let mut cte_parts = Vec::new();
     let mut var_to_col: HashMap<String, (String, &'static str)> = HashMap::new();
-    let mut cte_table_name = String::new();
+    // Track every rule whose CTE we emit; the same rule invoked multiple
+    // times produces only one CTE definition and one FROM-list entry.
+    let mut emitted_rule_names: HashSet<String> = HashSet::new();
+    let mut from_fragments: Vec<String> = Vec::new();
+    // RECURSIVE on any one CTE in a WITH list applies to all of them in
+    // PostgreSQL, so a single global flag drives whether the WITH prefix is
+    // `WITH RECURSIVE` or just `WITH`.
+    let mut any_recursive = false;
 
     for invocation in invocations {
         let rule_name = invocation.name.0.as_str();
+
+        // Bind invocation arguments to CTE columns BEFORE the CTE-emit
+        // dedupe gate; same-rule-different-args is legal and we still need
+        // to map the new args.
+        static CTE_COLS: [&str; 8] = [
+            "col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7",
+        ];
+        for (i, arg) in invocation.args.iter().enumerate() {
+            if let FnArg::Variable(v) = arg {
+                if i < CTE_COLS.len() {
+                    let var_name = format!("{}", v);
+                    var_to_col.insert(var_name, (rule_name.to_string(), CTE_COLS[i]));
+                }
+            }
+        }
+
+        // CTE definition + FROM-list entry: emit at most once per rule name.
+        if !emitted_rule_names.insert(rule_name.to_string()) {
+            continue;
+        }
 
         // Find the matching rule definition
         let rule = rules
@@ -4623,39 +4704,74 @@ fn build_rule_ctes(
             )
         });
 
-        let recursive_kw = if is_recursive { "RECURSIVE " } else { "" };
-
+        // Each cte_part is just the inner CTE definition
+        // (no WITH prefix); a single WITH is added at the end.
+        // RECURSIVE on any one CTE in a WITH list applies to all of them in
+        // PostgreSQL, so a single global flag is correct.
         cte_parts.push(format!(
-            "WITH {recursive_kw}{rule_name}({cte_col_list}) AS ({cte_body})"
+            "{rule_name}({cte_col_list}) AS ({cte_body})"
         ));
-
-        // Bind invocation arguments to CTE columns
-        // The invocation (ancestor ?anc ?desc) binds ?anc -> ancestor.col0, ?desc -> ancestor.col1
-        static CTE_COLS: [&str; 8] = [
-            "col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7",
-        ];
-        for (i, arg) in invocation.args.iter().enumerate() {
-            if let FnArg::Variable(v) = arg {
-                if i < CTE_COLS.len() {
-                    let var_name = format!("{}", v);
-                    var_to_col.insert(var_name, (rule_name.to_string(), CTE_COLS[i]));
-                }
-            }
+        if is_recursive {
+            any_recursive = true;
         }
 
-        // Store the CTE table name for the FROM fragment
-        cte_table_name = rule_name.to_string();
+        from_fragments.push(rule_name.to_string());
     }
 
-    // Join all CTEs (in practice we only support one CTE for now)
-    let cte_sql = cte_parts.join(", ");
+    // Combine into a single `WITH [RECURSIVE] cte1 AS (...), cte2 AS (...)`
+    // prefix.  Multiple `WITH ..., WITH ...` is not legal Postgres SQL.
+    let cte_sql = if cte_parts.is_empty() {
+        String::new()
+    } else {
+        let recursive_kw = if any_recursive { "RECURSIVE " } else { "" };
+        format!("WITH {recursive_kw}{}", cte_parts.join(", "))
+    };
 
     let cte_info = RuleCteInfo {
-        from_fragment: cte_table_name,
+        from_fragments,
         var_to_col,
     };
 
     Ok((cte_sql, cte_info))
+}
+
+/// Build a per-scope `RuleCteInfo` from a slice of rule invocations.
+///
+/// The CTE *definitions* (the WITH RECURSIVE rule_name(...) AS (...) text)
+/// are emitted once per query by `build_rule_ctes` over the union of all
+/// invocations. This helper is the per-scope view: it produces the
+/// `RuleCteInfo` that a particular consumer (the base query, or an
+/// individual OR-arm) needs in order to JOIN the right rule tables and
+/// bind the right variables.
+///
+/// `from_fragments` includes each unique rule name referenced by
+/// `invocations`. `var_to_col` maps each invocation argument variable to
+/// the corresponding `rule_name.colN` reference.
+fn make_per_arm_rule_cte_info(invocations: &[&RuleInvocation]) -> RuleCteInfo {
+    static CTE_COLS: [&str; 8] = [
+        "col0", "col1", "col2", "col3", "col4", "col5", "col6", "col7",
+    ];
+    let mut from_fragments: Vec<String> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut var_to_col: HashMap<String, (String, &'static str)> = HashMap::new();
+    for invocation in invocations {
+        let rule_name = invocation.name.0.as_str().to_string();
+        if seen_names.insert(rule_name.clone()) {
+            from_fragments.push(rule_name.clone());
+        }
+        for (i, arg) in invocation.args.iter().enumerate() {
+            if let FnArg::Variable(v) = arg {
+                if i < CTE_COLS.len() {
+                    let var_name = format!("{}", v);
+                    var_to_col.insert(var_name, (rule_name.clone(), CTE_COLS[i]));
+                }
+            }
+        }
+    }
+    RuleCteInfo {
+        from_fragments,
+        var_to_col,
+    }
 }
 
 /// Build a SQL WHERE condition from a Datalog predicate in a rule body.
