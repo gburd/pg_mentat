@@ -320,42 +320,64 @@ fn execute_speculative_transaction(
     schema: &str,
     edn_tx: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Create a savepoint so we can roll back all writes after capturing the result.
-    // The savepoint name includes a random suffix to avoid collisions with
-    // nested speculative transactions (though that's unlikely in practice).
-    let savepoint_name = "mentat_with_sp";
+    use pgrx::spi::Spi;
 
-    Spi::run(&format!("SAVEPOINT {}", savepoint_name))?;
+    // Use a PL/pgSQL function with EXCEPTION block to get proper subtransaction
+    // isolation. This works in all contexts (client connections, SPI, pgrx tests)
+    // because PL/pgSQL manages subtransaction lifecycle and snapshot ownership
+    // correctly, unlike manual BeginInternalSubTransaction which causes
+    // "snapshot reference not owned by resource owner" errors when SPI snapshots
+    // outlive the subtransaction.
+    //
+    // Strategy: Execute the real transaction, capture the JSON result, then
+    // intentionally RAISE an exception to trigger rollback of the subtransaction.
+    // The EXCEPTION handler catches our marker exception and returns the result.
+    // The writes from mentat_transact are rolled back by the exception mechanism.
+    let escaped_edn = edn_tx.replace('\'', "''");
+    let escaped_schema = schema.replace('\'', "''");
 
-    // Run the full transaction inside the savepoint
-    let result = execute_transaction_inner(schema, edn_tx);
+    // Execute via a PL/pgSQL helper function that runs the transaction,
+    // captures the result, then raises an exception to trigger rollback.
+    // The EXCEPTION handler catches our marker and returns the result.
+    let get_sql = format!(
+        "SELECT mentat._speculative_exec('{escaped_schema}', '{escaped_edn}')"
+    );
 
-    // Always roll back the savepoint to discard writes, regardless of success/failure.
-    // On success: we captured the report, no need to persist.
-    // On failure: the error propagates, savepoint cleanup is still needed.
-    let rollback_result = Spi::run(&format!("ROLLBACK TO SAVEPOINT {}", savepoint_name));
+    // Create the helper function if it doesn't exist yet
+    Spi::run(&format!(
+        "CREATE OR REPLACE FUNCTION mentat._speculative_exec(p_schema TEXT, p_edn TEXT)
+         RETURNS TEXT LANGUAGE plpgsql AS $fn$
+         DECLARE
+             _result TEXT;
+         BEGIN
+             -- Execute in the appropriate schema
+             IF p_schema = 'mentat' THEN
+                 SELECT mentat_transact(p_edn::TEXT)::TEXT INTO _result;
+             ELSE
+                 EXECUTE format('SELECT %I.transact($1::TEXT)::TEXT', p_schema)
+                     INTO _result USING p_edn;
+             END IF;
+             -- Intentionally raise to trigger subtransaction rollback
+             RAISE EXCEPTION 'SPECULATIVE_OK:%', _result;
+         EXCEPTION
+             WHEN OTHERS THEN
+                 IF SQLERRM LIKE 'SPECULATIVE_OK:%' THEN
+                     RETURN substring(SQLERRM FROM 16);
+                 ELSE
+                     RAISE;
+                 END IF;
+         END;
+         $fn$"
+    ))?;
 
-    // Release the savepoint to free resources
-    let _ = Spi::run(&format!("RELEASE SAVEPOINT {}", savepoint_name));
+    let result = Spi::get_one::<String>(&get_sql)?
+        .ok_or_else(|| "Speculative transaction returned NULL".to_string())?;
 
-    // If rollback itself failed, that's a serious issue
-    if let Err(rollback_err) = rollback_result {
-        return Err(MentatError::Internal {
-            message: format!(
-                "Failed to rollback speculative transaction savepoint: {}",
-                rollback_err
-            ),
-            source: None,
-        }
-        .into());
-    }
-
-    // Invalidate caches since the savepoint rollback may have left stale state
-    // from schema installations that were rolled back.
+    // Invalidate caches since the subtransaction rollback may have left stale state
     crate::cache::get_cache().invalidate();
     crate::functions::query::clear_stmt_cache();
 
-    result
+    Ok(result)
 }
 
 /// Resolve a store name to its PostgreSQL schema name.
@@ -460,7 +482,7 @@ fn execute_retract_entity_recursive(
         for row in rows {
             let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
             let v_type_tag: i16 = row.get(2)?.ok_or("Missing type tag")?;
-            let v = read_typed_value_from_row(&row, v_type_tag, 3)?;
+            let v = read_typed_value_from_row(&row, v_type_tag, 2)?;
 
             // Check if this is a ref with :db/isComponent = true
             if v_type_tag == crate::types::constants::type_tag::REF {
@@ -530,7 +552,7 @@ fn execute_cas_fn(
         let mut vals = Vec::new();
         for row in rows {
             let v_type_tag: i16 = row.get(1)?.ok_or("Missing type tag")?;
-            let v = read_typed_value_from_row(&row, v_type_tag, 2)?;
+            let v = read_typed_value_from_row(&row, v_type_tag, 1)?;
             vals.push(v);
         }
         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(vals)
@@ -1258,13 +1280,16 @@ fn insert_datoms(
             if let Some(attr_info) = lookup_attribute_info(datom.a) {
                 match attr_info.cardinality.as_str() {
                     "one" => {
-                        retract_existing_cardinality_one(
+                        let should_insert = retract_existing_cardinality_one(
                             datom.e,
                             datom.a,
                             tx_id,
                             &datom.v,
                             schema,
                         )?;
+                        if !should_insert {
+                            continue; // Idempotent: same value already exists
+                        }
                     }
                     "many" => {
                         if is_duplicate_cardinality_many(
@@ -1904,13 +1929,15 @@ fn find_current_value_for_ea(
     })
 }
 
+/// Returns `true` if the assertion should proceed (value changed or no existing value),
+/// `false` if the assertion is idempotent (same value already exists) and should be skipped.
 fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
     tx_id: i64,
     new_v: &TypedValue,
     schema: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     // Get store_id from schema
     let store_id = get_store_id_from_schema(schema)?;
 
@@ -1920,7 +1947,7 @@ fn retract_existing_cardinality_one(
     if let Some(old_v) = existing {
         // If the value is identical, no retraction needed (idempotent assertion)
         if old_v == *new_v {
-            return Ok(());
+            return Ok(false); // Skip the insert — value unchanged
         }
 
         // Mark the existing assertion row as retracted so queries filtering
@@ -1931,7 +1958,7 @@ fn retract_existing_cardinality_one(
         insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false, schema)?;
     }
 
-    Ok(())
+    Ok(true) // Proceed with insert
 }
 
 /// Mark an existing assertion datom as retracted by updating its `added` column
@@ -2299,7 +2326,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_ref_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2316,7 +2343,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_boolean_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2333,7 +2360,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_long_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2350,7 +2377,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_double_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2367,7 +2394,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_text_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2384,7 +2411,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_keyword_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2402,7 +2429,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_instant_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2421,7 +2448,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_uuid_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4::UUID, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),
@@ -2438,7 +2465,7 @@ fn insert_typed_datom(
                 &format!(
                     "INSERT INTO mentat.datoms_bytes_new (store_id, e, a, v, tx, added) \
                      VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, tx) DO UPDATE SET v = EXCLUDED.v, added = EXCLUDED.added",
+                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
                 ),
                 &[
                     DatumWithOid::from(store_id),

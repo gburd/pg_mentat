@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     // ========================================================================
@@ -145,10 +163,10 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/uv :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/unique :db.unique/value}]'::TEXT)").expect("schema");
 
         Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sc/uv \"unique-val\"]]'::TEXT)").expect("first");
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e2\" :sc/uv \"unique-val\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :sc/uv \"unique-val\"]]'::TEXT)"),
+            "Duplicate unique value should be rejected"
         );
-        assert!(result.is_err(), "Duplicate unique value should be rejected");
     }
 
     // ========================================================================
@@ -240,37 +258,37 @@ mod tests {
     #[pg_test]
     fn test_sc_error_missing_value_type() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad1 :db/cardinality :db.cardinality/one}]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad1 :db/cardinality :db.cardinality/one}]'::TEXT)"),
+            "Schema without valueType should fail"
         );
-        assert!(result.is_err(), "Schema without valueType should fail");
     }
 
     #[pg_test]
     fn test_sc_error_missing_cardinality() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad2 :db/valueType :db.type/string}]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad2 :db/valueType :db.type/string}]'::TEXT)"),
+            "Schema without cardinality should fail"
         );
-        assert!(result.is_err(), "Schema without cardinality should fail");
     }
 
     #[pg_test]
     fn test_sc_error_invalid_value_type() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad3 :db/valueType :db.type/invalid :db/cardinality :db.cardinality/one}]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad3 :db/valueType :db.type/invalid :db/cardinality :db.cardinality/one}]'::TEXT)"),
+            "Invalid value type should fail"
         );
-        assert!(result.is_err(), "Invalid value type should fail");
     }
 
     #[pg_test]
     fn test_sc_error_invalid_cardinality() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad4 :db/valueType :db.type/string :db/cardinality :db.cardinality/invalid}]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad4 :db/valueType :db.type/string :db/cardinality :db.cardinality/invalid}]'::TEXT)"),
+            "Invalid cardinality should fail"
         );
-        assert!(result.is_err(), "Invalid cardinality should fail");
     }
 
     // ========================================================================

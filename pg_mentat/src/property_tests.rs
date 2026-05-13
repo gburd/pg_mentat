@@ -21,6 +21,28 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$",
+        )
+        .expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')",
+            escaped
+        ))
+        .expect("raises_error call")
+        .unwrap_or(false)
     }
 
     fn setup_prop_schema() {
@@ -590,11 +612,8 @@ mod tests {
         .expect("first insert");
 
         // Second entity with same unique-value code should fail
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e2\" :prop/code \"CODE-001\"]]'::TEXT)",
-        );
         assert!(
-            result.is_err(),
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :prop/code \"CODE-001\"]]'::TEXT)"),
             "Duplicate unique-value should be rejected"
         );
     }
@@ -650,13 +669,10 @@ mod tests {
         .expect("NULL");
 
         // Attempt a transaction with a valid op followed by invalid op
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
-                [:db/add \"e1\" :prop/str \"valid\"]
-                [:db/add \"e2\" :prop/nonexistent \"invalid\"]
-            ]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e1\" :prop/str \"valid\"] [:db/add \"e2\" :prop/nonexistent \"invalid\"]]'::TEXT)"),
+            "Transaction with bad attr should fail"
         );
-        assert!(result.is_err(), "Transaction with bad attr should fail");
 
         // Count after - should be same as before (rolled back)
         let after = Spi::get_one::<i64>(
@@ -942,60 +958,60 @@ mod tests {
     fn test_prop_type_mismatch_string_to_long() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/num \"not-a-number\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/num \"not-a-number\"]]'::TEXT)"),
+            "String to long attr should fail"
         );
-        assert!(result.is_err(), "String to long attr should fail");
     }
 
     #[pg_test]
     fn test_prop_type_mismatch_long_to_string() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/str 42]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/str 42]]'::TEXT)"),
+            "Long to string attr should fail"
         );
-        assert!(result.is_err(), "Long to string attr should fail");
     }
 
     #[pg_test]
     fn test_prop_type_mismatch_string_to_boolean() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/flag \"not-a-bool\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/flag \"not-a-bool\"]]'::TEXT)"),
+            "String to boolean attr should fail"
         );
-        assert!(result.is_err(), "String to boolean attr should fail");
     }
 
     #[pg_test]
     fn test_prop_type_mismatch_string_to_double() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/dbl \"not-a-double\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/dbl \"not-a-double\"]]'::TEXT)"),
+            "String to double attr should fail"
         );
-        assert!(result.is_err(), "String to double attr should fail");
     }
 
     #[pg_test]
     fn test_prop_type_mismatch_long_to_boolean() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/flag 42]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/flag 42]]'::TEXT)"),
+            "Long to boolean attr should fail"
         );
-        assert!(result.is_err(), "Long to boolean attr should fail");
     }
 
     #[pg_test]
     fn test_prop_type_mismatch_boolean_to_long() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/num true]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/num true]]'::TEXT)"),
+            "Boolean to long attr should fail"
         );
-        assert!(result.is_err(), "Boolean to long attr should fail");
     }
 
     // ========================================================================

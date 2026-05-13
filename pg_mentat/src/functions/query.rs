@@ -1675,10 +1675,12 @@ fn format_find_response(
                     return json!({"result": arr[0]});
                 }
             }
-            json!({
-                "columns": find_vars,
-                "results": results
-            })
+            let results_val = serde_json::Value::Array(results);
+            let mut obj = serde_json::Map::new();
+            obj.insert("columns".to_string(), json!(find_vars));
+            obj.insert("results".to_string(), results_val.clone());
+            obj.insert("result".to_string(), results_val);
+            serde_json::Value::Object(obj)
         }
         FindSpec::FindColl(_) => {
             let scalars: Vec<serde_json::Value> = results
@@ -1805,7 +1807,7 @@ fn build_value_decode_expr(alias: &str) -> String {
          WHEN {ref_tag} THEN {alias}.v_ref::TEXT \
          WHEN {bool_tag} THEN {alias}.v_bool::TEXT \
          WHEN {long_tag} THEN {alias}.v_long::TEXT \
-         WHEN {double_tag} THEN 'd:' || {alias}.v_double::BIGINT::TEXT \
+         WHEN {double_tag} THEN 'd:' || ('x' || encode(float8send({alias}.v_double), 'hex'))::bit(64)::bigint::TEXT \
          WHEN {instant_tag} THEN to_char({alias}.v_instant, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
          WHEN {str_tag} THEN {alias}.v_text \
          WHEN {kw_tag} THEN ':' || {alias}.v_keyword \
@@ -2569,12 +2571,12 @@ fn resolve_fts_language(attr_ident: &str, schema_prefix: &str) -> String {
         // Two-step query: find the entid for :db/doc (entid 8 in bootstrap), then
         // look up the doc string for our attribute entity.
         let query = format!(
-            "SELECT dt.v_text \
+            "SELECT dt.v \
              FROM {schema_prefix}schema s \
              JOIN {schema_prefix}datoms_text_new dt \
-               ON dt.e = s.entid AND dt.added = true \
+               ON dt.store_id = 0 AND dt.e = s.entid AND dt.added = true \
              WHERE s.ident = '{ident}' \
-               AND dt.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = 'db/doc') \
+               AND dt.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = ':db/doc') \
              LIMIT 1",
             ident = attr_ident.replace('\'', "''"),
         );

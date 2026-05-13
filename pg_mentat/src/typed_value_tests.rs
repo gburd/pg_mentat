@@ -16,6 +16,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     // ========================================================================
@@ -1177,7 +1195,7 @@ mod tests {
         .expect("NULL entity");
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:test/pname]'::TEXT, {})",
+            "SELECT mentat_pull('[:test/pname]'::TEXT, {})::TEXT",
             entity_id
         ))
         .expect("pull failed")
@@ -1214,7 +1232,7 @@ mod tests {
         .expect("NULL entity");
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:test/pcount]'::TEXT, {})",
+            "SELECT mentat_pull('[:test/pcount]'::TEXT, {})::TEXT",
             entity_id
         ))
         .expect("pull failed")
@@ -1259,7 +1277,7 @@ mod tests {
         .expect("NULL entity");
 
         let result =
-            Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]'::TEXT, {})", entity_id))
+            Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]'::TEXT, {})::TEXT", entity_id))
                 .expect("pull failed")
                 .expect("NULL result");
 
@@ -1336,12 +1354,8 @@ mod tests {
         .expect("schema txn failed");
 
         // Try to store a string in a long attribute - should fail
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :test/typed_num \"not a number\"]]'::TEXT)",
-        );
-
         assert!(
-            result.is_err(),
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :test/typed_num \"not a number\"]]'::TEXT)"),
             "Should reject string value for long attribute"
         );
     }
@@ -1361,11 +1375,10 @@ mod tests {
     #[pg_test]
     fn test_unknown_attribute_error() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"value\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"value\"]]'::TEXT)"),
+            "Should reject unknown attribute"
         );
-
-        assert!(result.is_err(), "Should reject unknown attribute");
     }
 
     // ========================================================================

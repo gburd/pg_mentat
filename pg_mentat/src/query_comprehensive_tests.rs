@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_query_schema() {
@@ -483,37 +501,37 @@ mod tests {
     #[pg_test]
     fn test_qc_query_missing_find() {
         setup(); setup_query_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:where [?e :qc/name ?name]]'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('[:where [?e :qc/name ?name]]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Query without :find should fail"
         );
-        assert!(result.is_err(), "Query without :find should fail");
     }
 
     #[pg_test]
     fn test_qc_query_missing_where() {
         setup(); setup_query_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?name]'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('[:find ?name]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Query without :where should fail"
         );
-        assert!(result.is_err(), "Query without :where should fail");
     }
 
     #[pg_test]
     fn test_qc_query_invalid_edn() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('not valid edn'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('not valid edn'::TEXT, '{}'::jsonb)::TEXT"),
+            "Invalid EDN should fail"
         );
-        assert!(result.is_err(), "Invalid EDN should fail");
     }
 
     #[pg_test]
     fn test_qc_query_unknown_attribute() {
         setup(); setup_query_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?v . :where [?e :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('[:find ?v . :where [?e :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Unknown attribute should fail"
         );
-        assert!(result.is_err(), "Unknown attribute should fail");
     }
 
     // ========================================================================

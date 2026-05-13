@@ -73,12 +73,18 @@ mod tests {
     fn timed_query(query: &str) -> (usize, f64) {
         let start = std::time::Instant::now();
         let result = Spi::get_one::<String>(
-            &format!("SELECT mentat_q('{}', '{{}}'::JSONB)::TEXT", query)
+            &format!("SELECT mentat_query('{}', '{{}}'::JSONB)::TEXT", query)
         ).expect("query").expect("NULL");
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
         let parsed: serde_json::Value = serde_json::from_str(&result).expect("parse result");
-        let count = parsed.as_array().map(|a| a.len()).unwrap_or(0);
+        // mentat_query returns {"columns": [...], "results": [[...], ...]} for relation queries
+        // or {"result": ...} for scalar/tuple/collection queries
+        let count = parsed["results"].as_array()
+            .map(|a| a.len())
+            .or_else(|| parsed["result"].as_array().map(|a| a.len()))
+            .or_else(|| if parsed["result"].is_null() { Some(0) } else { Some(1) })
+            .unwrap_or(0);
         (count, elapsed)
     }
 
@@ -396,9 +402,9 @@ mod tests {
         timed_query("[:find ?e ?age :where [?e :bench/age ?age]]");
         timed_query("[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]");
 
-        // Check stats
+        // Check stats (mentat_backend_stats returns per-backend query metrics)
         let stats_json = Spi::get_one::<pgrx::JsonB>(
-            "SELECT mentat_query_stats()"
+            "SELECT mentat_backend_stats()"
         ).expect("stats").expect("NULL");
 
         let stats = &stats_json.0;

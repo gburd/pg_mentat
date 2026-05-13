@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_upsert_schema() {
@@ -132,10 +150,10 @@ mod tests {
     fn test_up_unique_value_rejects_duplicate() {
         setup(); setup_upsert_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :up/code \"C1\"]]'::TEXT)").expect("first");
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e2\" :up/code \"C1\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :up/code \"C1\"]]'::TEXT)"),
+            "unique/value should reject duplicate"
         );
-        assert!(result.is_err(), "unique/value should reject duplicate");
     }
 
     #[pg_test]

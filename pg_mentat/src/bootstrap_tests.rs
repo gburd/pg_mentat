@@ -175,7 +175,7 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('{}', '[:bs/p]')::TEXT", eid
+            "SELECT mentat_pull('[:bs/p]', {})::TEXT", eid
         )).expect("pull").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":bs/p"].as_str().expect("s"), "pull-test");

@@ -697,6 +697,7 @@ pub mod monitoring;
 pub fn ensure_extension_loaded() {
     use pgrx::spi::Spi;
     Spi::run("CREATE EXTENSION IF NOT EXISTS pg_mentat CASCADE").ok();
+    Spi::run("SET search_path TO mentat, public").ok();
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -971,422 +972,53 @@ mod tests {
     /// Initialize a test database with the pg_mentat schema.
     fn setup_test_db() -> Result<(), Box<dyn std::error::Error>> {
         crate::ensure_extension_loaded();
+        Spi::run("SELECT bootstrap_schema()")?;
+        // Create helpers for testing error conditions in subtransaction isolation
         Spi::run(
-            r"
-            CREATE SCHEMA IF NOT EXISTS mentat;
-
-            -- Define enum types
-            DO $$ BEGIN
-                CREATE TYPE mentat.value_type AS ENUM (
-                    'ref', 'boolean', 'instant', 'long', 'double', 'string', 'keyword', 'uuid', 'bytes'
-                );
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            DO $$ BEGIN
-                CREATE TYPE mentat.unique_type AS ENUM ('value', 'identity');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            DO $$ BEGIN
-                CREATE TYPE mentat.cardinality_type AS ENUM ('one', 'many');
-            EXCEPTION WHEN duplicate_object THEN null;
-            END $$;
-
-            -- Datoms table partitioned by value_type_tag
-            CREATE TABLE IF NOT EXISTS mentat.datoms (
-                e BIGINT NOT NULL,
-                a BIGINT NOT NULL,
-                value_type_tag SMALLINT NOT NULL,
-                v_ref BIGINT,
-                v_bool BOOLEAN,
-                v_long BIGINT,
-                v_double DOUBLE PRECISION,
-                v_text TEXT,
-                v_keyword TEXT,
-                v_instant TIMESTAMPTZ,
-                v_uuid UUID,
-                v_bytes BYTEA,
-                tx BIGINT NOT NULL,
-                added BOOLEAN NOT NULL DEFAULT TRUE,
-                CONSTRAINT chk_datom_value CHECK (
-                    (CASE WHEN v_ref IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_bool IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_long IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_double IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_text IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_keyword IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_instant IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_uuid IS NOT NULL THEN 1 ELSE 0 END
-                   + CASE WHEN v_bytes IS NOT NULL THEN 1 ELSE 0 END) = 1
-                )
-            ) PARTITION BY LIST (value_type_tag);
-
-            CREATE TABLE IF NOT EXISTS mentat.datoms_ref PARTITION OF mentat.datoms FOR VALUES IN (0);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_bool PARTITION OF mentat.datoms FOR VALUES IN (1);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_long PARTITION OF mentat.datoms FOR VALUES IN (2);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_double PARTITION OF mentat.datoms FOR VALUES IN (3);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_instant PARTITION OF mentat.datoms FOR VALUES IN (4);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_text PARTITION OF mentat.datoms FOR VALUES IN (7);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_keyword PARTITION OF mentat.datoms FOR VALUES IN (8);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_uuid PARTITION OF mentat.datoms FOR VALUES IN (10);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_bytes PARTITION OF mentat.datoms FOR VALUES IN (11);
-            CREATE TABLE IF NOT EXISTS mentat.datoms_default PARTITION OF mentat.datoms DEFAULT;
-
-            CREATE TABLE IF NOT EXISTS mentat.schema (
-                entid BIGINT PRIMARY KEY,
-                ident TEXT UNIQUE NOT NULL,
-                value_type mentat.value_type NOT NULL,
-                cardinality mentat.cardinality_type NOT NULL DEFAULT 'one',
-                unique_constraint mentat.unique_type,
-                indexed BOOLEAN NOT NULL DEFAULT FALSE,
-                fulltext BOOLEAN NOT NULL DEFAULT FALSE,
-                component BOOLEAN NOT NULL DEFAULT FALSE,
-                no_history BOOLEAN NOT NULL DEFAULT FALSE
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.idents (
-                ident TEXT PRIMARY KEY,
-                entid BIGINT UNIQUE NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.partitions (
-                name TEXT PRIMARY KEY,
-                start_entid BIGINT NOT NULL,
-                end_entid BIGINT NOT NULL,
-                next_entid BIGINT NOT NULL,
-                allow_excision BOOLEAN NOT NULL DEFAULT FALSE
-            );
-
-            CREATE TABLE IF NOT EXISTS mentat.transactions (
-                tx BIGINT PRIMARY KEY,
-                tx_instant TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-
-            -- Core datom indexes (reduced from 22 to 8 for write throughput)
-            CREATE INDEX IF NOT EXISTS idx_datoms_eavt ON mentat.datoms (e, a, value_type_tag, tx) WHERE added = TRUE;
-            CREATE INDEX IF NOT EXISTS idx_datoms_aevt ON mentat.datoms (a, e, value_type_tag, tx) WHERE added = TRUE;
-            CREATE INDEX IF NOT EXISTS idx_datoms_tx ON mentat.datoms (tx DESC);
-            CREATE INDEX IF NOT EXISTS idx_datoms_vaet ON mentat.datoms (v_ref, a, e, tx) WHERE added = TRUE AND value_type_tag = 0;
-
-            -- Type-specific AVET indexes (only high-frequency types)
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_ref ON mentat.datoms (a, v_ref, e, tx) WHERE added = TRUE AND value_type_tag = 0;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_long ON mentat.datoms (a, v_long, e, tx) WHERE added = TRUE AND value_type_tag = 2;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_text ON mentat.datoms (a, v_text, e, tx) WHERE added = TRUE AND value_type_tag = 7;
-            CREATE INDEX IF NOT EXISTS idx_datoms_avet_keyword ON mentat.datoms (a, v_keyword, e, tx) WHERE added = TRUE AND value_type_tag = 8;
-
-            -- Full-text search support table
-            CREATE TABLE IF NOT EXISTS mentat.fulltext (
-                text_value TEXT NOT NULL,
-                search_vector TSVECTOR
-            );
-            CREATE INDEX IF NOT EXISTS idx_fulltext_search ON mentat.fulltext USING GIN (search_vector);
-
-            -- Trigger to auto-update search vector
-            CREATE OR REPLACE FUNCTION mentat.fulltext_update_trigger() RETURNS trigger AS $$
-            BEGIN
-                NEW.search_vector := to_tsvector('english', NEW.text_value);
-                RETURN NEW;
-            END; $$ LANGUAGE plpgsql;
-
-            DROP TRIGGER IF EXISTS fulltext_update ON mentat.fulltext;
-            CREATE TRIGGER fulltext_update BEFORE INSERT OR UPDATE ON mentat.fulltext
-                FOR EACH ROW EXECUTE FUNCTION mentat.fulltext_update_trigger();
-
-            INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-                ('db.part/db', 0, 10000, 100, FALSE),
-                ('db.part/user', 10000, 1000000, 10000, FALSE),
-                ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
-            ON CONFLICT (name) DO NOTHING;
-
-            -- Sequences for lock-free entity ID allocation
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
-            CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
-
-            INSERT INTO mentat.transactions (tx, tx_instant)
-            VALUES (1000000, '2025-01-01T00:00:00Z')
-            ON CONFLICT (tx) DO NOTHING;
-
-            -- PL/pgSQL helper functions for transaction processing
-            -- allocate_entid uses sequences for lock-free concurrent ID allocation
-            CREATE OR REPLACE FUNCTION mentat.allocate_entid(partition_name TEXT)
-            RETURNS BIGINT AS $$
-            BEGIN
-                CASE partition_name
-                    WHEN 'db.part/db' THEN RETURN nextval('mentat.partition_db_seq');
-                    WHEN 'db.part/user' THEN RETURN nextval('mentat.partition_user_seq');
-                    WHEN 'db.part/tx' THEN RETURN nextval('mentat.partition_tx_seq');
-                    ELSE RAISE EXCEPTION 'Partition % not found', partition_name;
-                END CASE;
-            END; $$ LANGUAGE plpgsql;
-
-            CREATE OR REPLACE FUNCTION mentat.resolve_ident(keyword TEXT)
-            RETURNS BIGINT AS $$
-            BEGIN
-                RETURN (SELECT entid FROM mentat.idents WHERE ident = keyword);
-            END; $$ LANGUAGE plpgsql;
-
-            -- Datom helper functions
-            CREATE OR REPLACE FUNCTION mentat.datom_text_like(
-                attr_ident TEXT, pattern TEXT
-            ) RETURNS TABLE(entity_id BIGINT, value TEXT, tx BIGINT) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.e, d.v_text, d.tx FROM mentat.datoms d
-                WHERE d.a = attr_entid AND d.value_type_tag = 7
-                  AND d.v_text LIKE pattern AND d.added = TRUE;
-            END; $$ LANGUAGE plpgsql STABLE;
-
-            CREATE OR REPLACE FUNCTION mentat.datom_long_between(
-                attr_ident TEXT, low_val BIGINT, high_val BIGINT
-            ) RETURNS TABLE(entity_id BIGINT, value BIGINT, tx BIGINT) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.e, d.v_long, d.tx FROM mentat.datoms d
-                WHERE d.a = attr_entid AND d.value_type_tag = 2
-                  AND d.v_long BETWEEN low_val AND high_val AND d.added = TRUE;
-            END; $$ LANGUAGE plpgsql STABLE;
-
-            CREATE OR REPLACE FUNCTION mentat.datom_ref_in(
-                attr_ident TEXT, ref_ids BIGINT[]
-            ) RETURNS TABLE(entity_id BIGINT, ref_value BIGINT, tx BIGINT) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.e, d.v_ref, d.tx FROM mentat.datoms d
-                WHERE d.a = attr_entid AND d.value_type_tag = 0
-                  AND d.v_ref = ANY(ref_ids) AND d.added = TRUE;
-            END; $$ LANGUAGE plpgsql STABLE;
-
-            CREATE OR REPLACE FUNCTION mentat.datom_text_values(
-                eid BIGINT, attr_ident TEXT
-            ) RETURNS TABLE(value TEXT, tx BIGINT) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.v_text, d.tx FROM mentat.datoms d
-                WHERE d.e = eid AND d.a = attr_entid
-                  AND d.value_type_tag = 7 AND d.added = TRUE
-                ORDER BY d.tx;
-            END; $$ LANGUAGE plpgsql STABLE;
-
-            CREATE OR REPLACE FUNCTION mentat.datom_ref_values(
-                eid BIGINT, attr_ident TEXT
-            ) RETURNS TABLE(ref_value BIGINT, tx BIGINT) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.v_ref, d.tx FROM mentat.datoms d
-                WHERE d.e = eid AND d.a = attr_entid
-                  AND d.value_type_tag = 0 AND d.added = TRUE
-                ORDER BY d.tx;
-            END; $$ LANGUAGE plpgsql STABLE;
-
-            CREATE OR REPLACE FUNCTION mentat.datom_value_at_tx(
-                eid BIGINT, attr_ident TEXT, as_of_tx BIGINT
-            ) RETURNS TABLE(
-                value_type_tag SMALLINT, v_ref BIGINT, v_bool BOOLEAN,
-                v_long BIGINT, v_double DOUBLE PRECISION, v_text TEXT,
-                v_keyword TEXT, v_instant TIMESTAMPTZ, v_uuid UUID,
-                v_bytes BYTEA, tx BIGINT
-            ) AS $$
-            DECLARE attr_entid BIGINT;
-            BEGIN
-                SELECT mentat.resolve_ident(attr_ident) INTO attr_entid;
-                IF attr_entid IS NULL THEN
-                    RAISE EXCEPTION 'Unknown attribute ident: %', attr_ident;
-                END IF;
-                RETURN QUERY
-                SELECT d.value_type_tag,
-                       d.v_ref, d.v_bool, d.v_long, d.v_double,
-                       d.v_text, d.v_keyword, d.v_instant, d.v_uuid, d.v_bytes,
-                       d.tx
-                FROM mentat.datoms d
-                WHERE d.e = eid AND d.a = attr_entid
-                  AND d.tx <= as_of_tx AND d.added = TRUE
-                  AND NOT EXISTS (
-                      SELECT 1 FROM mentat.datoms r
-                      WHERE r.e = d.e AND r.a = d.a
-                        AND r.value_type_tag = d.value_type_tag
-                        AND r.tx <= as_of_tx AND r.tx > d.tx
-                        AND r.added = FALSE
-                        AND r.v_ref IS NOT DISTINCT FROM d.v_ref
-                        AND r.v_bool IS NOT DISTINCT FROM d.v_bool
-                        AND r.v_long IS NOT DISTINCT FROM d.v_long
-                        AND r.v_double IS NOT DISTINCT FROM d.v_double
-                        AND r.v_text IS NOT DISTINCT FROM d.v_text
-                        AND r.v_keyword IS NOT DISTINCT FROM d.v_keyword
-                        AND r.v_instant IS NOT DISTINCT FROM d.v_instant
-                        AND r.v_uuid IS NOT DISTINCT FROM d.v_uuid
-                        AND r.v_bytes IS NOT DISTINCT FROM d.v_bytes
-                  )
-                ORDER BY d.tx DESC
-                LIMIT 1;
-            END; $$ LANGUAGE plpgsql STABLE;
-            ",
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        )?;
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_get_error(stmt TEXT) RETURNS TEXT
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN NULL;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN SQLERRM;
+             END;
+             $$"
         )?;
         Ok(())
     }
 
-    /// Bootstrap the core Mentat schema (test helper).
+    /// Check if a SQL statement raises an error (uses PL/pgSQL exception handling).
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
+    }
+
+    /// Run a SQL statement and return the error message, or panic if no error.
+    /// Uses PL/pgSQL to catch the error in a subtransaction.
+    fn get_error_message(sql: &str) -> String {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<String>(&format!(
+            "SELECT mentat._test_get_error('{}')", escaped
+        )).expect("get_error call").unwrap_or_else(|| panic!("Expected error from SQL: {sql}"))
+    }
+
+    /// Bootstrap the core Mentat schema (delegates to the extension's bootstrap_schema()).
     fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error>> {
-        Spi::run(
-            r"
-            INSERT INTO mentat.schema (entid, ident, value_type, cardinality, unique_constraint, indexed) VALUES
-                -- Core schema attributes
-                (1, ':db/ident', 'keyword', 'one', 'identity', true),
-                (2, ':db/valueType', 'ref', 'one', NULL, false),
-                (3, ':db/cardinality', 'ref', 'one', NULL, false),
-                (4, ':db/unique', 'ref', 'one', NULL, false),
-                (5, ':db/doc', 'string', 'one', NULL, false),
-                (6, ':db/isComponent', 'boolean', 'one', NULL, false),
-                (7, ':db/fulltext', 'boolean', 'one', NULL, false),
-                (8, ':db/index', 'boolean', 'one', NULL, false),
-                (9, ':db/noHistory', 'boolean', 'one', NULL, false),
-                (10, ':db/txInstant', 'instant', 'one', NULL, true),
-
-                -- Value type enum entities (used as values for :db/valueType)
-                (20, ':db.type/ref', 'ref', 'one', NULL, false),
-                (21, ':db.type/keyword', 'ref', 'one', NULL, false),
-                (22, ':db.type/long', 'ref', 'one', NULL, false),
-                (23, ':db.type/double', 'ref', 'one', NULL, false),
-                (24, ':db.type/string', 'ref', 'one', NULL, false),
-                (25, ':db.type/boolean', 'ref', 'one', NULL, false),
-                (26, ':db.type/instant', 'ref', 'one', NULL, false),
-                (27, ':db.type/uuid', 'ref', 'one', NULL, false),
-                (28, ':db.type/bytes', 'ref', 'one', NULL, false),
-
-                -- Cardinality enum entities (used as values for :db/cardinality)
-                (30, ':db.cardinality/one', 'ref', 'one', NULL, false),
-                (31, ':db.cardinality/many', 'ref', 'one', NULL, false),
-
-                -- Unique constraint enum entities (used as values for :db/unique)
-                (32, ':db.unique/value', 'ref', 'one', NULL, false),
-                (33, ':db.unique/identity', 'ref', 'one', NULL, false)
-            ON CONFLICT (entid) DO NOTHING;
-
-            INSERT INTO mentat.idents (ident, entid) VALUES
-                (':db/ident', 1),
-                (':db/valueType', 2),
-                (':db/cardinality', 3),
-                (':db/unique', 4),
-                (':db/doc', 5),
-                (':db/isComponent', 6),
-                (':db/fulltext', 7),
-                (':db/index', 8),
-                (':db/noHistory', 9),
-                (':db/txInstant', 10),
-                -- Value type enums
-                (':db.type/ref', 20),
-                (':db.type/keyword', 21),
-                (':db.type/long', 22),
-                (':db.type/double', 23),
-                (':db.type/string', 24),
-                (':db.type/boolean', 25),
-                (':db.type/instant', 26),
-                (':db.type/uuid', 27),
-                (':db.type/bytes', 28),
-                -- Cardinality enums
-                (':db.cardinality/one', 30),
-                (':db.cardinality/many', 31),
-                -- Unique constraint enums
-                (':db.unique/value', 32),
-                (':db.unique/identity', 33)
-            ON CONFLICT (ident) DO NOTHING;
-
-            -- Bootstrap datoms in the datoms table so queries can find them.
-            -- a=1 is :db/ident (keyword type_tag=8, stored in v_keyword)
-            -- a=2 is :db/valueType (ref type_tag=0, stored in v_ref as entity ID)
-            -- a=3 is :db/cardinality (ref type_tag=0, stored in v_ref as entity ID)
-            -- tx=1000000 is the bootstrap transaction.
-
-            -- :db/ident datoms (a=1, keyword stored in v_keyword)
-            INSERT INTO mentat.datoms (e, a, value_type_tag, v_keyword, tx, added) VALUES
-                (1,  1, 8, 'db/ident',            1000000, true),
-                (2,  1, 8, 'db/valueType',        1000000, true),
-                (3,  1, 8, 'db/cardinality',      1000000, true),
-                (4,  1, 8, 'db/unique',            1000000, true),
-                (5,  1, 8, 'db/doc',               1000000, true),
-                (6,  1, 8, 'db/isComponent',       1000000, true),
-                (7,  1, 8, 'db/fulltext',          1000000, true),
-                (8,  1, 8, 'db/index',             1000000, true),
-                (9,  1, 8, 'db/noHistory',         1000000, true),
-                (10, 1, 8, 'db/txInstant',         1000000, true),
-                (20, 1, 8, 'db.type/ref',          1000000, true),
-                (21, 1, 8, 'db.type/keyword',      1000000, true),
-                (22, 1, 8, 'db.type/long',         1000000, true),
-                (23, 1, 8, 'db.type/double',       1000000, true),
-                (24, 1, 8, 'db.type/string',       1000000, true),
-                (25, 1, 8, 'db.type/boolean',      1000000, true),
-                (26, 1, 8, 'db.type/instant',      1000000, true),
-                (27, 1, 8, 'db.type/uuid',         1000000, true),
-                (28, 1, 8, 'db.type/bytes',        1000000, true),
-                (30, 1, 8, 'db.cardinality/one',   1000000, true),
-                (31, 1, 8, 'db.cardinality/many',  1000000, true),
-                (32, 1, 8, 'db.unique/value',      1000000, true),
-                (33, 1, 8, 'db.unique/identity',   1000000, true);
-
-            -- :db/valueType datoms (a=2, ref stored in v_ref as entity ID)
-            INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-                -- Entity 1 (:db/ident) -> :db.type/keyword (entity 21)
-                (1,  2, 0, 21, 1000000, true),
-                -- Entity 2 (:db/valueType) -> :db.type/ref (entity 20)
-                (2,  2, 0, 20, 1000000, true),
-                -- Entity 3 (:db/cardinality) -> :db.type/ref (entity 20)
-                (3,  2, 0, 20, 1000000, true),
-                -- Entity 4 (:db/unique) -> :db.type/ref (entity 20)
-                (4,  2, 0, 20, 1000000, true),
-                -- Entity 5 (:db/doc) -> :db.type/string (entity 24)
-                (5,  2, 0, 24, 1000000, true),
-                -- Entity 6 (:db/isComponent) -> :db.type/boolean (entity 25)
-                (6,  2, 0, 25, 1000000, true),
-                -- Entity 7 (:db/fulltext) -> :db.type/boolean (entity 25)
-                (7,  2, 0, 25, 1000000, true),
-                -- Entity 8 (:db/index) -> :db.type/boolean (entity 25)
-                (8,  2, 0, 25, 1000000, true),
-                -- Entity 9 (:db/noHistory) -> :db.type/boolean (entity 25)
-                (9,  2, 0, 25, 1000000, true),
-                -- Entity 10 (:db/txInstant) -> :db.type/instant (entity 26)
-                (10, 2, 0, 26, 1000000, true);
-
-            -- :db/cardinality datoms (a=3, ref stored in v_ref as entity ID)
-            -- All core attrs have cardinality :db.cardinality/one (entity 30)
-            INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-                (1,  3, 0, 30, 1000000, true),
-                (2,  3, 0, 30, 1000000, true),
-                (3,  3, 0, 30, 1000000, true),
-                (4,  3, 0, 30, 1000000, true),
-                (5,  3, 0, 30, 1000000, true),
-                (6,  3, 0, 30, 1000000, true),
-                (7,  3, 0, 30, 1000000, true),
-                (8,  3, 0, 30, 1000000, true),
-                (9,  3, 0, 30, 1000000, true),
-                (10, 3, 0, 30, 1000000, true);
-            ",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
         Ok(())
     }
 
@@ -3599,17 +3231,8 @@ mod tests {
         .expect("Schema transaction failed");
 
         // Try to use lookup ref for non-existent entity - should fail
-        let bad_tx = r#"[
-            [:db/add [:person/email "nobody@example.com"] :person/email "new@example.com"]
-        ]"#;
-
-        let result = Spi::run_with_args(
-            "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(bad_tx)],
-        );
-
         assert!(
-            result.is_err(),
+            raises_error("SELECT mentat_transact('[[:db/add [:person/email \"nobody@example.com\"] :person/email \"new@example.com\"]]'::TEXT)"),
             "Lookup ref for non-existent entity should fail"
         );
     }
@@ -3637,17 +3260,8 @@ mod tests {
             .expect("Data transaction failed");
 
         // Try to use lookup ref with non-unique attribute - should fail
-        let bad_tx = r#"[
-            [:db/add [:person/name "Alice"] :person/name "Bob"]
-        ]"#;
-
-        let result = Spi::run_with_args(
-            "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(bad_tx)],
-        );
-
         assert!(
-            result.is_err(),
+            raises_error("SELECT mentat_transact('[[:db/add [:person/name \"Alice\"] :person/name \"Bob\"]]'::TEXT)"),
             "Lookup ref with non-unique attribute should fail"
         );
     }
@@ -3810,16 +3424,8 @@ mod tests {
 
         // Attempt transaction with invalid data (type mismatch on age)
         // This should ROLLBACK completely, leaving no partial data
-        let bad_tx_result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
-                {:db/id \"alice\" :person/name \"Alice\" :person/age 30}
-                {:db/id \"bob\" :person/name \"Bob\" :person/age \"thirty\"}
-            ]')::TEXT",
-        );
-
-        // Transaction should fail due to type mismatch
         assert!(
-            bad_tx_result.is_err(),
+            raises_error("SELECT mentat_transact('[{:db/id \"alice\" :person/name \"Alice\" :person/age 30} {:db/id \"bob\" :person/name \"Bob\" :person/age \"thirty\"}]'::TEXT)"),
             "Transaction with invalid data type should fail"
         );
 
@@ -4695,12 +4301,13 @@ mod tests {
             .expect("Missing alice tempid");
 
         // CAS with wrong old value: expect "Bob" but actual is "Alice"
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :person/name \"Bob\" \"Charlie\"]]'::TEXT)::TEXT",
-            alice_eid
-        ));
-
-        assert!(result.is_err(), "CAS should fail when old value doesn't match");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db.fn/cas {} :person/name \"Bob\" \"Charlie\"]]'::TEXT)::TEXT",
+                alice_eid
+            )),
+            "CAS should fail when old value doesn't match"
+        );
 
         // Verify value was NOT changed
         let query_result = Spi::get_one::<String>(&format!(
@@ -4795,13 +4402,11 @@ mod tests {
             .expect("Missing alice tempid");
 
         // CAS with nil old value should fail because age already exists
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :person/age nil 30]]'::TEXT)::TEXT",
-            alice_eid
-        ));
-
         assert!(
-            result.is_err(),
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db.fn/cas {} :person/age nil 30]]'::TEXT)::TEXT",
+                alice_eid
+            )),
             "CAS with nil old value should fail when attribute already has a value"
         );
     }
@@ -4880,13 +4485,14 @@ mod tests {
 
         // Transaction with a valid add followed by a failing CAS
         // The entire transaction should be rolled back
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db/add {} :person/name \"Updated\"] \
-             [:db.fn/cas {} :person/age 999 30]]'::TEXT)::TEXT",
-            alice_eid, alice_eid
-        ));
-
-        assert!(result.is_err(), "Transaction with failing CAS should be rolled back");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db/add {} :person/name \"Updated\"] \
+                 [:db.fn/cas {} :person/age 999 30]]'::TEXT)::TEXT",
+                alice_eid, alice_eid
+            )),
+            "Transaction with failing CAS should be rolled back"
+        );
 
         // Verify name was NOT changed (rollback)
         let query_result = Spi::get_one::<String>(&format!(
@@ -5253,7 +4859,7 @@ mod tests {
 
         let pull_json: serde_json::Value =
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
-        let pull_val = pull_json["measurement/value"]
+        let pull_val = pull_json[":measurement/value"]
             .as_f64()
             .expect("Pull should return double");
         assert!((pull_val - 3.14159).abs() < 0.00001, "Pull double value should match");
@@ -5265,7 +4871,7 @@ mod tests {
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
-        let entity_val = entity_json["measurement/value"]
+        let entity_val = entity_json[":measurement/value"]
             .as_f64()
             .expect("Entity should return double");
         assert!(
@@ -5349,7 +4955,7 @@ mod tests {
 
         let pull_json: serde_json::Value =
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
-        let pull_ts = pull_json["event/timestamp"]
+        let pull_ts = pull_json[":event/timestamp"]
             .as_str()
             .expect("Pull should return instant as string");
         assert!(
@@ -5364,7 +4970,7 @@ mod tests {
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
-        let entity_ts = entity_json["event/timestamp"]
+        let entity_ts = entity_json[":event/timestamp"]
             .as_str()
             .expect("Entity should return instant as string");
         assert!(
@@ -5450,7 +5056,7 @@ mod tests {
 
         let pull_json: serde_json::Value =
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
-        let pull_uuid = pull_json["session/id"]
+        let pull_uuid = pull_json[":session/id"]
             .as_str()
             .expect("Pull should return UUID as string");
         assert_eq!(pull_uuid, test_uuid, "Pull UUID should match");
@@ -5462,7 +5068,7 @@ mod tests {
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
-        let entity_uuid = entity_json["session/id"]
+        let entity_uuid = entity_json[":session/id"]
             .as_str()
             .expect("Entity should return UUID as string");
         assert_eq!(entity_uuid, test_uuid, "Entity UUID should match");
@@ -5546,7 +5152,7 @@ mod tests {
 
         let pull_json: serde_json::Value =
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
-        let pull_bytes = pull_json["file/data"]
+        let pull_bytes = pull_json[":file/data"]
             .as_str()
             .expect("Pull should return bytes as base64 string");
         assert_eq!(pull_bytes, test_bytes_b64, "Pull bytes should match");
@@ -5558,7 +5164,7 @@ mod tests {
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
-        let entity_bytes = entity_json["file/data"]
+        let entity_bytes = entity_json[":file/data"]
             .as_str()
             .expect("Entity should return bytes as base64 string");
         assert_eq!(entity_bytes, test_bytes_b64, "Entity bytes should match");
@@ -5568,13 +5174,7 @@ mod tests {
     // Error Message Quality Tests
     // ============================================================================
 
-    /// Helper to run a SQL statement and return the error message string.
-    fn get_error_message(sql: &str) -> String {
-        match Spi::get_one::<String>(sql) {
-            Err(e) => format!("{e}"),
-            Ok(_) => panic!("Expected error from SQL: {sql}"),
-        }
-    }
+    // NOTE: get_error_message() is defined earlier in this module near setup_test_db().
 
     #[pg_test]
     fn test_error_invalid_transaction_not_vector() {

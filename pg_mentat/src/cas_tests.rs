@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_cas_schema() {
@@ -154,8 +172,10 @@ mod tests {
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :cas/name \"current\"]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let result = Spi::run(&format!("SELECT mentat_transact('[[:db/cas {} :cas/name \"wrong\" \"new\"]]'::TEXT)", eid));
-        assert!(result.is_err(), "CAS with wrong old value should fail");
+        assert!(
+            raises_error(&format!("SELECT mentat_transact('[[:db/cas {} :cas/name \"wrong\" \"new\"]]'::TEXT)", eid)),
+            "CAS with wrong old value should fail"
+        );
     }
 
     #[pg_test]
@@ -164,8 +184,10 @@ mod tests {
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :cas/val 42]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let result = Spi::run(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val 99 100]]'::TEXT)", eid));
-        assert!(result.is_err(), "CAS with wrong old value should fail");
+        assert!(
+            raises_error(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val 99 100]]'::TEXT)", eid)),
+            "CAS with wrong old value should fail"
+        );
     }
 
     #[pg_test]
@@ -174,8 +196,10 @@ mod tests {
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :cas/flag true]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let result = Spi::run(&format!("SELECT mentat_transact('[[:db/cas {} :cas/flag false true]]'::TEXT)", eid));
-        assert!(result.is_err(), "CAS with wrong old boolean should fail");
+        assert!(
+            raises_error(&format!("SELECT mentat_transact('[[:db/cas {} :cas/flag false true]]'::TEXT)", eid)),
+            "CAS with wrong old boolean should fail"
+        );
     }
 
     #[pg_test]
@@ -184,8 +208,10 @@ mod tests {
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :cas/val 42]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let result = Spi::run(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val nil 99]]'::TEXT)", eid));
-        assert!(result.is_err(), "CAS from nil should fail when value exists");
+        assert!(
+            raises_error(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val nil 99]]'::TEXT)", eid)),
+            "CAS from nil should fail when value exists"
+        );
     }
 
     #[pg_test]

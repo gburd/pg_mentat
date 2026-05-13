@@ -20,6 +20,28 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$",
+        )
+        .expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')",
+            escaped
+        ))
+        .expect("raises_error call")
+        .unwrap_or(false)
     }
 
     // ========================================================================
@@ -638,12 +660,13 @@ mod tests {
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // CAS should fail: expected "wrong" but actual is "current"
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :tu/casf \"wrong\" \"new\"]]'::TEXT)",
-            eid
-        ));
-
-        assert!(result.is_err(), "CAS should fail when expected value differs");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db.fn/cas {} :tu/casf \"wrong\" \"new\"]]'::TEXT)",
+                eid
+            )),
+            "CAS should fail when expected value differs"
+        );
     }
 
     #[pg_test]
@@ -669,12 +692,13 @@ mod tests {
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // CAS from nil should fail since there IS a value
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :tu/casnil nil \"new\"]]'::TEXT)",
-            eid
-        ));
-
-        assert!(result.is_err(), "CAS from nil should fail when value exists");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db.fn/cas {} :tu/casnil nil \"new\"]]'::TEXT)",
+                eid
+            )),
+            "CAS from nil should fail when value exists"
+        );
     }
 
     // ========================================================================
@@ -857,15 +881,13 @@ mod tests {
         .expect("schema failed");
 
         // Two different values for same entity+attribute in one transaction
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
-                [:db/add \"e\" :tu/single \"val1\"]
-                [:db/add \"e\" :tu/single \"val2\"]
-            ]'::TEXT)",
-        );
-
         assert!(
-            result.is_err(),
+            raises_error(
+                "SELECT mentat_transact('[
+                    [:db/add \"e\" :tu/single \"val1\"]
+                    [:db/add \"e\" :tu/single \"val2\"]
+                ]'::TEXT)"
+            ),
             "Should reject multiple values for cardinality-one in same tx"
         );
     }
@@ -1099,11 +1121,12 @@ mod tests {
         )
         .expect("first insert");
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e2\" :tu/code \"ABC\"]]'::TEXT)",
+        assert!(
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e2\" :tu/code \"ABC\"]]'::TEXT)"
+            ),
+            "Should reject duplicate unique value"
         );
-
-        assert!(result.is_err(), "Should reject duplicate unique value");
     }
 
     #[pg_test]
@@ -1225,28 +1248,30 @@ mod tests {
     #[pg_test]
     fn test_error_invalid_edn() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('not valid edn {'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('not valid edn {'::TEXT)"),
+            "Should reject invalid EDN"
         );
-        assert!(result.is_err(), "Should reject invalid EDN");
     }
 
     #[pg_test]
     fn test_error_not_a_vector() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('{:key \"value\"}'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('{:key \"value\"}'::TEXT)"),
+            "Should reject non-vector transaction"
         );
-        assert!(result.is_err(), "Should reject non-vector transaction");
     }
 
     #[pg_test]
     fn test_error_unknown_attribute() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)",
+        assert!(
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)"
+            ),
+            "Should reject unknown attribute"
         );
-        assert!(result.is_err(), "Should reject unknown attribute");
     }
 
     #[pg_test]
@@ -1261,11 +1286,12 @@ mod tests {
         )
         .expect("schema failed");
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :tu/numonly \"not a number\"]]'::TEXT)",
+        assert!(
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :tu/numonly \"not a number\"]]'::TEXT)"
+            ),
+            "Should reject string for long attribute"
         );
-
-        assert!(result.is_err(), "Should reject string for long attribute");
     }
 
     #[pg_test]

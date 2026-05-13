@@ -20,6 +20,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_department_schema() {
@@ -719,37 +737,37 @@ mod tests {
     #[pg_test]
     fn test_error_missing_find_clause() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Should reject query without :find"
         );
-        assert!(result.is_err(), "Should reject query without :find");
     }
 
     #[pg_test]
     fn test_error_missing_where_clause() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?e]'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('[:find ?e]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Should reject query without :where"
         );
-        assert!(result.is_err(), "Should reject query without :where");
     }
 
     #[pg_test]
     fn test_error_unbound_variable() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?x :where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
         // ?x is not bound in :where
-        assert!(result.is_err(), "Should reject unbound variable in :find");
+        assert!(
+            raises_error("SELECT mentat_query('[:find ?x :where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"),
+            "Should reject unbound variable in :find"
+        );
     }
 
     #[pg_test]
     fn test_error_invalid_query_syntax() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('not valid edn at all'::TEXT, '{}'::jsonb)::TEXT",
+        assert!(
+            raises_error("SELECT mentat_query('not valid edn at all'::TEXT, '{}'::jsonb)::TEXT"),
+            "Should reject invalid EDN syntax"
         );
-        assert!(result.is_err());
     }
 }

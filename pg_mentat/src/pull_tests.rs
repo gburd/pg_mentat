@@ -20,6 +20,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_graph_schema() {
@@ -92,7 +110,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -109,7 +127,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name :p/age :p/email]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name :p/age :p/email]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -128,7 +146,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/active]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/active]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -145,7 +163,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/tags]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/tags]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -172,7 +190,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[*]'::TEXT, {})",
+            "SELECT mentat_pull('[*]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -198,7 +216,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name {{:p/friends [:p/name :p/age]}}]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name {{:p/friends [:p/name :p/age]}}]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -224,7 +242,7 @@ mod tests {
 
         // Alice -> friends -> friends (2 levels)
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name {{:p/friends [:p/name {{:p/friends [:p/name]}}]}}]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name {{:p/friends [:p/name {{:p/friends [:p/name]}}]}}]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -246,7 +264,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name :p/_parent]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name :p/_parent]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -267,7 +285,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name {{:p/_parent [:p/name :p/age]}}]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name {{:p/_parent [:p/name :p/age]}}]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull failed")
@@ -293,7 +311,7 @@ mod tests {
         let (_, bob, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name {{:p/parent 2}}]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name {{:p/parent 2}}]'::TEXT, {})::TEXT",
             bob
         ))
         .expect("pull failed")
@@ -314,7 +332,7 @@ mod tests {
         let (_, bob, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:p/name {{:p/parent ...}}]'::TEXT, {})",
+            "SELECT mentat_pull('[:p/name {{:p/parent ...}}]'::TEXT, {})::TEXT",
             bob
         ))
         .expect("pull failed")
@@ -335,7 +353,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[(:p/tags :limit 2)]'::TEXT, {})",
+            "SELECT mentat_pull('[(:p/tags :limit 2)]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull with limit failed")
@@ -353,7 +371,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[(:p/friends :limit 1)]'::TEXT, {})",
+            "SELECT mentat_pull('[(:p/friends :limit 1)]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull with limit 1 failed")
@@ -376,7 +394,7 @@ mod tests {
 
         // Alice has no :p/parent, so default should be applied
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[(:p/parent :default \"none\")]'::TEXT, {})",
+            "SELECT mentat_pull('[(:p/parent :default \"none\")]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull with default failed")
@@ -399,7 +417,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[(:p/name :as \"Full Name\")]'::TEXT, {})",
+            "SELECT mentat_pull('[(:p/name :as \"Full Name\")]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("pull with rename failed")
@@ -420,7 +438,7 @@ mod tests {
         setup_graph_data();
 
         let result = Spi::get_one::<String>(
-            "SELECT mentat_pull('[:p/name]'::TEXT, 999999999)",
+            "SELECT mentat_pull('[:p/name]'::TEXT, 999999999)::TEXT",
         )
         .expect("pull nonexistent should not error")
         .expect("NULL");
@@ -437,10 +455,10 @@ mod tests {
     #[pg_test]
     fn test_pull_invalid_pattern() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_pull('not a pattern'::TEXT, 1)",
+        assert!(
+            raises_error("SELECT mentat_pull('not a pattern'::TEXT, 1)::TEXT"),
+            "Should reject invalid pull pattern"
         );
-        assert!(result.is_err(), "Should reject invalid pull pattern");
     }
 
     #[pg_test]
@@ -450,7 +468,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[]'::TEXT, {})",
+            "SELECT mentat_pull('[]'::TEXT, {})::TEXT",
             alice
         ))
         .expect("empty pattern should work")
@@ -467,7 +485,7 @@ mod tests {
         let (alice, _, _) = setup_graph_data();
 
         let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:nonexistent/attr]'::TEXT, {})",
+            "SELECT mentat_pull('[:nonexistent/attr]'::TEXT, {})::TEXT",
             alice
         ));
         // Should either error or return empty for unknown attrs

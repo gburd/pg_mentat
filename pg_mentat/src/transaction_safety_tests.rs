@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_schema() {
@@ -155,11 +173,13 @@ mod tests {
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         // CAS with wrong old value -- should fail even with advisory locks
-        let result = Spi::run(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :safety/counter 999 200]]'::TEXT)",
-            eid
-        ));
-        assert!(result.is_err(), "CAS with wrong old value should fail");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db.fn/cas {} :safety/counter 999 200]]'::TEXT)",
+                eid
+            )),
+            "CAS with wrong old value should fail"
+        );
 
         // Value should remain unchanged
         let q = Spi::get_one::<String>(&format!(

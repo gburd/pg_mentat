@@ -15,6 +15,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_schema() {
@@ -164,12 +182,10 @@ mod tests {
 
         // Now try to assert a single tempid with both unique values.
         // This should fail because :df/uid resolves to e1 and :df/email resolves to e2.
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
-                {:db/id \"x\" :df/uid \"CONFLICT-UID\" :df/email \"conflict@test.com\" :df/name \"Merged\"}
-            ]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"x\" :df/uid \"CONFLICT-UID\" :df/email \"conflict@test.com\" :df/name \"Merged\"}]'::TEXT)"),
+            "Should fail: tempid resolves to two different entities"
         );
-        assert!(result.is_err(), "Should fail: tempid resolves to two different entities");
     }
 
     // ========================================================================
@@ -180,21 +196,20 @@ mod tests {
     fn test_df_unique_value_no_upsert() {
         setup(); setup_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :df/code \"UNIQUE-CODE\"]]'::TEXT)").expect("first");
-        let result = Spi::run("SELECT mentat_transact('[[:db/add \"e2\" :df/code \"UNIQUE-CODE\"]]'::TEXT)");
-        assert!(result.is_err(), "unique/value should error, not upsert");
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :df/code \"UNIQUE-CODE\"]]'::TEXT)"),
+            "unique/value should error, not upsert"
+        );
     }
 
     #[pg_test]
     fn test_df_unique_value_intx_no_merge() {
         setup(); setup_schema();
         // Two tempids with same unique/value in same tx should error
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
-                {:db/id \"a\" :df/code \"SAME-CODE\" :df/name \"A\"}
-                {:db/id \"b\" :df/code \"SAME-CODE\" :df/name \"B\"}
-            ]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[{:db/id \"a\" :df/code \"SAME-CODE\" :df/name \"A\"} {:db/id \"b\" :df/code \"SAME-CODE\" :df/name \"B\"}]'::TEXT)"),
+            "unique/value should not merge tempids"
         );
-        assert!(result.is_err(), "unique/value should not merge tempids");
     }
 
     // ========================================================================
@@ -366,9 +381,9 @@ mod tests {
     #[pg_test]
     fn test_df_unknown_tx_fn_errors() {
         setup(); setup_schema();
-        let result = Spi::run(
-            "SELECT mentat_transact('[[:db.fn/nonexistent 12345]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db.fn/nonexistent 12345]]'::TEXT)"),
+            "Unknown transaction function should error"
         );
-        assert!(result.is_err(), "Unknown transaction function should error");
     }
 }

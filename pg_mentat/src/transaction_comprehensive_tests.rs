@@ -9,6 +9,24 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$"
+        ).expect("create helper");
+    }
+
+    fn raises_error(sql: &str) -> bool {
+        let escaped = sql.replace('\'', "''");
+        Spi::get_one::<bool>(&format!(
+            "SELECT mentat._test_raises_error('{}')", escaped
+        )).expect("raises_error call").unwrap_or(false)
     }
 
     fn setup_tx_schema() {
@@ -261,10 +279,12 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :tx/val 99 20]]'::TEXT)", eid
-        ));
-        assert!(result.is_err(), "CAS with wrong old value should fail");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db/cas {} :tx/val 99 20]]'::TEXT)", eid
+            )),
+            "CAS with wrong old value should fail"
+        );
 
         // Original value should be preserved
         let q = Spi::get_one::<String>(&format!(
@@ -377,10 +397,10 @@ mod tests {
             "SELECT mentat_transact('[[:db/add \"e1\" :tx/code \"CODE-1\"]]'::TEXT)",
         ).expect("first");
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e2\" :tx/code \"CODE-1\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :tx/code \"CODE-1\"]]'::TEXT)"),
+            "Duplicate unique value should be rejected"
         );
-        assert!(result.is_err(), "Duplicate unique value should be rejected");
     }
 
     #[pg_test]
@@ -408,13 +428,12 @@ mod tests {
         ).expect("q").expect("NULL");
 
         // Mix valid and invalid ops
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
+        assert!(
+            raises_error("SELECT mentat_transact('[
                 [:db/add \"good\" :tx/name \"good\"]
                 [:db/add \"bad\" :tx/nonexistent \"bad\"]
-            ]'::TEXT)",
+            ]'::TEXT)")
         );
-        assert!(result.is_err());
 
         let after = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true",
@@ -434,13 +453,12 @@ mod tests {
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true",
         ).expect("q").expect("NULL");
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[
+        assert!(
+            raises_error("SELECT mentat_transact('[
                 [:db/add \"new1\" :tx/name \"new1\"]
                 [:db/add \"new2\" :tx/code \"TAKEN\"]
-            ]'::TEXT)",
+            ]'::TEXT)")
         );
-        assert!(result.is_err());
 
         let after = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true",
@@ -563,55 +581,49 @@ mod tests {
     #[pg_test]
     fn test_tx_error_invalid_edn() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('not valid edn'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('not valid edn'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_tx_error_not_a_vector() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('{:not \"a vector\"}'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('{:not \"a vector\"}'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_tx_error_unknown_attribute() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_tx_error_type_mismatch() {
         setup(); setup_tx_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :tx/val \"not-a-long\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :tx/val \"not-a-long\"]]'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_tx_error_empty_assertion() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add]]'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     #[pg_test]
     fn test_tx_error_too_few_args() {
         setup();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)",
+        assert!(
+            raises_error("SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)")
         );
-        assert!(result.is_err());
     }
 
     // ========================================================================
