@@ -15,10 +15,17 @@
 
 ---
 
+# Cookbook
+
+- [JOIN Datalog Results With Postgres Tables](./cookbook-postgres-join.md)
+
+---
+
 # Reference
 
 - [SQL Function Reference](./sql-functions.md)
 - [Configuration (GUCs)](./configuration.md)
+- [Multi-Tenancy & RLS](./multi-tenancy.md)
 - [Datomic Compatibility](./datomic-compat.md)
 
 ---
