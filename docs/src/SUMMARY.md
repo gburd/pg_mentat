@@ -21,6 +21,7 @@
 - [Approximate-Regex Search via pg_tre](./fuzzy-search.md)
 - [Phonetic & Edit-Distance Functions via fuzzystrmatch](./fuzzystrmatch.md)
 - [Trigram Similarity via pg_trgm](./pg-trgm.md)
+- [BM25-style Ranked Search via rum](./rum.md)
 
 ---
 

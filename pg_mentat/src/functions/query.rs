@@ -2004,6 +2004,19 @@ fn build_sql_from_datalog_enriched(
                 &store_id_param,
             )?;
             fts_joins.push(fj);
+        } else if op_name == "rum-fulltext" {
+            // (rum-fulltext $ :attr "term")  — fulltext search optimized
+            // for the optional `rum` extension's distance operator and
+            // index access method. See build_rum_fulltext_join.
+            let fj = build_rum_fulltext_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2478,6 +2491,17 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
+                } else if op_name == "rum-fulltext" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_rum_fulltext_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
                     "*" | "+" | "-" | "/" |
@@ -2494,7 +2518,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, similar-to, levenshtein, soundex, metaphone, \
+                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, levenshtein, soundex, metaphone, \
                          daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
@@ -3185,6 +3209,135 @@ fn build_similar_to_join(
         score_expr: Some(format!(
             "similarity({dt_alias}.v, {needle_param})"
         )),
+    })
+}
+
+/// Compile `(rum-fulltext $ :attr "term") [[?e ?val ?score]]` into an
+/// FTS-style join over `mentat.datoms_text_new`, using the `rum`
+/// extension's `<=>` distance operator and `rum_ts_score()` for ranking.
+///
+/// `rum` (postgrespro/rum, PostgreSQL license) is a GIN-derived index
+/// access method that stores positional information alongside lexemes,
+/// enabling top-K ranked retrieval directly from the index without a
+/// post-fetch sort. It is the closest permissive alternative to BM25
+/// indexing in PostgreSQL.
+///
+/// The compiled SQL uses the standard `@@` match for filtering plus
+/// `<=>` for ranking, both of which the `rum_tsvector_ops` opclass
+/// supports. When a RUM index exists on the attribute (created via
+/// `mentat.create_rum_fulltext_index('<:attr>')`), this query plan
+/// is index-only. Without the index, it falls back to a sequential
+/// scan — same as the existing `(fulltext ...)` would do without GIN.
+///
+/// As with `(fulltext)`, the search-term language defaults to English;
+/// override per-attribute by tagging `[fts:lang=<lang>]` in the
+/// attribute's `:db/doc`.
+fn build_rum_fulltext_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+    schema_prefix: &str,
+    store_id_param: &str,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    if wf.args.len() < 3 {
+        return Err(format!(
+            ":db.error/fn-arity rum-fulltext requires at least 3 arguments \
+             ($ attr-keyword search-text), got {}. \
+             Example: [(rum-fulltext $ :issue/body \"crash\") [[?e ?val ?score]]]",
+            wf.args.len()
+        )
+        .into());
+    }
+
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(":db.error/fn-arg rum-fulltext second argument must be a keyword \
+                        attribute (e.g. :issue/body). Format: \
+                        (rum-fulltext $ :attr \"term\")"
+                .into());
+        }
+    };
+
+    let search_term = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(":db.error/fn-arg rum-fulltext third argument must be a string. \
+                        Format: (rum-fulltext $ :attr \"search words\")"
+                .into());
+        }
+    };
+
+    let fts_lang = resolve_fts_language(&attr_ident, schema_prefix);
+    let dt_alias = format!("rum_d{}", fts_idx);
+    let attr_param = builder.bind_text(attr_ident);
+
+    let mut where_parts = Vec::new();
+    where_parts.push(format!(
+        "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
+    ));
+    where_parts.push(format!("{dt_alias}.added = true"));
+    where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
+
+    let mut score_expr: Option<String> = None;
+    if !search_term.is_empty() {
+        let is_phrase = search_term.starts_with('"') && search_term.ends_with('"');
+        let clean_term = if is_phrase {
+            search_term[1..search_term.len() - 1].to_string()
+        } else {
+            search_term.clone()
+        };
+        let search_param = builder.bind_text(clean_term);
+        let tsquery_fn = if is_phrase {
+            "phraseto_tsquery"
+        } else {
+            "plainto_tsquery"
+        };
+        // The @@ operator filters; the rum index's rum_tsvector_ops opclass
+        // supports it. Filter expression must mirror the one indexed.
+        where_parts.push(format!(
+            "to_tsvector('{fts_lang}', {dt_alias}.v) @@ {tsquery_fn}('{fts_lang}', {search_param})"
+        ));
+        // rum_ts_score returns a real — higher = more relevant. Unlike
+        // ts_rank_cd, it factors in lexeme positions stored in the rum
+        // index for proximity-aware ranking.
+        score_expr = Some(format!(
+            "rum_ts_score(to_tsvector('{fts_lang}', {dt_alias}.v), \
+             {tsquery_fn}('{fts_lang}', {search_param}))"
+        ));
+    } else {
+        where_parts.push("false".to_string());
+    }
+
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.v"));
+                    }
+                    2 => {
+                        if let Some(ref s) = score_expr {
+                            var_bindings.insert(var_name, s.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts,
+        score_expr,
     })
 }
 
