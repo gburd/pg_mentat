@@ -837,6 +837,8 @@ pub mod rum_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod pgvector_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod pgque_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -990,6 +992,17 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/15_pgvector_helpers.sql",
     name = "pgvector_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional PgQue (NikolayS/PgQue, Apache 2.0) integration: declares
+// mentat.has_pgque() and helpers to install/remove a deferred
+// constraint trigger on mentat.transactions that emits one event
+// per pg_mentat tx into a configured PgQue queue. See
+// docs/src/pgque.md.
+extension_sql_file!(
+    "../sql/16_pgque_helpers.sql",
+    name = "pgque_helpers",
     requires = ["narrow_storage"],
 );
 
