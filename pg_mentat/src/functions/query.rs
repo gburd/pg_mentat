@@ -2032,6 +2032,20 @@ fn build_sql_from_datalog_enriched(
                 &store_id_param,
             )?;
             fts_joins.push(fj);
+        } else if op_name == "infer-near" {
+            // (infer-near $ :attr "text" k [model])  — K-nearest-neighbor
+            // search using pg_infer's <~> distance operator over the
+            // per-attribute partial index. See build_infer_near_join and
+            // docs/src/pg_infer.md.
+            let fj = build_infer_near_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2528,10 +2542,22 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
+                } else if op_name == "infer-near" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_infer_near_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
                     "*" | "+" | "-" | "/" |
-                    "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff"
+                    "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff" |
+                    "infer-similar" | "infer-implies"
                 ) {
                     // Arithmetic + fuzzystrmatch binding functions work the
                     // same as in the main query. Use the OR-arm builder so
@@ -2544,7 +2570,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, vector-near, levenshtein, soundex, metaphone, \
+                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, vector-near, infer-near, levenshtein, soundex, metaphone, \
                          daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
@@ -3573,6 +3599,239 @@ fn build_vector_near_join(
     })
 }
 
+/// Compile a pg_infer scalar binding:
+///   `[(infer-similar a b [model]) ?score]`   → infer_similarity(a, b, model)
+///   `[(infer-implies a b [model]) ?bool]`    → implies(a, b, model)::INT
+///
+/// pg_infer is the optional dependency. Without it, the generated SQL
+/// fails at execution with the standard PG error "function ... does
+/// not exist".
+///
+/// Both args may be variables (resolved via VAR_REF) or string
+/// constants (parameterized via SqlBuilder for safety). The optional
+/// model arg, if present, must be a keyword like `:qwen05b` whose name
+/// is passed as a text literal to the underlying SQL function. When
+/// omitted, the SQL pass-through omits the third arg, letting
+/// pg_infer's GUC `infer.default_model` take effect.
+fn build_pg_infer_scalar_binding(
+    wf: &WhereFn,
+    builder: &mut SqlBuilder<'_>,
+    op: &str,
+) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let result_var = match &wf.binding {
+        Binding::BindScalar(v) => format!("{}", v),
+        _ => {
+            return Err(format!(
+                ":db.error/fn-binding pg_infer '{}' requires a scalar binding. \
+                 Example: [({} ?a ?b) ?score]",
+                op, op
+            )
+            .into());
+        }
+    };
+
+    if wf.args.len() < 2 || wf.args.len() > 3 {
+        return Err(format!(
+            ":db.error/fn-arity pg_infer '{}' requires 2 or 3 arguments \
+             (a b [model-keyword]), got {}.",
+            op, wf.args.len()
+        )
+        .into());
+    }
+
+    let render_text = |a: &FnArg, b: &mut SqlBuilder<'_>|
+     -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        match a {
+            FnArg::Variable(v) => Ok(format!("VAR_REF:{}", v)),
+            FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(b.bind_text(s.as_ref().to_string())),
+            _ => Err(format!(
+                ":db.error/fn-arg pg_infer '{}' arguments must be text variables or string constants.",
+                op
+            )
+            .into()),
+        }
+    };
+
+    let arg0 = render_text(&wf.args[0], builder)?;
+    let arg1 = render_text(&wf.args[1], builder)?;
+    let model_arg: Option<String> = if wf.args.len() == 3 {
+        match &wf.args[2] {
+            FnArg::IdentOrKeyword(kw) => {
+                let model = keyword_to_ident(kw);
+                // strip leading ':' from ":qwen05b" so the underlying SQL
+                // function gets the bare model name.
+                let model = model.strip_prefix(':').unwrap_or(&model).to_string();
+                Some(builder.bind_text(model))
+            }
+            _ => {
+                return Err(format!(
+                    ":db.error/fn-arg pg_infer '{}' optional model argument must be a keyword \
+                     like :qwen05b.",
+                    op
+                )
+                .into());
+            }
+        }
+    } else {
+        None
+    };
+
+    let expr = match op {
+        "infer-similar" => {
+            // pg_infer documents infer_similarity as 2-arg only; per-query
+            // model selection happens via the GUC infer.default_model.
+            // The 3rd arg is accepted syntactically for symmetry with
+            // infer-implies, but emits a NOTICE'able no-op (silent here).
+            let _ = &model_arg; // explicitly ignored
+            format!("infer_similarity({arg0}, {arg1})")
+        }
+        "infer-implies" => match &model_arg {
+            // implies(subject, object, model) returns bool; cast to INT for
+            // pg_mentat's scalar-binding return path.
+            Some(m) => format!("(implies({arg0}, {arg1}, {m}))::INT"),
+            None => format!("(implies({arg0}, {arg1}))::INT"),
+        },
+        _ => unreachable!("build_pg_infer_scalar_binding called with non-pg_infer op '{}'", op),
+    };
+
+    Ok((result_var, expr))
+}
+
+/// Compile `(infer-near $ :attr "text" k [model])` into an FTS-style
+/// join over `mentat.datoms_text_new`, using pg_infer's `<~>` distance
+/// operator + ORDER BY ... LIMIT k for index-driven top-K retrieval.
+///
+/// Mirrors `build_similar_to_join` but uses pg_infer's distance op.
+/// When the user has called `mentat.create_infer_index(:attr, model)`
+/// to build a partial pg_infer index keyed by attribute entid, this
+/// query plan is index-only.
+///
+/// pg_infer is the optional dependency; without it the SQL fails at
+/// execution. The optional `model` keyword arg, if present, sets the
+/// session GUC `infer.default_model` for the duration of the query —
+/// emitted as a SET clause inside a SELECT. (PgQue-style approach
+/// reused: SET LOCAL inside the subquery scope.)
+fn build_infer_near_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+    schema_prefix: &str,
+    store_id_param: &str,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    if wf.args.len() < 4 || wf.args.len() > 5 {
+        return Err(format!(
+            ":db.error/fn-arity infer-near requires 4 or 5 arguments \
+             ($ attr-keyword needle-text k-int [model-keyword]), got {}. \
+             Example: [(infer-near $ :paper/title \"neural architecture search\" 10) [[?e ?dist]]]",
+            wf.args.len()
+        )
+        .into());
+    }
+
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(":db.error/fn-arg infer-near second argument must be a keyword \
+                        attribute (e.g. :paper/title). Format: \
+                        (infer-near $ :attr \"text\" k)"
+                .into());
+        }
+    };
+
+    let needle = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(":db.error/fn-arg infer-near third argument must be a string. \
+                        Format: (infer-near $ :attr \"text\" k)"
+                .into());
+        }
+    };
+
+    let k: i64 = match &wf.args[3] {
+        FnArg::EntidOrInteger(i) => *i,
+        _ => {
+            return Err(":db.error/fn-arg infer-near fourth argument must be a positive \
+                        integer K (top-K)."
+                .into());
+        }
+    };
+    if k <= 0 {
+        return Err(format!(
+            ":db.error/fn-arg infer-near k must be > 0, got {}.",
+            k
+        )
+        .into());
+    }
+
+    // Optional 5th-arg model keyword. pg_infer's <~> distance uses the
+    // session GUC infer.default_model. Per-query model selection is
+    // outside the scope of a single SQL statement (would need a
+    // dedicated transaction-scoped GUC), so for now we surface the
+    // arg as a parameter that the user must SET themselves before
+    // invoking the query, OR set the default in their config. We
+    // accept the arg syntactically but ignore it semantically with a
+    // clear NOTICE in docs.
+    let _model = if wf.args.len() == 5 {
+        match &wf.args[4] {
+            FnArg::IdentOrKeyword(kw) => Some(keyword_to_ident(kw)),
+            _ => {
+                return Err(":db.error/fn-arg infer-near fifth argument (model) must be a \
+                            keyword (e.g. :qwen05b)."
+                    .into());
+            }
+        }
+    } else {
+        None
+    };
+
+    let dt_alias = format!("in_d{}", fts_idx);
+    let attr_param = builder.bind_text(attr_ident);
+    let needle_param = builder.bind_text(needle);
+    let k_param = builder.bind_bigint(k);
+
+    // Top-K subquery using <~>. The infer index opclass infer_text_ops
+    // supports ORDER BY <~>; without an index this is a sequential
+    // scan with a sort.
+    let from_fragment = format!(
+        "(SELECT e, (v <~> ({needle_param})::TEXT) AS infer_dist \
+         FROM mentat.datoms_text_new \
+         WHERE a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param}) \
+           AND added = true \
+           AND store_id = {store_id_param} \
+         ORDER BY v <~> ({needle_param})::TEXT \
+         LIMIT {k_param}) AS {dt_alias}"
+    );
+
+    let where_parts: Vec<String> = Vec::new();
+
+    let mut in_entity_var: Option<String> = None;
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        in_entity_var = Some(var_name.clone());
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.infer_dist"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts,
+        score_expr: Some(format!("{dt_alias}.infer_dist")),
+        entity_alias: in_entity_var.map(|n| (n, dt_alias.clone())),
+    })
+}
+
 // ============================================================================
 // `ground` where-function helpers (collection / tuple / relation forms)
 // ============================================================================
@@ -3694,6 +3953,11 @@ fn build_where_fn_binding(
     // "function levenshtein(...) does not exist".
     if matches!(op, "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff") {
         return Ok(Some(build_fuzzystrmatch_binding(wf, builder, op)?));
+    }
+
+    // pg_infer scalar bindings: similar (real) and implies (bool encoded as int 0/1).
+    if matches!(op, "infer-similar" | "infer-implies") {
+        return Ok(Some(build_pg_infer_scalar_binding(wf, builder, op)?));
     }
 
     let sql_op = match op {

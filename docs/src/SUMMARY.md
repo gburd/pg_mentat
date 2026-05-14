@@ -24,6 +24,8 @@
 - [BM25-style Ranked Search via rum](./rum.md)
 - [Vector Search via pgvector](./pgvector.md)
 - [Cross-Database Datalog via postgres_fdw](./postgres-fdw.md)
+- [Transactional Event Stream via PgQue](./pgque.md)
+- [Model-Knowledge Search via pg_infer](./pg_infer.md)
 
 ---
 

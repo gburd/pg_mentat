@@ -839,6 +839,8 @@ pub mod pgvector_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod pgque_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod pg_infer_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -1003,6 +1005,18 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/16_pgque_helpers.sql",
     name = "pgque_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional pg_infer (codeberg.org/gregburd/pg_infer, Apache 2.0)
+// integration: declares mentat.has_pg_infer() plus partial-index
+// helpers. Datalog where-fns (infer-near $ :attr "text" k),
+// (infer-similar a b), (infer-implies a b) are dispatched in
+// functions/query.rs. Requires PG18+ and a registered model. See
+// docs/src/pg_infer.md.
+extension_sql_file!(
+    "../sql/17_pg_infer_helpers.sql",
+    name = "pg_infer_helpers",
     requires = ["narrow_storage"],
 );
 
