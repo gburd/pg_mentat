@@ -417,3 +417,8 @@ problem we keep running into elsewhere.
   `vector-near`) now properly JOIN their entity binding to subsequent
   patterns instead of relying on DISTINCT to mask cartesian products.
   Fixes a latent bug exposed by `vector-near`'s per-row varying score.
+- **postgres_fdw cookbook** — cookbook page covering cross-database
+  Datalog: foreign-table the remote `mentat` schema, push filters
+  down via FDW, materialized-view caches, multi-tenant fan-out, and
+  the `:in` clause pattern. Pure docs (no new where-fns) since
+  postgres_fdw is built-in contrib. See `docs/src/postgres-fdw.md`.
