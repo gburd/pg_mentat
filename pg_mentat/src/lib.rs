@@ -843,6 +843,8 @@ pub mod pg_infer_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod postgis_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod infra_extensions_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -1031,6 +1033,44 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/18_postgis_helpers.sql",
     name = "postgis_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional PostgreSQL 19+ SQL/PGQ (Property Graph Queries) integration:
+// declares mentat.has_pg19_graph() plus vertex/edge view helpers and
+// a CREATE PROPERTY GRAPH DDL generator. See docs/src/pg19_graph.md.
+extension_sql_file!(
+    "../sql/19_pg19_graph_helpers.sql",
+    name = "pg19_graph_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional TimescaleDB integration: declares
+// mentat.has_timescaledb() plus hypertable + retention helpers for
+// the transaction log and instant-typed datoms. See
+// docs/src/timescaledb.md.
+extension_sql_file!(
+    "../sql/20_timescaledb_helpers.sql",
+    name = "timescaledb_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional pg_partman integration: declares mentat.has_pg_partman()
+// plus partition attachment + retention helpers for
+// mentat.transactions. See docs/src/pg_partman.md.
+extension_sql_file!(
+    "../sql/21_pg_partman_helpers.sql",
+    name = "pg_partman_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional pg_cron integration: declares mentat.has_pg_cron() plus
+// cron_schedule / cron_unschedule wrappers and convenience
+// schedulers for partman maintenance and vacuum. See
+// docs/src/pg_cron.md.
+extension_sql_file!(
+    "../sql/22_pg_cron_helpers.sql",
+    name = "pg_cron_helpers",
     requires = ["narrow_storage"],
 );
 

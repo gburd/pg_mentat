@@ -132,6 +132,52 @@ integer-shaped value).
 [(infer-implies ?title "AI") ?ok]
 ```
 
+### Set-returning verbs: walk / describe / predict
+
+Three additional pg_infer verbs are exposed as relation-binding
+where-fns. Unlike `(infer-near)`, they do **not** bind an entity
+variable, so they cannot JOIN to subsequent EAV patterns by `?e`.
+To combine their output with entity-side data, materialize via
+`(ground ...)` or wrap in raw SQL with `:in`.
+
+#### `[(infer-walk "prompt" top [<:model>]) [[?layer ?feature ?score ?concept]]]`
+
+Trace gate activations across model layers for a prompt. Useful
+for debugging model behavior or building custom ranking pipelines
+on raw activations.
+
+```clojure
+[(infer-walk "the capital of France is" 10) [[?layer ?feature ?score ?concept]]]
+```
+
+Maps to `SELECT layer, feature, gate_score, concept FROM walk(prompt, top)`.
+
+#### `[(infer-describe "entity" [threshold] [<:model>]) [[?relation ?target ?score ?layer]]]`
+
+Return knowledge edges the model has about an entity. Each row is a
+(relation, target, score, layer) tuple representing a relationship
+the model encodes.
+
+```clojure
+[(infer-describe "France") [[?relation ?target ?score ?layer]]]
+;; => :capital -> Paris (42.7), :language -> French (38.1), ...
+```
+
+Maps to `SELECT relation, target, gate_score, layer FROM describe(entity, threshold)`.
+The `threshold` argument is optional; pass NULL or omit for the GUC default.
+
+#### `[(infer-predict "prompt" top [<:model>]) [[?token ?probability ?rank]]]`
+
+Forward-pass next-token prediction. Returns the top tokens with
+probabilities and ranks. Requires pg_infer's inference feature
+built with `--features inference`.
+
+```clojure
+[(infer-predict "The capital of France is" 5) [[?token ?prob ?rank]]]
+```
+
+Maps to `SELECT token, probability, rank FROM infer(prompt, top)`.
+
 ## Index helpers
 
 ```sql

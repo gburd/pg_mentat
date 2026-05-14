@@ -433,6 +433,19 @@ problem we keep running into elsewhere.
   (PG18+). Where-fns: `(infer-near $ :attr "text" k [:model])`
   for top-K KNN ranked by model knowledge using `<~>`,
   `(infer-similar a b)` for scalar similarity,
-  `(infer-implies a b)` for directional implication. Helpers:
-  `mentat.has_pg_infer`, `mentat.create_infer_index`,
-  `mentat.drop_infer_index`. See `docs/src/pg_infer.md`.
+  `(infer-implies a b)` for directional implication, plus three
+  set-returning verbs `(infer-walk "prompt" top)`,
+  `(infer-describe "entity")`, `(infer-predict "prompt" top)`
+  with relation bindings. Helpers: `mentat.has_pg_infer`,
+  `mentat.create_infer_index`, `mentat.drop_infer_index`. See
+  `docs/src/pg_infer.md`.
+- **PostGIS** (postgis.net, GPL-2.0+) — geospatial search via
+  `(geom-near $ :attr "WKT" k)` (KNN by `ST_Distance`),
+  `(geom-within $ :attr "WKT" radius)` (within-distance via
+  `ST_DWithin`), `(geom-contains $ :attr "WKT")`
+  (`ST_Contains`), `(geom-intersects $ :attr "WKT")`
+  (`ST_Intersects`). Aux-table helpers:
+  `mentat.attach_geometry_attribute`, `set_geometry`, `del_geometry`,
+  `create_gist_geometry_index`, `detach_geometry_attribute`. SRID
+  auto-detected from `geometry_columns` so input WKT is coerced to
+  the column's projection. See `docs/src/postgis.md`.
