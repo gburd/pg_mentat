@@ -299,13 +299,11 @@ Shape:
 ## Tier 3 — interesting, lower priority
 
 ### pg_search (ParadeDB) — Tantivy-backed BM25 full-text
-**Effort:** 2 weeks. **License:** AGPL-3.0.
 
-The license is the blocker. AGPL is more aggressive than what most
-pg_mentat deployers will tolerate; if an integration ever ships, it
-needs explicit opt-in and prominent license documentation. Until then,
-the tsvector/GIN-backed `(fulltext ...)` already in pg_mentat is the
-right default.
+**Status:** rejected on license grounds. pg_search is AGPL-3.0; this
+is a non-starter for many commercial deployments. **Use `rum`
+instead** — it's PostgreSQL-licensed and provides positional ranked
+search that is close to BM25 in spirit. See `docs/src/rum.md`.
 
 ### pg_duckdb — DuckDB columnar engine inside Postgres
 **Effort:** 2–3 weeks. **License:** MIT.
@@ -403,3 +401,8 @@ problem we keep running into elsewhere.
   where-fn, plus partial-GIN index helpers
   (`mentat.create_trgm_index`, `mentat.drop_trgm_index`). See
   `docs/src/pg-trgm.md`. PG13+, no preload required.
+- **rum** (postgrespro/rum, PostgreSQL license) — BM25-style ranked
+  fulltext via the `(rum-fulltext $ :attr "term")` where-fn, with
+  partial-RUM index helpers (`mentat.create_rum_fulltext_index`,
+  `mentat.drop_rum_fulltext_index`). The permissive alternative to
+  ParadeDB's AGPL `pg_search`. See `docs/src/rum.md`.

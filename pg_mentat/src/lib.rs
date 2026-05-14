@@ -833,6 +833,8 @@ pub mod fuzzystrmatch_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod pg_trgm_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod rum_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -966,6 +968,16 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/13_pg_trgm_helpers.sql",
     name = "pg_trgm_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional rum (postgrespro/rum, PostgreSQL license) integration:
+// declares mentat.has_rum() and partial-RUM index helpers. The
+// (rum-fulltext $ :attr "term") where-fn is dispatched in
+// functions/query.rs. See docs/src/rum.md.
+extension_sql_file!(
+    "../sql/14_rum_helpers.sql",
+    name = "rum_helpers",
     requires = ["narrow_storage"],
 );
 
