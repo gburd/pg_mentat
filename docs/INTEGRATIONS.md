@@ -304,13 +304,6 @@ Shape:
 is a non-starter for many commercial deployments. **Use `rum`
 instead** — it's PostgreSQL-licensed and provides positional ranked
 search that is close to BM25 in spirit. See `docs/src/rum.md`.
-**Effort:** 2 weeks. **License:** AGPL-3.0.
-
-The license is the blocker. AGPL is more aggressive than what most
-pg_mentat deployers will tolerate; if an integration ever ships, it
-needs explicit opt-in and prominent license documentation. Until then,
-the tsvector/GIN-backed `(fulltext ...)` already in pg_mentat is the
-right default.
 
 ### pg_duckdb — DuckDB columnar engine inside Postgres
 **Effort:** 2–3 weeks. **License:** MIT.
