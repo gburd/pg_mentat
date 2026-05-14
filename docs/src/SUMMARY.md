@@ -26,6 +26,7 @@
 - [Cross-Database Datalog via postgres_fdw](./postgres-fdw.md)
 - [Transactional Event Stream via PgQue](./pgque.md)
 - [Model-Knowledge Search via pg_infer](./pg_infer.md)
+- [Geospatial Search via PostGIS](./postgis.md)
 
 ---
 

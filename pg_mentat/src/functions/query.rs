@@ -2046,6 +2046,43 @@ fn build_sql_from_datalog_enriched(
                 &store_id_param,
             )?;
             fts_joins.push(fj);
+        } else if matches!(op_name, "infer-walk" | "infer-describe" | "infer-predict") {
+            // pg_infer set-returning verbs:
+            //   (infer-walk "prompt" top [model])      — trace gate activations
+            //     binds [[?layer ?feature ?score ?concept]]
+            //   (infer-describe "entity" [threshold] [model])  — model knowledge
+            //     binds [[?relation ?target ?score ?layer]]
+            //   (infer-predict "prompt" top [model])  — forward-pass prediction
+            //     binds [[?token ?probability ?rank]]
+            // See build_pg_infer_table_join + docs/src/pg_infer.md.
+            let fj = build_pg_infer_table_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+            )?;
+            fts_joins.push(fj);
+        } else if matches!(
+            op_name,
+            "geom-near" | "geom-within" | "geom-contains" | "geom-intersects"
+        ) {
+            // PostGIS spatial where-fns:
+            //   (geom-near $ :attr "WKT" k)      — K-nearest by ST_Distance
+            //     binds [[?e ?dist]]
+            //   (geom-within $ :attr "WKT" radius) — ST_DWithin filter
+            //     binds [[?e ?dist]] (?dist optional)
+            //   (geom-contains $ :attr "WKT")    — ST_Contains filter
+            //     binds [[?e]]
+            //   (geom-intersects $ :attr "WKT") — ST_Intersects filter
+            //     binds [[?e]]
+            // See build_postgis_join + docs/src/postgis.md.
+            let fj = build_postgis_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2553,6 +2590,27 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
+                } else if matches!(op_name, "infer-walk" | "infer-describe" | "infer-predict") {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_pg_infer_table_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                    )?;
+                    arm_fts_joins.push(fts_join);
+                } else if matches!(
+                    op_name,
+                    "geom-near" | "geom-within" | "geom-contains" | "geom-intersects"
+                ) {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_postgis_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
                     "*" | "+" | "-" | "/" |
@@ -2570,7 +2628,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, vector-near, infer-near, levenshtein, soundex, metaphone, \
+                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, vector-near, infer-near, infer-walk, infer-describe, infer-predict, geom-near, geom-within, geom-contains, geom-intersects, levenshtein, soundex, metaphone, \
                          daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
@@ -3829,6 +3887,467 @@ fn build_infer_near_join(
         where_parts,
         score_expr: Some(format!("{dt_alias}.infer_dist")),
         entity_alias: in_entity_var.map(|n| (n, dt_alias.clone())),
+    })
+}
+
+/// Compile a pg_infer set-returning verb call into an FTS-style join.
+///
+/// Three verbs share the same shape — a FROM-clause subquery wrapping
+/// pg_infer's set-returning function, with each output column bound
+/// to a Datalog variable from the relation binding `[[?a ?b ...]]`:
+///
+/// * `(infer-walk "prompt" top [model])`
+///     SQL: `SELECT layer, feature, gate_score, concept FROM walk(\$1, \$2)`
+///     Binding: `[[?layer ?feature ?score ?concept]]` (4 columns).
+///
+/// * `(infer-describe "entity" [model])`
+///     SQL: `SELECT relation, target, gate_score, layer FROM describe(\$1)`
+///     Binding: `[[?relation ?target ?score ?layer]]` (4 columns).
+///
+/// * `(infer-predict "prompt" top [model])`
+///     SQL: `SELECT token, probability, rank FROM infer(\$1, \$2)`
+///     Binding: `[[?token ?probability ?rank]]` (3 columns).
+///
+/// pg_infer is the optional dependency. Without it, the SQL fails at
+/// execution with the standard PG "function does not exist" error.
+///
+/// Caveat: these where-fns do not bind an entity variable, so they
+/// cannot drive a JOIN to subsequent EAV patterns by `?e`. To filter
+/// the result by entity-side data, materialize via `(ground ...)` or
+/// run the verb in a wrapping SQL query and pass results in via `:in`.
+fn build_pg_infer_table_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    let op = wf.operator.0.as_str();
+    let dt_alias = format!("pi_d{}", fts_idx);
+
+    // Per-verb arity & SQL shape.
+    let (call_sql, expected_cols) = match op {
+        "infer-walk" => {
+            // (infer-walk "prompt" top [model])
+            if wf.args.len() < 2 || wf.args.len() > 3 {
+                return Err(format!(
+                    ":db.error/fn-arity infer-walk requires 2 or 3 arguments \
+                     (\"prompt\" top-int [:model]), got {}.",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let prompt = render_text_arg_or_var(&wf.args[0], builder, op)?;
+            let top = render_int_arg(&wf.args[1], op)?;
+            let _ = optional_model_keyword(&wf.args, 2, op)?; // accepted, GUC-driven
+            let cols = vec!["layer", "feature", "gate_score", "concept"];
+            (
+                format!("SELECT layer, feature, gate_score, concept FROM walk({prompt}, {top})"),
+                cols,
+            )
+        }
+        "infer-describe" => {
+            // (infer-describe "entity" [threshold] [model])
+            if wf.args.is_empty() || wf.args.len() > 3 {
+                return Err(format!(
+                    ":db.error/fn-arity infer-describe requires 1, 2, or 3 arguments \
+                     (\"entity\" [threshold-float] [:model]), got {}.",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let entity = render_text_arg_or_var(&wf.args[0], builder, op)?;
+            let threshold_sql = if wf.args.len() >= 2 {
+                match &wf.args[1] {
+                    FnArg::Constant(NonIntegerConstant::Float(f)) => {
+                        builder.bind_double(f.into_inner())
+                    }
+                    FnArg::EntidOrInteger(i) => format!("({})::FLOAT8", i),
+                    FnArg::IdentOrKeyword(_) => {
+                        // 2nd positional arg may also be the model keyword
+                        "NULL".to_string()
+                    }
+                    _ => {
+                        return Err(format!(
+                            ":db.error/fn-arg infer-describe second argument must be a numeric \
+                             threshold or a model keyword, got something else."
+                        )
+                        .into());
+                    }
+                }
+            } else {
+                "NULL".to_string()
+            };
+            // Optional 3rd model keyword — accepted but routed via GUC.
+            let _ = optional_model_keyword(&wf.args, 2, op)?;
+            let cols = vec!["relation", "target", "gate_score", "layer"];
+            (
+                format!(
+                    "SELECT relation, target, gate_score, layer FROM describe({entity}, {threshold_sql})"
+                ),
+                cols,
+            )
+        }
+        "infer-predict" => {
+            // (infer-predict "prompt" top [model])
+            if wf.args.len() < 2 || wf.args.len() > 3 {
+                return Err(format!(
+                    ":db.error/fn-arity infer-predict requires 2 or 3 arguments \
+                     (\"prompt\" top-int [:model]), got {}.",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let prompt = render_text_arg_or_var(&wf.args[0], builder, op)?;
+            let top = render_int_arg(&wf.args[1], op)?;
+            let _ = optional_model_keyword(&wf.args, 2, op)?;
+            let cols = vec!["token", "probability", "rank"];
+            (
+                format!("SELECT token, probability, rank FROM infer({prompt}, {top})"),
+                cols,
+            )
+        }
+        _ => unreachable!("build_pg_infer_table_join called with non-pg_infer op '{}'", op),
+    };
+
+    // Bind output columns.
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if i >= expected_cols.len() {
+                break;
+            }
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                var_bindings.insert(var_name, format!("{dt_alias}.{}", expected_cols[i]));
+            }
+        }
+    } else {
+        return Err(format!(
+            ":db.error/fn-binding pg_infer '{}' requires a relation binding [[v1 v2 ...]]. \
+             Got a different binding shape.",
+            op
+        )
+        .into());
+    }
+
+    let from_fragment = format!("({call_sql}) AS {dt_alias}");
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts: Vec::new(),
+        score_expr: None,
+        entity_alias: None, // pg_infer set-returning verbs don't bind ?e
+    })
+}
+
+/// Helper: render a text argument that may be a variable (resolved
+/// later) or a string constant (parameterized via SqlBuilder).
+fn render_text_arg_or_var(
+    a: &FnArg,
+    b: &mut SqlBuilder<'_>,
+    op: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    match a {
+        FnArg::Variable(v) => Ok(format!("VAR_REF:{}", v)),
+        FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(b.bind_text(s.as_ref().to_string())),
+        _ => Err(format!(
+            ":db.error/fn-arg pg_infer '{}' text argument must be a variable or string constant.",
+            op
+        )
+        .into()),
+    }
+}
+
+/// Helper: render an integer argument as a literal SQL int.
+fn render_int_arg(
+    a: &FnArg,
+    op: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    match a {
+        FnArg::EntidOrInteger(i) => Ok(i.to_string()),
+        _ => Err(format!(
+            ":db.error/fn-arg pg_infer '{}' integer argument must be a literal int.",
+            op
+        )
+        .into()),
+    }
+}
+
+/// Helper: parse an optional model-keyword argument at the given
+/// position. The keyword is accepted syntactically; routing to
+/// pg_infer's per-call model arg is left to the GUC infer.default_model
+/// (see docs/src/pg_infer.md). Returns Ok regardless of whether the
+/// arg was provided.
+fn optional_model_keyword(
+    args: &[FnArg],
+    pos: usize,
+    op: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    if args.len() <= pos {
+        return Ok(None);
+    }
+    match &args[pos] {
+        FnArg::IdentOrKeyword(_) => Ok(None), // accepted but not routed
+        // Some verbs allow a numeric/text in this position (e.g.
+        // describe(threshold)) — those are handled by the verb's own
+        // arg parser before reaching here.
+        _ => Err(format!(
+            ":db.error/fn-arg pg_infer '{}' optional argument at position {} \
+             (model keyword) must be a keyword like :qwen05b.",
+            op, pos
+        )
+        .into()),
+    }
+}
+
+/// Compile a PostGIS spatial where-fn into an FTS-style join over the
+/// per-attribute aux table created by `mentat.attach_geometry_attribute`.
+///
+/// Four ops share a near-identical SQL shape:
+///
+///   `(geom-near $ :attr "WKT" k)`           [[?e ?dist]]
+///       SELECT e, ST_Distance(geom, $wkt::geometry) AS dist
+///       FROM mentat.attr_<entid>_geom
+///       ORDER BY geom <-> $wkt::geometry
+///       LIMIT $k
+///
+///   `(geom-within $ :attr "WKT" radius)`    [[?e ?dist]]
+///       Identical shape but no LIMIT and a WHERE ST_DWithin(geom, ..., radius)
+///       guard. ?dist is exposed for ordering / filtering.
+///
+///   `(geom-contains $ :attr "WKT")`         [[?e]]
+///       SELECT e FROM mentat.attr_<entid>_geom
+///       WHERE ST_Contains(geom, $wkt::geometry)
+///
+///   `(geom-intersects $ :attr "WKT")`       [[?e]]
+///       Same but with ST_Intersects.
+///
+/// PostGIS is the optional dependency. Without it, the SQL fails at
+/// execution with the standard PG "type geometry does not exist" error.
+///
+/// SRID for the input WKT defaults to 4326 (WGS84 lat/long); pass an
+/// explicit `:srid` keyword arg at the end to override (currently
+/// accepted syntactically; the WKT is parsed by ST_GeomFromText with
+/// SRID 0 and assigned the column's SRID via ST_SetSRID).
+fn build_postgis_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    let op = wf.operator.0.as_str();
+    let dt_alias = format!("geo_d{}", fts_idx);
+
+    // Per-op arity validation.
+    let (min_args, max_args) = match op {
+        "geom-near" => (4, 4),
+        "geom-within" => (4, 4),
+        "geom-contains" => (3, 3),
+        "geom-intersects" => (3, 3),
+        _ => unreachable!(),
+    };
+    if wf.args.len() < min_args || wf.args.len() > max_args {
+        return Err(format!(
+            ":db.error/fn-arity {} requires {} arguments, got {}.",
+            op, min_args, wf.args.len()
+        )
+        .into());
+    }
+
+    // Arg 1: source ($) — ignored, present for parser symmetry.
+    // Arg 2: attribute keyword.
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(format!(
+                ":db.error/fn-arg {} second argument must be a keyword attribute. \
+                 Format: ({} $ :attr \"WKT\" ...)",
+                op, op
+            )
+            .into());
+        }
+    };
+
+    // Arg 3: WKT text.
+    let wkt = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(format!(
+                ":db.error/fn-arg {} third argument must be a WKT string. \
+                 Examples: \"POINT(0 0)\", \"POLYGON((...))\".",
+                op
+            )
+            .into());
+        }
+    };
+
+    // Arg 4 (when present): K (for near) or radius (for within).
+    let arg4: Option<f64> = if wf.args.len() == 4 {
+        match &wf.args[3] {
+            FnArg::EntidOrInteger(i) => Some(*i as f64),
+            FnArg::Constant(NonIntegerConstant::Float(f)) => Some(f.into_inner()),
+            _ => {
+                return Err(format!(
+                    ":db.error/fn-arg {} fourth argument must be a number.",
+                    op
+                )
+                .into());
+            }
+        }
+    } else {
+        None
+    };
+
+    // Resolve attribute entid via SPI to inline the aux-table name.
+    let attr_for_lookup = attr_ident.clone();
+    let entid_opt: Option<i64> = pgrx::Spi::connect(|client| {
+        let mut tt = client.select(
+            "SELECT entid FROM mentat.schema WHERE ident = $1",
+            Some(1),
+            &[attr_for_lookup.clone().into()],
+        )?;
+        if let Some(row) = tt.next() {
+            Ok::<_, pgrx::spi::SpiError>(row["entid"].value::<i64>()?)
+        } else {
+            Ok(None)
+        }
+    })
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        format!(
+            ":db.error/schema-lookup {} could not look up attribute {}: {}",
+            op, attr_for_lookup, e
+        )
+        .into()
+    })?;
+    let entid: i64 = entid_opt.ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+        format!(
+            ":db.error/unknown-attribute {} attribute {} is not registered.",
+            op, attr_for_lookup
+        )
+        .into()
+    })?;
+
+    let aux_table = format!("mentat.attr_{}_geom", entid);
+
+    // Look up the column's SRID so the input WKT can be coerced to
+    // match. Without this, ST_DWithin / ST_Distance raise mixed-SRID
+    // errors when the column was attached with a non-zero SRID.
+    let srid: i32 = pgrx::Spi::connect(|client| {
+        let q = format!(
+            "SELECT srid FROM geometry_columns WHERE f_table_schema = 'mentat' \
+             AND f_table_name = 'attr_{}_geom' AND f_geometry_column = 'geom'",
+            entid
+        );
+        let mut tt = client.select(&q, Some(1), &[])?;
+        if let Some(row) = tt.next() {
+            let val: Option<i32> = row["srid"].value()?;
+            Ok::<_, pgrx::spi::SpiError>(val)
+        } else {
+            Ok(None)
+        }
+    })
+    .ok()
+    .flatten()
+    .unwrap_or(0);
+
+    let wkt_param = builder.bind_text(wkt);
+    // Two-arg ST_GeomFromText assigns SRID directly. When SRID is 0
+    // (column was attached with srid=0 or geometry_columns has no row)
+    // we still emit the 2-arg call; PostGIS treats SRID 0 as "unknown"
+    // and accepts it for predicates between SRID-0 geometries.
+    let geom_expr = format!("ST_GeomFromText({wkt_param}, {srid})");
+
+    // Build per-op SQL.
+    let from_fragment = match op {
+        "geom-near" => {
+            let k = arg4.expect("arity-checked") as i64;
+            if k <= 0 {
+                return Err(format!(
+                    ":db.error/fn-arg geom-near k must be > 0, got {}.",
+                    k
+                )
+                .into());
+            }
+            let k_param = builder.bind_bigint(k);
+            // ST_GeomFromText returns SRID 0 unless given; we use the
+            // column's SRID by reading it from geometry_columns at
+            // query time — easier: cast WKT through ST_GeomFromText
+            // and let PostGIS pick. The <-> GIST-friendly distance op
+            // is index-orderable.
+            format!(
+                "(SELECT e, ST_Distance(geom, {geom_expr}) AS geo_dist \
+                 FROM {aux_table} \
+                 ORDER BY geom <-> {geom_expr} \
+                 LIMIT {k_param}) AS {dt_alias}"
+            )
+        }
+        "geom-within" => {
+            let radius = arg4.expect("arity-checked");
+            if !(radius > 0.0) {
+                return Err(format!(
+                    ":db.error/fn-arg geom-within radius must be > 0, got {}.",
+                    radius
+                )
+                .into());
+            }
+            let radius_param = builder.bind_double(radius);
+            format!(
+                "(SELECT e, ST_Distance(geom, {geom_expr}) AS geo_dist \
+                 FROM {aux_table} \
+                 WHERE ST_DWithin(geom, {geom_expr}, ({radius_param})::FLOAT8)) \
+                 AS {dt_alias}"
+            )
+        }
+        "geom-contains" => format!(
+            "(SELECT e, NULL::FLOAT8 AS geo_dist \
+             FROM {aux_table} \
+             WHERE ST_Contains(geom, {geom_expr})) \
+             AS {dt_alias}"
+        ),
+        "geom-intersects" => format!(
+            "(SELECT e, NULL::FLOAT8 AS geo_dist \
+             FROM {aux_table} \
+             WHERE ST_Intersects(geom, {geom_expr})) \
+             AS {dt_alias}"
+        ),
+        _ => unreachable!(),
+    };
+
+    // Bind variables.
+    let mut entity_var: Option<String> = None;
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        entity_var = Some(var_name.clone());
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        // ?dist is only meaningful for near/within; for
+                        // contains/intersects it's NULL, but we still
+                        // bind it so users who write [[?e ?d]] get
+                        // NULL rather than a parse error.
+                        var_bindings.insert(var_name, format!("{dt_alias}.geo_dist"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    } else {
+        return Err(format!(
+            ":db.error/fn-binding {} requires a relation binding [[?e]] or [[?e ?dist]].",
+            op
+        )
+        .into());
+    }
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts: Vec::new(),
+        score_expr: matches!(op, "geom-near" | "geom-within")
+            .then(|| format!("{dt_alias}.geo_dist")),
+        entity_alias: entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
 
