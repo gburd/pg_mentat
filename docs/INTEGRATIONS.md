@@ -422,3 +422,9 @@ problem we keep running into elsewhere.
   down via FDW, materialized-view caches, multi-tenant fan-out, and
   the `:in` clause pattern. Pure docs (no new where-fns) since
   postgres_fdw is built-in contrib. See `docs/src/postgres-fdw.md`.
+- **PgQue** (NikolayS/PgQue, Apache 2.0) — transactional event
+  stream: one `mentat.tx` event per transaction, emitted from a
+  deferred constraint trigger on `mentat.transactions`. Helpers:
+  `mentat.pgque_emit_tx('queue')`, `mentat.pgque_disable_tx`,
+  `mentat.pgque_register_consumer`. Pure-PL/pgSQL queue, no
+  extensions, PG14+. See `docs/src/pgque.md`.
