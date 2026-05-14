@@ -414,6 +414,22 @@ Full documentation is available as an [mdBook](https://gburd.github.io/pg_mentat
   with raw CSVs, EXPLAIN plans, and a CPU flamegraph. Reproducible
   via `bash benchmarks/phase2/run.sh`.
 
+### Extension integrations
+
+pg_mentat composes with other PostgreSQL extensions for capabilities
+beyond the core Datalog engine. Each integration is opt-in and
+soft-dependency: pg_mentat works without the optional extension; if
+the extension is installed, a Datalog where-fn or value type becomes
+available.
+
+- **pg_tre** — [approximate-regex search](docs/src/fuzzy-search.md)
+  via `(fuzzy-match $ :attr "pattern" k)`.
+
+Further integrations (pgvector, PostGIS, TimescaleDB, fuzzystrmatch,
+pg_partman, pg_trgm, pg_jsonschema, pg_cron, postgres_fdw, ...) are
+planned. See [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md) for the full
+list with integration shape, effort, and priority for each.
+
 ## Contributing
 
 1. Fork the repository
