@@ -27,6 +27,10 @@
 - [Transactional Event Stream via PgQue](./pgque.md)
 - [Model-Knowledge Search via pg_infer](./pg_infer.md)
 - [Geospatial Search via PostGIS](./postgis.md)
+- [Property Graph Queries via PG19 SQL/PGQ](./pg19_graph.md)
+- [Time-Series Storage via TimescaleDB](./timescaledb.md)
+- [Declarative Partitioning via pg_partman](./pg_partman.md)
+- [Scheduled Maintenance via pg_cron](./pg_cron.md)
 
 ---
 
