@@ -1,6 +1,6 @@
 [extension]
 name = "pg_mentat"
-version = "1.2.1"
+version = "1.3.0"
 repository = "https://github.com/gburd/pg_mentat"
 license = "Apache-2.0"
 description = "Datomic-compatible Datalog query engine for PostgreSQL"
