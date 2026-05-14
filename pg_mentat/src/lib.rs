@@ -835,6 +835,8 @@ pub mod pg_trgm_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod rum_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod pgvector_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -978,6 +980,16 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/14_rum_helpers.sql",
     name = "rum_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional pgvector integration: declares mentat.has_pgvector() plus the
+// per-attribute aux-table helpers (attach/set/del/create_hnsw). The
+// (vector-near $ :attr "[...]" k [op]) where-fn is dispatched in
+// functions/query.rs. See docs/src/pgvector.md.
+extension_sql_file!(
+    "../sql/15_pgvector_helpers.sql",
+    name = "pgvector_helpers",
     requires = ["narrow_storage"],
 );
 
