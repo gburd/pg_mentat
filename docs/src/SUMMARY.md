@@ -23,6 +23,7 @@
 - [Trigram Similarity via pg_trgm](./pg-trgm.md)
 - [BM25-style Ranked Search via rum](./rum.md)
 - [Vector Search via pgvector](./pgvector.md)
+- [Cross-Database Datalog via postgres_fdw](./postgres-fdw.md)
 
 ---
 

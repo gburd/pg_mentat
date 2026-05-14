@@ -406,3 +406,19 @@ problem we keep running into elsewhere.
   partial-RUM index helpers (`mentat.create_rum_fulltext_index`,
   `mentat.drop_rum_fulltext_index`). The permissive alternative to
   ParadeDB's AGPL `pg_search`. See `docs/src/rum.md`.
+- **pgvector** (partial) — K-nearest-neighbor search via the
+  `(vector-near $ :attr "[...]" k [op])` where-fn, plus aux-table
+  helpers (`attach_vector_attribute`, `set_vector`, `del_vector`,
+  `create_hnsw_vector_index`). Side-table design; full
+  `:db.type/vector` schema integration is a follow-up. See
+  `docs/src/pgvector.md`.
+- **(query-side fix bundled with pgvector)** — the FTS-style join
+  builders (`fulltext`, `fuzzy-match`, `similar-to`, `rum-fulltext`,
+  `vector-near`) now properly JOIN their entity binding to subsequent
+  patterns instead of relying on DISTINCT to mask cartesian products.
+  Fixes a latent bug exposed by `vector-near`'s per-row varying score.
+- **postgres_fdw cookbook** — cookbook page covering cross-database
+  Datalog: foreign-table the remote `mentat` schema, push filters
+  down via FDW, materialized-view caches, multi-tenant fan-out, and
+  the `:in` clause pattern. Pure docs (no new where-fns) since
+  postgres_fdw is built-in contrib. See `docs/src/postgres-fdw.md`.
