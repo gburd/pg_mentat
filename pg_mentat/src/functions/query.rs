@@ -2223,7 +2223,7 @@ fn build_sql_from_datalog_enriched(
             }
         } else {
             // Arithmetic binding functions: [(* ?age 2) ?double-age]
-            if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
+            if let Some((var_name, expr)) = build_where_fn_binding(wf, builder)? {
                 extra_var_bindings.insert(var_name, expr);
             } else {
                 return Err(format!(
@@ -2454,15 +2454,24 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
-                } else if matches!(op_name, "*" | "+" | "-" | "/") {
-                    // Arithmetic binding functions work the same as in the main query
-                    if let Some((var_name, expr)) = build_where_fn_binding(wf)? {
+                } else if matches!(
+                    op_name,
+                    "*" | "+" | "-" | "/" |
+                    "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff"
+                ) {
+                    // Arithmetic + fuzzystrmatch binding functions work the
+                    // same as in the main query. Use the OR-arm builder so
+                    // any text constants get bound into the arm's parameter
+                    // list (each arm has its own SqlBuilder so $N indices
+                    // don't collide).
+                    if let Some((var_name, expr)) = build_where_fn_binding(wf, &mut arm_builder)? {
                         arm_extra_var_bindings.insert(var_name, expr);
                     }
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, *, +, -, /.",
+                         Supported: fulltext, fuzzy-match, levenshtein, soundex, metaphone, \
+                         daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
                 }
@@ -3126,6 +3135,7 @@ fn ground_value_kind(v: &serde_json::Value) -> &'static str {
 /// Build a computed expression from a where-function binding like [(* ?age 2) ?double-age].
 fn build_where_fn_binding(
     wf: &WhereFn,
+    builder: &mut SqlBuilder<'_>,
 ) -> Result<Option<(String, String)>, Box<dyn std::error::Error + Send + Sync>> {
     let op = wf.operator.0.as_str();
 
@@ -3133,6 +3143,19 @@ fn build_where_fn_binding(
     // to inject into input_bindings before pattern compilation.
     if op == "ground" {
         return Ok(None);
+    }
+
+    // fuzzystrmatch contrib bindings: levenshtein / soundex / metaphone /
+    // daitch_mokotoff. Each binds a scalar result so the same
+    // (?-name, expr) shape works as for arithmetic. Text constants are
+    // bound through the SqlBuilder for SQL safety.
+    //
+    // The fuzzystrmatch extension must be installed in the database;
+    // mentat.has_fuzzystrmatch() returns true when it is. Without it the
+    // generated SQL fails at execution with the standard PG error
+    // "function levenshtein(...) does not exist".
+    if matches!(op, "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff") {
+        return Ok(Some(build_fuzzystrmatch_binding(wf, builder, op)?));
     }
 
     let sql_op = match op {
@@ -3167,6 +3190,121 @@ fn build_where_fn_binding(
         result_var,
         format!("({} {} {})", arg0, sql_op, arg1),
     )))
+}
+
+/// Build a scalar binding for one of the fuzzystrmatch contrib functions.
+///
+/// Shape mirrors the arithmetic binding: `[(<fn> <args>) ?result]`. The
+/// returned SQL expression contains `VAR_REF:?x` placeholders that are
+/// resolved by `resolve_var_refs` to the appropriate text columns at
+/// emit time, plus parameterized constants for any literal text args.
+///
+/// Supported:
+///   `[(levenshtein ?a ?b) ?d]`            — edit distance, int
+///   `[(soundex ?s) ?code]`                — 4-char Soundex code
+///   `[(metaphone ?s ?max) ?code]`         — phonetic, max-len chars
+///   `[(daitch-mokotoff ?s) ?codes]`       — D-M codes (returns text[];
+///                                            cast to text for binding)
+fn build_fuzzystrmatch_binding(
+    wf: &WhereFn,
+    builder: &mut SqlBuilder<'_>,
+    op: &str,
+) -> Result<(String, String), Box<dyn std::error::Error + Send + Sync>> {
+    let result_var = match &wf.binding {
+        Binding::BindScalar(v) => format!("{}", v),
+        _ => {
+            return Err(format!(
+                ":db.error/fn-binding fuzzystrmatch function '{}' requires a scalar binding. \
+                 Example: [({} ?s) ?code]",
+                op, op
+            )
+            .into());
+        }
+    };
+
+    // Per-function arity check + arg encoding. Text args are SqlBuilder-bound
+    // for safety; variable args become VAR_REF:?x placeholders.
+    let render_text_arg = |a: &FnArg, b: &mut SqlBuilder<'_>| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        match a {
+            FnArg::Variable(v) => Ok(format!("VAR_REF:{}", v)),
+            FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(b.bind_text(s.as_ref().to_string())),
+            _ => Err(format!(
+                ":db.error/fn-arg fuzzystrmatch '{}' arguments must be text variables \
+                 or string constants.",
+                op
+            )
+            .into()),
+        }
+    };
+    let render_int_arg = |a: &FnArg| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        match a {
+            FnArg::EntidOrInteger(i) => Ok(i.to_string()),
+            _ => Err(format!(
+                ":db.error/fn-arg fuzzystrmatch '{}' integer argument must be a literal int.",
+                op
+            )
+            .into()),
+        }
+    };
+
+    let expr = match op {
+        "levenshtein" => {
+            if wf.args.len() != 2 {
+                return Err(format!(
+                    ":db.error/fn-arity levenshtein requires exactly 2 text arguments, got {}. \
+                     Example: [(levenshtein ?name \"Alice\") ?d]",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let a = render_text_arg(&wf.args[0], builder)?;
+            let b = render_text_arg(&wf.args[1], builder)?;
+            format!("levenshtein({}, {})", a, b)
+        }
+        "soundex" => {
+            if wf.args.len() != 1 {
+                return Err(format!(
+                    ":db.error/fn-arity soundex requires exactly 1 text argument, got {}. \
+                     Example: [(soundex ?name) ?code]",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let a = render_text_arg(&wf.args[0], builder)?;
+            format!("soundex({})", a)
+        }
+        "metaphone" => {
+            if wf.args.len() != 2 {
+                return Err(format!(
+                    ":db.error/fn-arity metaphone requires exactly 2 arguments \
+                     (text, int max-len), got {}. Example: [(metaphone ?name 5) ?code]",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let a = render_text_arg(&wf.args[0], builder)?;
+            let n = render_int_arg(&wf.args[1])?;
+            format!("metaphone({}, {})", a, n)
+        }
+        "daitch-mokotoff" => {
+            if wf.args.len() != 1 {
+                return Err(format!(
+                    ":db.error/fn-arity daitch-mokotoff requires exactly 1 text argument, got {}. \
+                     Example: [(daitch-mokotoff ?name) ?codes]",
+                    wf.args.len()
+                )
+                .into());
+            }
+            let a = render_text_arg(&wf.args[0], builder)?;
+            // daitch_mokotoff returns text[]; cast to text so the scalar
+            // binding gets a single value (e.g. "{367460,394000}") that
+            // downstream predicates can compare or just inspect.
+            format!("daitch_mokotoff({})::TEXT", a)
+        }
+        _ => unreachable!("build_fuzzystrmatch_binding called with non-fuzzystrmatch op '{}'", op),
+    };
+
+    Ok((result_var, expr))
 }
 
 /// Convert an FnArg to a SQL placeholder expression.
@@ -5342,7 +5480,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
             }
             WhereClause::WhereFn(wf) => {
                 // Handle arithmetic function bindings in rule bodies
-                if let Some((result_var, _computed_expr)) = build_where_fn_binding(wf)? {
+                if let Some((result_var, _computed_expr)) = build_where_fn_binding(wf, builder)? {
                     // Store the computed expression for later use in SELECT
                     body_var_to_alias.insert(result_var, ("COMPUTED".to_string(), "expr"));
                     // We'll handle this in the SELECT clause
@@ -5372,7 +5510,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
     // First pass: collect computed expressions from WhereFn clauses
     for wc in &clause.body {
         if let WhereClause::WhereFn(wf) = wc {
-            if let Some((result_var, computed_expr)) = build_where_fn_binding(wf)? {
+            if let Some((result_var, computed_expr)) = build_where_fn_binding(wf, builder)? {
                 // Resolve variable references in the computed expression
                 let resolved_expr = resolve_var_refs_for_rule(&computed_expr, &body_var_to_alias);
                 computed_expressions.insert(result_var, resolved_expr);
