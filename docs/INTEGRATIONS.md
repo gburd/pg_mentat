@@ -449,3 +449,26 @@ problem we keep running into elsewhere.
   `create_gist_geometry_index`, `detach_geometry_attribute`. SRID
   auto-detected from `geometry_columns` so input WKT is coerced to
   the column's projection. See `docs/src/postgis.md`.
+- **PG19 SQL/PGQ** (Property Graph Queries) — vertex / edge view
+  helpers (`mentat.create_vertex_view`, `create_edge_view`,
+  `drop_*`) that map narrow datom storage onto SQL/PGQ-compatible
+  tables, plus a `mentat.create_property_graph_ddl` text generator.
+  Forward-looking: PG19 ships SQL/PGQ; the integration is
+  detect-only on PG13-PG18 today. See `docs/src/pg19_graph.md`.
+- **TimescaleDB** (Apache 2.0 OSS) — hypertable conversion for
+  `mentat.transactions(tx_instant)` and
+  `mentat.datoms_instant_new(v)`, plus retention policies. Helpers:
+  `mentat.has_timescaledb`, `timescale_attach_transactions`,
+  `timescale_attach_instant_datoms`,
+  `timescale_set_transaction_retention`. See
+  `docs/src/timescaledb.md`.
+- **pg_partman** (PostgreSQL license) — declarative partition
+  management for `mentat.transactions` on `tx_instant`. Helpers:
+  `mentat.has_pg_partman`, `partman_attach_transactions`,
+  `partman_set_transaction_retention`, `partman_run_maintenance`.
+  Refuses one-time table conversion to prevent silent data loss;
+  manual conversion path documented. See `docs/src/pg_partman.md`.
+- **pg_cron** (PostgreSQL license) — scheduled-maintenance wrapper.
+  Helpers: `mentat.has_pg_cron`, `cron_schedule`, `cron_unschedule`,
+  plus convenience schedulers for partman maintenance and narrow-
+  datom-table VACUUM. See `docs/src/pg_cron.md`.
