@@ -395,3 +395,11 @@ problem we keep running into elsewhere.
 
 - **pg_tre** — approximate-regex search via the `(fuzzy-match ...)`
   where-fn. See `docs/src/fuzzy-search.md`. Commit `9ad7650`.
+- **fuzzystrmatch** — phonetic and edit-distance scalar functions
+  (`levenshtein`, `soundex`, `metaphone`, `daitch-mokotoff`) as
+  Datalog where-fns. See `docs/src/fuzzystrmatch.md`. PG13+, no
+  preload required.
+- **pg_trgm** — trigram-similarity matching via the `(similar-to ...)`
+  where-fn, plus partial-GIN index helpers
+  (`mentat.create_trgm_index`, `mentat.drop_trgm_index`). See
+  `docs/src/pg-trgm.md`. PG13+, no preload required.

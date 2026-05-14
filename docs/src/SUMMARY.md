@@ -19,6 +19,8 @@
 
 - [JOIN Datalog Results With Postgres Tables](./cookbook-postgres-join.md)
 - [Approximate-Regex Search via pg_tre](./fuzzy-search.md)
+- [Phonetic & Edit-Distance Functions via fuzzystrmatch](./fuzzystrmatch.md)
+- [Trigram Similarity via pg_trgm](./pg-trgm.md)
 
 ---
 

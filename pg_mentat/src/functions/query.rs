@@ -1991,6 +1991,19 @@ fn build_sql_from_datalog_enriched(
                 &store_id_param,
             )?;
             fts_joins.push(fj);
+        } else if op_name == "similar-to" {
+            // (similar-to $ :attr "needle" threshold)  — trigram-similarity
+            // search backed by the optional pg_trgm contrib extension.
+            // See build_similar_to_join.
+            let fj = build_similar_to_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2454,6 +2467,17 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
+                } else if op_name == "similar-to" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_similar_to_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
                     "*" | "+" | "-" | "/" |
@@ -2470,7 +2494,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, levenshtein, soundex, metaphone, \
+                         Supported: fulltext, fuzzy-match, similar-to, levenshtein, soundex, metaphone, \
                          daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
@@ -3032,6 +3056,135 @@ fn build_fuzzy_match_join(
         // for fuzzy-match results; explicit ORDER BY in the :find / :order
         // clauses still works on bound variables.
         score_expr: None,
+    })
+}
+
+/// Compile `(similar-to $ :attr "needle" threshold) [[?e ?val ?score]]`
+/// into an FTS-style join over `mentat.datoms_text_new`, using pg_trgm's
+/// `similarity(text, text)` function for scoring and filtering.
+///
+/// pg_trgm is the contrib **trigram** extension (PG13+, no preload). It
+/// provides `similarity(a, b) -> real` in [0.0, 1.0], plus the `%`
+/// operator (similar-above-threshold) and GIN/GiST `gin_trgm_ops`/
+/// `gist_trgm_ops` index access methods.
+///
+/// The compiled SQL uses `similarity(v, needle) >= threshold` rather than
+/// the `%` operator. The two are equivalent when the threshold matches
+/// `pg_trgm.similarity_threshold`, but `>=` makes the per-query threshold
+/// explicit, sidesteps the session GUC, and preserves the score for
+/// downstream `:order` / `:find` use.
+///
+/// To make `similar-to` index-backed, the user creates a partial GIN
+/// trigram index keyed by attribute via `mentat.create_trgm_index('<:attr/ident>')`.
+/// PostgreSQL's planner picks it up automatically for the `%` operator;
+/// when using `similarity() >= threshold`, the planner needs a rewrite
+/// in pg_trgm 1.6+ — typically the planner uses the index for `v % needle`
+/// and rechecks `similarity(...) >= threshold` post-fetch.
+fn build_similar_to_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+    schema_prefix: &str,
+    store_id_param: &str,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    if wf.args.len() != 4 {
+        return Err(format!(
+            ":db.error/fn-arity similar-to requires exactly 4 arguments \
+             ($ attr-keyword needle-text threshold-float), got {}. \
+             Example: [(similar-to $ :issue/title \"databse\" 0.3) [[?e ?val ?score]]]",
+            wf.args.len()
+        )
+        .into());
+    }
+
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(":db.error/fn-arg similar-to second argument must be a keyword \
+                        attribute (e.g. :issue/title). Format: \
+                        (similar-to $ :attr \"needle\" 0.3)"
+                .into());
+        }
+    };
+
+    let needle = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(":db.error/fn-arg similar-to third argument must be a string. \
+                        Format: (similar-to $ :attr \"databse\" 0.3)"
+                .into());
+        }
+    };
+
+    let threshold: f64 = match &wf.args[3] {
+        FnArg::Constant(NonIntegerConstant::Float(f)) => f.into_inner(),
+        FnArg::EntidOrInteger(i) => *i as f64,
+        _ => {
+            return Err(":db.error/fn-arg similar-to fourth argument must be a numeric \
+                        threshold in (0.0, 1.0]. Format: (similar-to $ :attr \"pat\" 0.3)"
+                .into());
+        }
+    };
+    if !(threshold > 0.0 && threshold <= 1.0) {
+        return Err(format!(
+            ":db.error/fn-arg similar-to threshold must be in (0.0, 1.0], got {}. \
+             Lower thresholds match more loosely; pg_trgm's default is 0.3.",
+            threshold
+        )
+        .into());
+    }
+
+    let dt_alias = format!("sim_d{}", fts_idx);
+    let attr_param = builder.bind_text(attr_ident);
+    let needle_param = builder.bind_text(needle);
+    let threshold_param = builder.bind_double(threshold);
+
+    let mut where_parts = Vec::new();
+    where_parts.push(format!(
+        "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
+    ));
+    where_parts.push(format!("{dt_alias}.added = true"));
+    where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
+    // similarity() is provided by pg_trgm. The expression returns float in
+    // [0.0, 1.0]; we filter and (optionally) project it as the score.
+    where_parts.push(format!(
+        "similarity({dt_alias}.v, {needle_param}) >= ({threshold_param})::REAL"
+    ));
+
+    // Bind result variables from a [[?e ?val ?score]] relation pattern.
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.v"));
+                    }
+                    2 => {
+                        var_bindings.insert(
+                            var_name,
+                            format!("similarity({dt_alias}.v, {needle_param})"),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts,
+        // Expose pg_trgm similarity as the score so :order :score works.
+        score_expr: Some(format!(
+            "similarity({dt_alias}.v, {needle_param})"
+        )),
     })
 }
 

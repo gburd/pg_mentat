@@ -831,6 +831,8 @@ pub mod fuzzy_match_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod fuzzystrmatch_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod pg_trgm_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -954,6 +956,16 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/12_fuzzystrmatch_helpers.sql",
     name = "fuzzystrmatch_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional pg_trgm (contrib) integration: declares mentat.has_pg_trgm(),
+// mentat.create_trgm_index('<:attr>'), mentat.drop_trgm_index('<:attr>').
+// The (similar-to $ :attr "needle" threshold) where-fn is dispatched in
+// functions/query.rs. See docs/src/pg-trgm.md.
+extension_sql_file!(
+    "../sql/13_pg_trgm_helpers.sql",
+    name = "pg_trgm_helpers",
     requires = ["narrow_storage"],
 );
 
