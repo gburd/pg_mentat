@@ -12,7 +12,7 @@ results with relational data; pg_mentat does it in a single SQL statement and a
 single transaction.
 
 This page shows the pattern. The schemas, queries, and outputs below are run
-against a live `cookbook_demo` database (Postgres 16.13, pg_mentat 1.2.1).
+against a live `cookbook_demo` database (Postgres 16.13, pg_mentat 1.3.0).
 
 ## The example domain
 
