@@ -2017,6 +2017,21 @@ fn build_sql_from_datalog_enriched(
                 &store_id_param,
             )?;
             fts_joins.push(fj);
+        } else if op_name == "vector-near" {
+            // (vector-near $ :attr "[v1,v2,...]" k [distance-op])  — K-nearest-
+            // neighbor search backed by the optional pgvector extension.
+            // Vectors live in a per-attribute aux table populated through
+            // mentat.set_vector(...). See build_vector_near_join and
+            // docs/src/pgvector.md.
+            let fj = build_vector_near_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
+            fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
             // args: [$, entity-var, attribute-keyword, default-value]
@@ -2502,6 +2517,17 @@ fn build_sql_from_datalog_enriched(
                         &arm_store_id_param,
                     )?;
                     arm_fts_joins.push(fts_join);
+                } else if op_name == "vector-near" {
+                    let fts_idx = fts_joins.len() + idx;
+                    let fts_join = build_vector_near_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
+                    arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
                     "*" | "+" | "-" | "/" |
@@ -2518,7 +2544,7 @@ fn build_sql_from_datalog_enriched(
                 } else {
                     return Err(format!(
                         ":db.error/unsupported-query Function '{}' is not supported inside OR branches. \
-                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, levenshtein, soundex, metaphone, \
+                         Supported: fulltext, fuzzy-match, similar-to, rum-fulltext, vector-near, levenshtein, soundex, metaphone, \
                          daitch-mokotoff, *, +, -, /.",
                         op_name
                     ).into());
@@ -2734,6 +2760,14 @@ struct FtsJoin {
     /// SQL expression for the relevance score column, if the score variable is bound.
     /// Used to add `ORDER BY score DESC` for relevance-ranked results.
     score_expr: Option<String>,
+    /// Optional `(var_name, alias_name)` for the entity binding. When set,
+    /// the main query loop inserts `var_name -> (alias_name, "e")` into
+    /// `var_to_alias` so that subsequent patterns referencing the same
+    /// variable JOIN against `<alias>.e` rather than introducing a
+    /// cartesian product. The alias must match the AS-name in
+    /// `from_fragment`. Use this when the FTS subquery has a usable `e`
+    /// column of type BIGINT (i.e. matches the EAV `.e` shape).
+    entity_alias: Option<(String, String)>,
 }
 
 /// A `get-else` where-function clause: `[(get-else $ ?e :attr default) ?val]`
@@ -2926,12 +2960,14 @@ fn build_fulltext_join(
     }
 
     // Bind result variables from the binding pattern [[?e ?name _ ?score]]
+    let mut fts_entity_var: Option<String> = None;
     if let Binding::BindRel(ref vars) = wf.binding {
         for (i, vop) in vars.iter().enumerate() {
             if let VariableOrPlaceholder::Variable(ref v) = vop {
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
+                        fts_entity_var = Some(var_name.clone());
                         var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
                     }
                     1 => {
@@ -2960,6 +2996,7 @@ fn build_fulltext_join(
         from_fragment,
         where_parts,
         score_expr,
+        entity_alias: fts_entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
 
@@ -3053,12 +3090,14 @@ fn build_fuzzy_match_join(
     ));
 
     // Bind result variables from a [[?e ?val]] relation pattern.
+    let mut fz_entity_var: Option<String> = None;
     if let Binding::BindRel(ref vars) = wf.binding {
         for (i, vop) in vars.iter().enumerate() {
             if let VariableOrPlaceholder::Variable(ref v) = vop {
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
+                        fz_entity_var = Some(var_name.clone());
                         var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
                     }
                     1 => {
@@ -3080,6 +3119,7 @@ fn build_fuzzy_match_join(
         // for fuzzy-match results; explicit ORDER BY in the :find / :order
         // clauses still works on bound variables.
         score_expr: None,
+        entity_alias: fz_entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
 
@@ -3177,12 +3217,14 @@ fn build_similar_to_join(
     ));
 
     // Bind result variables from a [[?e ?val ?score]] relation pattern.
+    let mut sim_entity_var: Option<String> = None;
     if let Binding::BindRel(ref vars) = wf.binding {
         for (i, vop) in vars.iter().enumerate() {
             if let VariableOrPlaceholder::Variable(ref v) = vop {
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
+                        sim_entity_var = Some(var_name.clone());
                         var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
                     }
                     1 => {
@@ -3209,6 +3251,7 @@ fn build_similar_to_join(
         score_expr: Some(format!(
             "similarity({dt_alias}.v, {needle_param})"
         )),
+        entity_alias: sim_entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
 
@@ -3310,12 +3353,14 @@ fn build_rum_fulltext_join(
         where_parts.push("false".to_string());
     }
 
+    let mut rum_entity_var: Option<String> = None;
     if let Binding::BindRel(ref vars) = wf.binding {
         for (i, vop) in vars.iter().enumerate() {
             if let VariableOrPlaceholder::Variable(ref v) = vop {
                 let var_name = format!("{}", v);
                 match i {
                     0 => {
+                        rum_entity_var = Some(var_name.clone());
                         var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
                     }
                     1 => {
@@ -3338,6 +3383,193 @@ fn build_rum_fulltext_join(
         from_fragment,
         where_parts,
         score_expr,
+        entity_alias: rum_entity_var.map(|n| (n, dt_alias.clone())),
+    })
+}
+
+/// Compile `(vector-near $ :attr "[v1,v2,...]" k [distance-op])` into a
+/// K-nearest-neighbor join over a per-attribute aux table populated
+/// through `mentat.set_vector(?e, :attr, '[...]')`.
+///
+/// pgvector is the optional dependency. The aux table is named
+/// `mentat.attr_<entid>_vector(e BIGINT PRIMARY KEY, v vector(N))`,
+/// created by `mentat.attach_vector_attribute(:attr, dim)`.
+///
+/// Default distance is cosine (`<=>`). Other distance ops:
+///   :cosine  → `<=>`   (cosine distance, [0, 2])
+///   :l2      → `<->`   (Euclidean / L2 distance)
+///   :inner   → `<#>`   (negative inner product; lower = more similar)
+///
+/// Generated SQL shape:
+///   FROM (SELECT e, (v <=> $vec) AS dist
+///         FROM mentat.attr_<entid>_vector
+///         ORDER BY v <=> $vec
+///         LIMIT $k) AS vn_d<i>
+/// joined back to the rest of the query via `vn_d<i>.e` cast to TEXT to
+/// match the standard entity-id encoding the rest of the planner uses.
+fn build_vector_near_join(
+    wf: &WhereFn,
+    fts_idx: usize,
+    builder: &mut SqlBuilder<'_>,
+    var_bindings: &mut HashMap<String, String>,
+    _schema_prefix: &str,
+    _store_id_param: &str,
+) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
+    if wf.args.len() < 4 || wf.args.len() > 5 {
+        return Err(format!(
+            ":db.error/fn-arity vector-near requires 4 or 5 arguments \
+             ($ attr-keyword vector-text-literal k-int [distance-op]), got {}. \
+             Example: [(vector-near $ :doc/embedding \"[0.1,0.2,0.3]\" 5) [[?e ?dist]]]",
+            wf.args.len()
+        )
+        .into());
+    }
+
+    let attr_ident = match &wf.args[1] {
+        FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+        _ => {
+            return Err(":db.error/fn-arg vector-near second argument must be a keyword \
+                        attribute (e.g. :doc/embedding). Format: \
+                        (vector-near $ :attr \"[...]\" k)"
+                .into());
+        }
+    };
+
+    let vec_literal = match &wf.args[2] {
+        FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
+        _ => {
+            return Err(":db.error/fn-arg vector-near third argument must be a string of the \
+                        form \"[v1,v2,...]\" (pgvector textual literal)."
+                .into());
+        }
+    };
+
+    let k: i64 = match &wf.args[3] {
+        FnArg::EntidOrInteger(i) => *i,
+        _ => {
+            return Err(":db.error/fn-arg vector-near fourth argument must be a positive \
+                        integer K (top-K)."
+                .into());
+        }
+    };
+    if k <= 0 {
+        return Err(format!(
+            ":db.error/fn-arg vector-near k must be > 0, got {}.",
+            k
+        )
+        .into());
+    }
+
+    let dist_op: &'static str = if wf.args.len() == 5 {
+        match &wf.args[4] {
+            FnArg::IdentOrKeyword(kw) => match keyword_to_ident(kw).as_str() {
+                ":cosine" => "<=>",
+                ":l2" => "<->",
+                ":inner" => "<#>",
+                other => {
+                    return Err(format!(
+                        ":db.error/fn-arg vector-near distance op must be one of \
+                         :cosine, :l2, :inner, got {}.",
+                        other
+                    )
+                    .into());
+                }
+            },
+            _ => {
+                return Err(":db.error/fn-arg vector-near distance op must be a keyword \
+                            (:cosine, :l2, :inner)."
+                    .into());
+            }
+        }
+    } else {
+        "<=>"
+    };
+
+    // Look up the attribute entid at compile time so the aux table name
+    // can be embedded literally in the generated SQL. The schema lookup
+    // happens via SPI here — unlike the other where-fns, the table name
+    // itself depends on the entid (we cannot parameterize identifiers).
+    let attr_param = builder.bind_text(attr_ident.clone());
+    // Subquery shape: SELECT e, dist FROM mentat.attr_<entid>_vector ORDER BY ... LIMIT k
+    // We discover the entid through a subquery joined to the schema table
+    // and use a runtime EXECUTE-style trick by selecting from a CTE that
+    // resolves the table name dynamically? No — PG cannot parameterize
+    // table names. Instead we resolve the entid and inline the table name
+    // *now* via SPI. If the attribute doesn't exist, we surface a clear
+    // error message rather than letting Postgres fail later with a
+    // less-helpful "relation does not exist".
+    let attr_for_lookup = attr_ident.clone();
+    let entid_opt: Option<i64> = pgrx::Spi::connect(|client| {
+        let mut tt = client.select(
+            "SELECT entid FROM mentat.schema WHERE ident = $1",
+            Some(1),
+            &[attr_for_lookup.clone().into()],
+        )?;
+        if let Some(row) = tt.next() {
+            Ok::<_, pgrx::spi::SpiError>(row["entid"].value::<i64>()?)
+        } else {
+            Ok(None)
+        }
+    })
+    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        format!(
+            ":db.error/schema-lookup vector-near could not look up attribute {}: {}",
+            attr_for_lookup, e
+        )
+        .into()
+    })?;
+    let entid: i64 = entid_opt.ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+        format!(
+            ":db.error/unknown-attribute vector-near attribute {} is not registered. \
+             Transact the schema first.",
+            attr_for_lookup
+        )
+        .into()
+    })?;
+
+    let aux_table = format!("mentat.attr_{}_vector", entid);
+    let vec_param = builder.bind_text(vec_literal);
+    let k_param = builder.bind_bigint(k);
+
+    // Avoid "unused" warning on attr_param — we used it conceptually for
+    // the schema lookup above. Drop it from the SQL by not referencing it.
+    let _ = attr_param;
+
+    let dt_alias = format!("vn_d{}", fts_idx);
+    let from_fragment = format!(
+        "(SELECT e, (v {dist_op} ({vec_param})::vector) AS vec_dist \
+         FROM {aux_table} \
+         ORDER BY v {dist_op} ({vec_param})::vector \
+         LIMIT {k_param}) AS {dt_alias}"
+    );
+
+    // No additional WHERE clauses: the LIMIT is inside the subquery.
+    let where_parts: Vec<String> = Vec::new();
+
+    let mut vn_entity_var: Option<String> = None;
+    if let Binding::BindRel(ref vars) = wf.binding {
+        for (i, vop) in vars.iter().enumerate() {
+            if let VariableOrPlaceholder::Variable(ref v) = vop {
+                let var_name = format!("{}", v);
+                match i {
+                    0 => {
+                        vn_entity_var = Some(var_name.clone());
+                        var_bindings.insert(var_name, format!("{dt_alias}.e::TEXT"));
+                    }
+                    1 => {
+                        var_bindings.insert(var_name, format!("{dt_alias}.vec_dist"));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(FtsJoin {
+        from_fragment,
+        where_parts,
+        score_expr: Some(format!("{dt_alias}.vec_dist")),
+        entity_alias: vn_entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
 
@@ -3992,6 +4224,19 @@ fn build_extended_pattern_query(
         }
     }
 
+    // Pre-populate var_to_alias from any FTS-style joins that bind an
+    // entity variable. This must happen BEFORE pattern processing so that
+    // subsequent `[?e :attr ?val]` patterns generate a proper JOIN
+    // condition `<eav>.e = <fts_alias>.e` instead of relying on DISTINCT
+    // to mask a cartesian product. Builders that don't set entity_alias
+    // retain the legacy (DISTINCT-masked) behavior.
+    for fj in fts_joins {
+        if let Some((var_name, alias)) = &fj.entity_alias {
+            var_to_alias
+                .entry(var_name.clone())
+                .or_insert_with(|| (alias.clone(), "e"));
+        }
+    }
     for (idx, pattern) in patterns.iter().enumerate() {
         let alias = format!("datoms{}", idx);
 
