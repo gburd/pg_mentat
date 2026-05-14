@@ -841,6 +841,8 @@ pub mod pgque_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod pg_infer_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod postgis_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -1017,6 +1019,18 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/17_pg_infer_helpers.sql",
     name = "pg_infer_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Optional PostGIS (postgis.net, GPL-2.0+) integration: declares
+// mentat.has_postgis() plus per-attribute aux-table helpers (attach,
+// set, del, create_gist, detach). The (geom-near $ :attr "WKT" k),
+// (geom-within $ :attr "WKT" radius), (geom-contains $ :attr "WKT"),
+// (geom-intersects $ :attr "WKT") where-fns are dispatched in
+// functions/query.rs. See docs/src/postgis.md.
+extension_sql_file!(
+    "../sql/18_postgis_helpers.sql",
+    name = "postgis_helpers",
     requires = ["narrow_storage"],
 );
 
