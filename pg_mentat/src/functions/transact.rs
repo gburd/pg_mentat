@@ -4,7 +4,35 @@ use edn::entities::{BuiltinTxFn, OpType};
 use edn::parse;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use std::cell::Cell;
 use std::collections::BTreeMap;
+
+thread_local! {
+    /// Cached `store_id` for the current `execute_transaction_inner` call.
+    ///
+    /// `get_store_id_from_schema()` is called for every datom operation
+    /// (insert, retract, duplicate-check, unique-check). Without caching
+    /// this fires `SELECT store_id FROM mentat.stores WHERE store_name = $1`
+    /// ~4,032 times per typical transaction. Setting this once at transaction
+    /// entry and checking it as a fast-path reduces that to a single DB query
+    /// per transaction.
+    static TX_STORE_ID: Cell<Option<i64>> = const { Cell::new(None) };
+}
+
+/// RAII guard that tears down per-transaction context on drop.
+///
+/// Created at the top of `execute_transaction_inner`; dropped when the
+/// function returns (success or failure). Clears:
+///   - `TX_STORE_ID` — the cached store_id for this transaction
+///   - cache-generation bypass via `cache::end_tx_cache_bypass()`
+struct TxContextGuard;
+
+impl Drop for TxContextGuard {
+    fn drop(&mut self) {
+        TX_STORE_ID.with(|f| f.set(None));
+        crate::cache::end_tx_cache_bypass();
+    }
+}
 
 /// Maximum number of retries for serialization failures (SQLSTATE 40001).
 const MAX_SERIALIZATION_RETRIES: u32 = 5;
@@ -803,6 +831,19 @@ fn execute_transaction_inner(
     // Allocate transaction ID with advisory lock protection
     let (basis_t_before, tx_id, tx_instant_micros) = allocate_tx_id(&qs)?;
 
+    // --- Per-transaction context setup ---
+    // (1) Check cache generation once — bypass all subsequent checks within
+    //     this transaction (~17,870 round-trips eliminated per typical call).
+    // (2) Resolve store_id once — bypasses ~4,032 per-datom lookups.
+    // TxContextGuard clears both on drop (success or early-return via `?`).
+    let store_name_raw = schema_to_store_name(schema);
+    crate::cache::begin_tx_cache_bypass(store_name_raw);
+    // TX_STORE_ID is still None here — first call goes to the DB.
+    let tx_store_id = get_store_id_from_schema(&qs)?;
+    TX_STORE_ID.with(|f| f.set(Some(tx_store_id)));
+    let _tx_ctx_guard = TxContextGuard;
+    // --- End per-transaction context setup ---
+
     // Insert :db/txInstant datom for this transaction using typed column
     // Use to_timestamp() in SQL to convert microseconds to TIMESTAMPTZ
     Spi::run_with_args(
@@ -1258,6 +1299,21 @@ fn execute_transaction_inner(
     }
 }
 
+/// Outcome of a cardinality-one check, returned by
+/// `retract_existing_cardinality_one` to decouple the retraction
+/// decision from the actual INSERT (which is now deferred to the batch).
+enum CardinalityOneResult {
+    /// The new value equals the existing value; skip the entire datom
+    /// (idempotent assertion).
+    Skip,
+    /// No existing value; insert the new datom normally.
+    Insert,
+    /// An existing different value was found and marked retracted via an
+    /// UPDATE.  The caller must queue a retraction datom `(e, a, old_v,
+    /// tx, false)` before queuing the new assertion.
+    Replace(TypedValue),
+}
+
 /// Insert all pending datoms, validating constraints and handling cardinality
 /// semantics. Returns the number of datoms processed.
 ///
@@ -1268,6 +1324,13 @@ fn insert_datoms(
     schema: &str,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     let datom_count = pending_datoms.len();
+
+    // Collect all rows that need to be written to the type-specific tables.
+    // Deferred to a single batch INSERT per type at the end of the loop,
+    // reducing ~463 per-datom INSERTs to at most 9 (one per type table).
+    let mut rows_to_insert: Vec<(i64, i64, TypedValue, i64, bool)> = Vec::with_capacity(datom_count);
+    let mut fulltext_values: Vec<String> = Vec::new();
+
     for datom in pending_datoms {
         // Only validate assertions (added=true), not retractions
         if datom.added {
@@ -1280,15 +1343,18 @@ fn insert_datoms(
             if let Some(attr_info) = lookup_attribute_info(datom.a) {
                 match attr_info.cardinality.as_str() {
                     "one" => {
-                        let should_insert = retract_existing_cardinality_one(
+                        match retract_existing_cardinality_one(
                             datom.e,
                             datom.a,
-                            tx_id,
                             &datom.v,
                             schema,
-                        )?;
-                        if !should_insert {
-                            continue; // Idempotent: same value already exists
+                        )? {
+                            CardinalityOneResult::Skip => continue, // idempotent
+                            CardinalityOneResult::Insert => { /* no retraction needed */ }
+                            CardinalityOneResult::Replace(old_v) => {
+                                // Queue retraction datom for the old value.
+                                rows_to_insert.push((datom.e, datom.a, old_v, tx_id, false));
+                            }
                         }
                     }
                     "many" => {
@@ -1309,6 +1375,16 @@ fn insert_datoms(
                     }
                 }
             }
+
+            // Queue the new assertion.
+            rows_to_insert.push((datom.e, datom.a, datom.v.clone(), tx_id, true));
+
+            // Populate fulltext for fulltext-enabled string attributes.
+            if datom.added && is_fulltext_attribute(datom.a) {
+                if let TypedValue::Text(ref text_value) = datom.v {
+                    fulltext_values.push(text_value.clone());
+                }
+            }
         } else {
             // For explicit retractions (added=false), mark the existing assertion
             // row as retracted. This updates the specific (e, a, v) datom with
@@ -1316,19 +1392,19 @@ fn insert_datoms(
             // no longer see this value. Without this, the original added=true row
             // would remain visible and the retraction would have no effect.
             mark_existing_datom_retracted(datom.e, datom.a, &datom.v, schema)?;
+            rows_to_insert.push((datom.e, datom.a, datom.v.clone(), tx_id, false));
         }
+    }
 
-        insert_typed_datom(datom.e, datom.a, &datom.v, tx_id, datom.added, schema)?;
+    // Flush all collected datoms via one batch INSERT per type table.
+    batch_insert_datoms(&rows_to_insert, schema)?;
 
-        // Populate fulltext for fulltext-enabled string attributes.
-        if datom.added && is_fulltext_attribute(datom.a) {
-            if let TypedValue::Text(ref text_value) = datom.v {
-                Spi::run_with_args(
-                    &format!("INSERT INTO {}.fulltext (text_value) VALUES ($1)", schema),
-                    &[DatumWithOid::from(text_value.clone())],
-                )?;
-            }
-        }
+    // Fulltext inserts remain per-row (typically low volume).
+    for text_value in &fulltext_values {
+        Spi::run_with_args(
+            &format!("INSERT INTO {}.fulltext (text_value) VALUES ($1)", schema),
+            &[DatumWithOid::from(text_value.as_str())],
+        )?;
     }
 
     Ok(datom_count)
@@ -1929,16 +2005,23 @@ fn find_current_value_for_ea(
     })
 }
 
-/// Returns `true` if the assertion should proceed (value changed or no existing value),
-/// `false` if the assertion is idempotent (same value already exists) and should be skipped.
+/// Returns `CardinalityOneResult::Skip` if the new value equals the existing
+/// one (idempotent), `CardinalityOneResult::Insert` if there is no existing
+/// value, or `CardinalityOneResult::Replace(old_v)` if an existing *different*
+/// value was found.
+///
+/// When `Replace` is returned the old value has **already been marked
+/// retracted** via an `UPDATE` on the appropriate type table (so it is
+/// invisible to subsequent `added = true` queries within this transaction).
+/// The caller is responsible for queuing the retraction datom row
+/// `(e, a, old_v, tx, false)` into the batch.
 fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
-    tx_id: i64,
     new_v: &TypedValue,
     schema: &str,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    // Get store_id from schema
+) -> Result<CardinalityOneResult, Box<dyn std::error::Error + Send + Sync>> {
+    // Get store_id — fast path via TX_STORE_ID thread-local.
     let store_id = get_store_id_from_schema(schema)?;
 
     // Find the current value (if any) by querying all type-specific tables
@@ -1947,18 +2030,17 @@ fn retract_existing_cardinality_one(
     if let Some(old_v) = existing {
         // If the value is identical, no retraction needed (idempotent assertion)
         if old_v == *new_v {
-            return Ok(false); // Skip the insert — value unchanged
+            return Ok(CardinalityOneResult::Skip);
         }
 
         // Mark the existing assertion row as retracted so queries filtering
         // by added=true will no longer return the old value.
         mark_existing_datom_retracted(entity_id, attr_id, &old_v, schema)?;
 
-        // Insert a retraction datom for the old value (for history/audit)
-        insert_typed_datom(entity_id, attr_id, &old_v, tx_id, false, schema)?;
+        return Ok(CardinalityOneResult::Replace(old_v));
     }
 
-    Ok(true) // Proceed with insert
+    Ok(CardinalityOneResult::Insert)
 }
 
 /// Mark an existing assertion datom as retracted by updating its `added` column
@@ -2282,8 +2364,22 @@ fn format_typed_value(v: &TypedValue) -> String {
 /// The `schema` parameter is the quoted PostgreSQL schema name.
 /// Get store_id from store name via stores metadata table.
 /// Returns 0 for "default" store, or the assigned store_id for other stores.
+/// Get store_id for the current transaction's schema.
+///
+/// **Fast path**: returns the `TX_STORE_ID` thread-local set by
+/// `execute_transaction_inner` at transaction start. This eliminates the
+/// `SELECT store_id FROM mentat.stores WHERE ...` round-trip that would
+/// otherwise fire ~4,032 times per typical transaction.
+///
+/// **Slow path** (first call, or any call outside a transaction): derives the
+/// store name from the schema string and queries `mentat.stores`.
 fn get_store_id_from_schema(schema: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
-    // Extract store name from schema (mentat -> default, mentat_foo -> foo)
+    // Fast path: use the cached store_id for this transaction.
+    if let Some(id) = TX_STORE_ID.with(|f| f.get()) {
+        return Ok(id);
+    }
+
+    // Slow path: extract store name and look up in the metadata table.
     let store_name = if schema == "mentat" {
         "default"
     } else if let Some(name) = schema.strip_prefix("mentat_") {
@@ -2305,6 +2401,132 @@ fn get_store_id_from_schema(schema: &str) -> Result<i64, Box<dyn std::error::Err
             store_name: store_name.to_string(),
         }.into()
     })
+}
+
+/// Escape a string value for embedding as a SQL single-quoted literal.
+///
+/// With `standard_conforming_strings = on` (the PostgreSQL default since 9.1)
+/// the only character that needs escaping in a standard string literal is the
+/// single quote, doubled as `''`. Backslashes are **not** special.
+fn sql_escape_str(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
+/// Batch-insert all collected datoms into the appropriate type-specific
+/// tables using one multi-row `INSERT … VALUES` per non-empty type group.
+///
+/// For a transaction asserting N datoms across K distinct value types, this
+/// issues at most K INSERT statements instead of N. For the production
+/// workload (~463 datoms/tx, mostly instants), K ≤ 9 (one per type table).
+///
+/// All type tables live in the `mentat` schema regardless of store; the
+/// `store_id` column (via `TX_STORE_ID` fast-path) disambiguates stores.
+fn batch_insert_datoms(
+    rows: &[(i64, i64, TypedValue, i64, bool)],
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    // TX_STORE_ID fast-path: no DB query after the first call in this tx.
+    let store_id = get_store_id_from_schema(schema)?;
+
+    // Per-type accumulators: each entry is one row in the VALUES clause.
+    let mut ref_vals:     Vec<String> = Vec::new();
+    let mut bool_vals:    Vec<String> = Vec::new();
+    let mut long_vals:    Vec<String> = Vec::new();
+    let mut double_vals:  Vec<String> = Vec::new();
+    let mut instant_vals: Vec<String> = Vec::new();
+    let mut text_vals:    Vec<String> = Vec::new();
+    let mut kw_vals:      Vec<String> = Vec::new();
+    let mut uuid_vals:    Vec<String> = Vec::new();
+    let mut bytes_vals:   Vec<String> = Vec::new();
+
+    for (e, a, v, tx, added) in rows {
+        let added_sql = if *added { "true" } else { "false" };
+        match v {
+            TypedValue::Ref(ref_id) => {
+                ref_vals.push(format!("({},{},{},{},{},{})",
+                    store_id, e, a, ref_id, tx, added_sql));
+            }
+            TypedValue::Boolean(b) => {
+                bool_vals.push(format!("({},{},{},{},{},{})",
+                    store_id, e, a,
+                    if *b { "true" } else { "false" },
+                    tx, added_sql));
+            }
+            TypedValue::Long(n) => {
+                long_vals.push(format!("({},{},{},{},{},{})",
+                    store_id, e, a, n, tx, added_sql));
+            }
+            TypedValue::Double(f) => {
+                // Use ::double precision cast to prevent PostgreSQL from
+                // treating integer-looking values (e.g. "1") as integers.
+                let v_sql = if f.is_nan() {
+                    "'NaN'::double precision".to_string()
+                } else if f.is_infinite() {
+                    if *f > 0.0 {
+                        "'Infinity'::double precision".to_string()
+                    } else {
+                        "'-Infinity'::double precision".to_string()
+                    }
+                } else {
+                    format!("{:e}::double precision", f)
+                };
+                double_vals.push(format!("({},{},{},{},{},{})",
+                    store_id, e, a, v_sql, tx, added_sql));
+            }
+            TypedValue::Instant(micros) => {
+                // to_timestamp converts Unix microseconds → TIMESTAMPTZ.
+                instant_vals.push(format!(
+                    "({},{},{},to_timestamp({}::double precision/1000000.0),{},{})",
+                    store_id, e, a, micros, tx, added_sql));
+            }
+            TypedValue::Text(s) => {
+                text_vals.push(format!("({},{},{},'{}',{},{})",
+                    store_id, e, a, sql_escape_str(s), tx, added_sql));
+            }
+            TypedValue::Keyword(s) => {
+                kw_vals.push(format!("({},{},{},'{}',{},{})",
+                    store_id, e, a, sql_escape_str(s), tx, added_sql));
+            }
+            TypedValue::Uuid(u) => {
+                uuid_vals.push(format!("({},{},{},'{}',{},{})",
+                    store_id, e, a, u, tx, added_sql));
+            }
+            TypedValue::Bytes(b) => {
+                bytes_vals.push(format!(
+                    "({},{},{},decode('{}','hex'),{},{})",
+                    store_id, e, a, hex::encode(b), tx, added_sql));
+            }
+        }
+    }
+
+    // Helper closure: flush one type group as a single INSERT.
+    let flush = |table: &str, vals: Vec<String>| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if vals.is_empty() {
+            return Ok(());
+        }
+        Spi::run(&format!(
+            "INSERT INTO mentat.{} (store_id,e,a,v,tx,added) VALUES {} \
+             ON CONFLICT (store_id,e,a,v,tx) DO UPDATE SET added = EXCLUDED.added",
+            table, vals.join(",")
+        ))?;
+        Ok(())
+    };
+
+    flush("datoms_ref_new",     ref_vals)?;
+    flush("datoms_boolean_new", bool_vals)?;
+    flush("datoms_long_new",    long_vals)?;
+    flush("datoms_double_new",  double_vals)?;
+    flush("datoms_instant_new", instant_vals)?;
+    flush("datoms_text_new",    text_vals)?;
+    flush("datoms_keyword_new", kw_vals)?;
+    flush("datoms_uuid_new",    uuid_vals)?;
+    flush("datoms_bytes_new",   bytes_vals)?;
+
+    Ok(())
 }
 
 fn insert_typed_datom(

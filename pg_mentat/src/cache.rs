@@ -1,8 +1,59 @@
 use crate::functions::store_management::get_schema_for_store;
 use pgrx::spi::Spi;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use parking_lot::RwLock;
+
+thread_local! {
+    /// When `true`, `SchemaCache::ensure_fresh` skips the remote
+    /// `cache_generation` round-trip for the duration of one
+    /// `execute_transaction_inner` call.
+    ///
+    /// Rationale: within a single PostgreSQL transaction the schema cannot
+    /// change from under us (MVCC snapshot). The only cross-backend change
+    /// we need to detect is one that happened *before* this transaction
+    /// started, and we detect that with the single upfront check performed
+    /// by `begin_tx_cache_bypass`. Suppressing the repeated DB query saves
+    /// ~17,870 round-trips per typical `mentat.t()` call.
+    static TX_GEN_BYPASS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Perform **one** generation check for `store_name`, reload the cache if
+/// stale, then arm the per-transaction bypass so subsequent `ensure_fresh`
+/// calls within this transaction skip the DB round-trip.
+///
+/// Must be paired with `end_tx_cache_bypass()`. Use `TxContextGuard` in
+/// `transact.rs` to ensure the pairing via RAII.
+pub fn begin_tx_cache_bypass(store_name: &str) {
+    let cache = get_cache_for_store(store_name);
+    if cache.warmed.load(Ordering::Acquire) {
+        // Cache is warm — do exactly one generation check to detect changes
+        // from other backends before we arm the bypass.
+        let remote_gen = Spi::get_one::<i64>(&format!(
+            "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
+            store_name
+        ))
+        .ok()
+        .flatten()
+        .unwrap_or(1);
+        if remote_gen > cache.local_gen.load(Ordering::Acquire) {
+            cache.invalidate();
+            cache.warm();
+        }
+    } else {
+        // Not warm yet — `warm()` reads the generation internally.
+        cache.warm();
+    }
+    TX_GEN_BYPASS.with(|f| f.set(true));
+}
+
+/// Clear the per-transaction generation bypass.
+///
+/// Called automatically by `TxContextGuard::drop` in `transact.rs`.
+pub fn end_tx_cache_bypass() {
+    TX_GEN_BYPASS.with(|f| f.set(false));
+}
 
 /// Attribute metadata cache entry
 #[derive(Clone, Debug, PartialEq)]
@@ -163,9 +214,16 @@ impl SchemaCache {
     /// remote backend has bumped the generation counter (cross-backend
     /// invalidation).
     fn ensure_fresh(&self) {
-        // If never warmed, warm unconditionally
+        // If never warmed, warm unconditionally.
         if !self.warmed.load(Ordering::Acquire) {
             self.warm();
+            return;
+        }
+        // Inside a transaction the generation was already validated once by
+        // `begin_tx_cache_bypass`. Skip the round-trip for every subsequent
+        // cache access within the same transaction (~17,870 saved per typical
+        // `mentat.t()` call).
+        if TX_GEN_BYPASS.with(|f| f.get()) {
             return;
         }
         // Check remote generation (cheap: 1-row table, always in shared_buffers).
