@@ -845,6 +845,8 @@ pub mod postgis_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod infra_extensions_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod operational_accessors_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -1071,6 +1073,17 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/22_pg_cron_helpers.sql",
     name = "pg_cron_helpers",
+    requires = ["narrow_storage"],
+);
+
+// Operational + read-path accessors: mentat.attr_id, mentat.current,
+// mentat.attribute_health. Added in response to production feedback to
+// give an index-backed current-value accessor (avoids DISTINCT ON /
+// LATERAL fan-out in consumer views) and a per-attribute bloat
+// dashboard. See docs/src/operations.md.
+extension_sql_file!(
+    "../sql/23_operational_accessors.sql",
+    name = "operational_accessors",
     requires = ["narrow_storage"],
 );
 

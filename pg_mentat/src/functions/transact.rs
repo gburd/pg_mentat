@@ -1928,13 +1928,71 @@ fn validate_datom_constraints(
 /// The `schema` parameter is the quoted PostgreSQL schema name.
 /// Helper function to query all type-specific tables for an (e, a) pair.
 /// Returns the most recent value (by tx) if found.
-fn find_current_value_for_ea(
+/// Find the current (latest, `added = true`) value for an `(entity,
+/// attribute)` pair.
+///
+/// When `expected_type` is `Some` only the single narrow table for that
+/// value type is queried -- collapsing the 9-way `UNION ALL` to one index
+/// lookup on the EAVT covering index. This is the hot path for
+/// cardinality-one assertion: the new value's type is always known at the
+/// call site, and a cardinality-one attribute's type never changes, so the
+/// current value (if any) lives in exactly the same narrow table.
+///
+/// When `expected_type` is `None` all nine type tables are scanned via
+/// `UNION ALL` (used when the caller genuinely does not know the type).
+fn find_current_value_for_ea_typed(
     store_id: i64,
     entity_id: i64,
     attr_id: i64,
+    expected_type: Option<&TypedValue>,
 ) -> Result<Option<TypedValue>, Box<dyn std::error::Error + Send + Sync>> {
-    // Query all type-specific tables with UNION ALL, ordered by tx DESC
-    // This finds the most recent value across all types
+    // Fast path: query only the table matching the known value type.
+    if let Some(tv) = expected_type {
+        let (table, tag): (&str, i16) = match tv {
+            TypedValue::Ref(_) => ("datoms_ref_new", 0),
+            TypedValue::Boolean(_) => ("datoms_boolean_new", 1),
+            TypedValue::Long(_) => ("datoms_long_new", 2),
+            TypedValue::Double(_) => ("datoms_double_new", 3),
+            TypedValue::Instant(_) => ("datoms_instant_new", 4),
+            TypedValue::Text(_) => ("datoms_text_new", 7),
+            TypedValue::Keyword(_) => ("datoms_keyword_new", 8),
+            TypedValue::Uuid(_) => ("datoms_uuid_new", 10),
+            TypedValue::Bytes(_) => ("datoms_bytes_new", 11),
+        };
+        // Render the value as text the same way the UNION-ALL variant does,
+        // so parse_typed_value_from_tag decodes both identically.
+        let value_expr = match tag {
+            4 => "(EXTRACT(EPOCH FROM v)::bigint * 1000000)::text",
+            7 | 8 => "v",
+            11 => "encode(v, 'hex')",
+            _ => "v::text",
+        };
+        let query = format!(
+            "SELECT {value_expr} AS value, tx FROM mentat.{table} \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true \
+             ORDER BY tx DESC LIMIT 1"
+        );
+        return Spi::connect(|client| {
+            let mut rows = client.select(
+                &query,
+                None,
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                ],
+            )?;
+            if let Some(row) = rows.next() {
+                let value_str: String = row.get(1)?.ok_or("Missing value")?;
+                Ok(Some(parse_typed_value_from_tag(tag, value_str)?))
+            } else {
+                Ok(None)
+            }
+        });
+    }
+
+    // Slow path: type unknown -- query all type-specific tables with UNION ALL,
+    // ordered by tx DESC. This finds the most recent value across all types.
     let query = "
         SELECT 0::SMALLINT AS type_tag, v::text AS value, tx FROM mentat.datoms_ref_new
         WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
@@ -1979,30 +2037,37 @@ fn find_current_value_for_ea(
         if let Some(row) = rows.next() {
             let type_tag: i16 = row.get(1)?.ok_or("Missing type_tag")?;
             let value_str: String = row.get(2)?.ok_or("Missing value")?;
-
-            // Parse value back to TypedValue based on type_tag
-            let typed_value = match type_tag {
-                0 => TypedValue::Ref(value_str.parse().map_err(|_| "Invalid ref")?),
-                1 => TypedValue::Boolean(value_str.parse().map_err(|_| "Invalid boolean")?),
-                2 => TypedValue::Long(value_str.parse().map_err(|_| "Invalid long")?),
-                3 => TypedValue::Double(value_str.parse().map_err(|_| "Invalid double")?),
-                4 => TypedValue::Instant(value_str.parse().map_err(|_| "Invalid instant")?),
-                7 => TypedValue::Text(value_str),
-                8 => TypedValue::Keyword(value_str),
-                10 => TypedValue::Uuid(value_str.parse().map_err(|_| "Invalid UUID")?),
-                11 => {
-                    // Decode hex back to bytes
-                    let decoded = hex::decode(&value_str).map_err(|_| "Invalid hex")?;
-                    TypedValue::Bytes(decoded)
-                }
-                _ => return Err(format!("Unknown type_tag: {}", type_tag).into()),
-            };
-
-            Ok(Some(typed_value))
+            Ok(Some(parse_typed_value_from_tag(type_tag, value_str)?))
         } else {
             Ok(None)
         }
     })
+}
+
+/// Parse a value-as-text plus its narrow-table type tag back into a
+/// `TypedValue`. Shared by both the fast (single-table) and slow
+/// (UNION-ALL) variants of `find_current_value_for_ea_typed` so the
+/// decoding is identical.
+fn parse_typed_value_from_tag(
+    type_tag: i16,
+    value_str: String,
+) -> Result<TypedValue, Box<dyn std::error::Error + Send + Sync>> {
+    let typed_value = match type_tag {
+        0 => TypedValue::Ref(value_str.parse().map_err(|_| "Invalid ref")?),
+        1 => TypedValue::Boolean(value_str.parse().map_err(|_| "Invalid boolean")?),
+        2 => TypedValue::Long(value_str.parse().map_err(|_| "Invalid long")?),
+        3 => TypedValue::Double(value_str.parse().map_err(|_| "Invalid double")?),
+        4 => TypedValue::Instant(value_str.parse().map_err(|_| "Invalid instant")?),
+        7 => TypedValue::Text(value_str),
+        8 => TypedValue::Keyword(value_str),
+        10 => TypedValue::Uuid(value_str.parse().map_err(|_| "Invalid UUID")?),
+        11 => {
+            let decoded = hex::decode(&value_str).map_err(|_| "Invalid hex")?;
+            TypedValue::Bytes(decoded)
+        }
+        _ => return Err(format!("Unknown type_tag: {}", type_tag).into()),
+    };
+    Ok(typed_value)
 }
 
 /// Returns `CardinalityOneResult::Skip` if the new value equals the existing
@@ -2024,8 +2089,11 @@ fn retract_existing_cardinality_one(
     // Get store_id — fast path via TX_STORE_ID thread-local.
     let store_id = get_store_id_from_schema(schema)?;
 
-    // Find the current value (if any) by querying all type-specific tables
-    let existing = find_current_value_for_ea(store_id, entity_id, attr_id)?;
+    // Find the current value (if any) for this (e, a). The new value's type
+    // is known, and a cardinality-one attribute's type is fixed, so the
+    // current value lives in the same narrow table -- use the single-table
+    // fast path instead of the 9-way UNION ALL.
+    let existing = find_current_value_for_ea_typed(store_id, entity_id, attr_id, Some(new_v))?;
 
     if let Some(old_v) = existing {
         // If the value is identical, no retraction needed (idempotent assertion)
@@ -2526,180 +2594,6 @@ fn batch_insert_datoms(
     flush("datoms_uuid_new",    uuid_vals)?;
     flush("datoms_bytes_new",   bytes_vals)?;
 
-    Ok(())
-}
-
-fn insert_typed_datom(
-    e: i64,
-    a: i64,
-    v: &TypedValue,
-    tx: i64,
-    added: bool,
-    schema: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Get store_id for the new type-specific tables
-    let store_id = get_store_id_from_schema(schema)?;
-
-    // Write to type-specific tables (datoms_*_new)
-    // NOTE: Once Phase 4 cutover is complete, remove the "_new" suffix
-    match v {
-        TypedValue::Ref(ref_id) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_ref_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(*ref_id),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Boolean(b) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_boolean_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(*b),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Long(n) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_long_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(*n),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Double(f) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_double_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(*f),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Text(s) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_text_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(s.as_str()),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Keyword(s) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_keyword_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(s.as_str()),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Instant(micros) => {
-            // Insert as TIMESTAMPTZ via SQL CAST to avoid pgrx conversion issues
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_instant_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(*micros),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Uuid(u) => {
-            // Insert UUID as text and let PostgreSQL cast it
-            let uuid_str = u.to_string();
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_uuid_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4::UUID, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(uuid_str.as_str()),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-        TypedValue::Bytes(b) => {
-            Spi::run_with_args(
-                &format!(
-                    "INSERT INTO mentat.datoms_bytes_new (store_id, e, a, v, tx, added) \
-                     VALUES ($1, $2, $3, $4, $5, $6) \
-                     ON CONFLICT (store_id, e, a, v, tx) DO UPDATE SET added = EXCLUDED.added",
-                ),
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(e),
-                    DatumWithOid::from(a),
-                    DatumWithOid::from(b.clone()),
-                    DatumWithOid::from(tx),
-                    DatumWithOid::from(added),
-                ],
-            )?;
-        }
-    }
     Ok(())
 }
 
