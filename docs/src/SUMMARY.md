@@ -45,6 +45,7 @@
 
 # Deployment
 
+- [Operations: Throughput, Bloat & the Live Projection](./operations.md)
 - [mentatd HTTP Server](./mentatd.md)
 
 ---

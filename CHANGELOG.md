@@ -5,6 +5,106 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-06-16
+
+### The "Production Throughput & Bloat" release
+
+Driven by production feedback from an 82 GB store used as a
+community-stats identity backbone. Focus: `mentat.t()` ingest
+throughput, narrow-table autovacuum, and a cheap live-projection read
+path. No new query surface; no breaking changes.
+
+### Performance
+
+- **Cardinality-one assertion fast path.** `mentat.t()` previously ran a
+  9-way `UNION ALL` probe per cardinality-one datom to find the current
+  value (to decide assert / replace / skip). Because the new value's
+  type is always known and a cardinality-one attribute's type is fixed,
+  the current value lives in exactly one narrow table. The probe is now
+  a single indexed lookup on that table's `(store_id, e, a, tx DESC)
+  WHERE added` covering index. Measured **~1.8x speedup** (6.2 s -> 3.4
+  s) on a 2,000-call cardinality-one re-assertion microbenchmark. The
+  residual per-call cost is fixed tx-allocation overhead, amortized by
+  batching more facts per `t()`.
+
+### Operations
+
+- **Autovacuum retune on all narrow tables + `transactions`.** The
+  previous `autovacuum_vacuum_scale_factor = 0.05` (and the PG default
+  0.2) effectively stops triggering on large tables, so they bloat
+  without bound — most visibly `datoms_instant_new`, where monotonic
+  attributes (`:first-seen` / `:last-seen` / `:observed-at`) are
+  re-asserted every sync. All nine `datoms_*_new` tables and
+  `mentat.transactions` now ship with `scale_factor = 0` + a fixed
+  `threshold = 50000`, so autovacuum fires on a constant dead-tuple
+  count regardless of table size. Applied by `CREATE EXTENSION` and the
+  1.3.0->1.4.0 upgrade.
+
+### Added — operational + read-path accessors
+
+- `mentat.attr_id(':ns/name')` — resolve an attribute keyword to its
+  entid for use in SQL / views (STABLE), so generated viewdefs read
+  `a = mentat.attr_id(':person/name')` instead of `a = 1308861`.
+- `mentat.current(e, a)` and `mentat.current(e, ':ns/name')` —
+  index-backed "current value of attribute A for entity E" as TEXT,
+  dispatching on the declared value type so only one narrow table is
+  touched. Replaces per-query `DISTINCT ON` / `LATERAL` fan-out in
+  consumer views.
+- `mentat.attribute_health()` — per-attribute live datom count plus the
+  backing narrow table's dead-tuple %, so operators can alert on bloat
+  before it bites.
+
+### Documentation
+
+- New `docs/src/operations.md`: throughput (batching strategy, the
+  cardinality-one fast path, idempotent-reassert no-op), bloat (the
+  default-scale-factor trap, the 1.4.0 autovacuum defaults, reclaiming
+  existing bloat, monitoring with `attribute_health()`), and the live
+  projection (`mentat.current` / `mentat.attr_id`, a maintained
+  current-state partial-index pattern). Explicitly addresses the
+  "is this an auto-indexing problem?" question: it is not — the indexes
+  already exist; the costs are per-tx overhead, history resolution, and
+  bloat.
+
+### Fixed
+
+- Removed a dead `insert_typed_datom` function (superseded by the
+  batch-insert path) to restore the zero-warnings build.
+
+### Known issue (reported, not yet changed — needs a semantics decision)
+
+- A cardinality-one **replace** writes a redundant `(e, a, old_v, tx,
+  false)` retraction datom *in addition to* flipping the original
+  assertion row's `added` flag in place. This double-counts retraction
+  churn (one extra dead row per replace) and contributes to the
+  instant-datom bloat above. Fixing it changes history-replay semantics
+  (whether the tx log carries an explicit retraction datom), so it is
+  deliberately left for a maintainer decision rather than changed
+  silently. Tracked for 1.5.0.
+
+### Tests
+
+- `operational_accessors_tests` (6 `#[pg_test]`): `attr_id` resolution,
+  `current()` latest-value + NULL-absent + post-replace, the
+  cardinality-one fast-path correctness (exactly one live datom after
+  repeated replaces), idempotent-reassert no-churn, and
+  `attribute_health()` counts.
+- Regression: `comprehensive_upsert_tests` (17/17),
+  `comprehensive_retract_tests` (22/22), `cross_entity_tests` (14/14)
+  all green — the fast path preserves cardinality / upsert / retract
+  semantics.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.4.0';
+```
+
+The upgrade retunes autovacuum and installs the new accessors. To
+reclaim *existing* bloat (storage params only affect future
+triggering), run `VACUUM FULL` or `pg_repack` on the affected tables —
+see `docs/src/operations.md`.
+
 ## [1.3.0] - 2026-05-14
 
 ### The "Postgres Extension Family" release

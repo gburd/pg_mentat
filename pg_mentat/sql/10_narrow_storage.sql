@@ -160,11 +160,49 @@ CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_aevt
 CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_tx
     ON mentat.datoms_boolean_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
--- Aggressive autovacuum on high-churn narrow tables (retraction-heavy)
-ALTER TABLE mentat.datoms_ref_new     SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-ALTER TABLE mentat.datoms_long_new    SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-ALTER TABLE mentat.datoms_text_new    SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
-ALTER TABLE mentat.datoms_keyword_new SET (autovacuum_vacuum_scale_factor = 0.05, autovacuum_analyze_scale_factor = 0.02);
+-- Autovacuum tuning for the narrow datom tables.
+--
+-- These tables get large (tens of GB) and churn from retraction +
+-- re-assertion. PostgreSQL's default scale-factor model
+-- (autovacuum_vacuum_scale_factor = 0.2, i.e. 20% of the table must be
+-- dead before a vacuum triggers) effectively *stops* triggering once a
+-- table is large: 20% of 50M rows is 10M dead tuples of slack. The
+-- instant-typed table is the worst offender because monotonic
+-- attributes (:first-seen / :last-seen / :observed-at) are re-asserted
+-- on every sync, generating a retraction + assertion pair each time.
+--
+-- Fix (per production feedback): set scale_factor = 0 and use a FIXED
+-- absolute threshold so vacuum triggers on a constant number of dead
+-- tuples regardless of table size. 50k dead tuples is a reasonable
+-- default; high-throughput deployments can lower it further per table.
+DO $$
+DECLARE
+    t TEXT;
+BEGIN
+    FOREACH t IN ARRAY ARRAY[
+        'datoms_ref_new', 'datoms_boolean_new', 'datoms_long_new',
+        'datoms_double_new', 'datoms_instant_new', 'datoms_text_new',
+        'datoms_keyword_new', 'datoms_uuid_new', 'datoms_bytes_new'
+    ] LOOP
+        EXECUTE format(
+            'ALTER TABLE mentat.%I SET ('
+            || 'autovacuum_vacuum_scale_factor = 0, '
+            || 'autovacuum_vacuum_threshold = 50000, '
+            || 'autovacuum_analyze_scale_factor = 0, '
+            || 'autovacuum_analyze_threshold = 50000)',
+            t
+        );
+    END LOOP;
+END $$;
+
+-- The transaction log grows monotonically and is queried by PK; a
+-- fixed threshold keeps its visibility map and PK index tidy.
+ALTER TABLE mentat.transactions SET (
+    autovacuum_vacuum_scale_factor = 0,
+    autovacuum_vacuum_threshold = 50000,
+    autovacuum_analyze_scale_factor = 0,
+    autovacuum_analyze_threshold = 50000
+);
 
 -- ---------------------------------------------------------------------------
 -- mentat.datoms VIEW + INSTEAD OF triggers
