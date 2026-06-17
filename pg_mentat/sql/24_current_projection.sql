@@ -236,3 +236,46 @@ BEGIN
     RETURN mismatches;
 END;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- mentat.current_datoms VIEW
+--
+-- Union over the nine current_<type> projection tables in the same column
+-- shape as the mentat.datoms back-compat view (added is always true, since
+-- the projection holds only live datoms). Read this instead of
+-- `mentat.datoms WHERE added = true` anywhere that needs the *current*
+-- value of an (e, a) -- e.g. the CAS transaction function -- so the
+-- append-only log's historical assertions are not mistaken for live values.
+-- Filtered to the default store (store_id = 0), matching mentat.datoms.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE VIEW mentat.current_datoms AS
+    SELECT e, a, 0::SMALLINT AS value_type_tag,
+           v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long,
+           NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text,
+           NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant,
+           NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, true AS added
+    FROM mentat.current_ref WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 1::SMALLINT, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, true
+    FROM mentat.current_boolean WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 2::SMALLINT, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, true
+    FROM mentat.current_long WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 3::SMALLINT, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, true
+    FROM mentat.current_double WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 4::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, true
+    FROM mentat.current_instant WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 7::SMALLINT, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, true
+    FROM mentat.current_text WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 8::SMALLINT, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, true
+    FROM mentat.current_keyword WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 10::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, true
+    FROM mentat.current_uuid WHERE store_id = 0
+    UNION ALL
+    SELECT e, a, 11::SMALLINT, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, true
+    FROM mentat.current_bytes WHERE store_id = 0;

@@ -1480,9 +1480,8 @@ mod tests {
 
         // Verify 3 tags exist
         let count_before = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_keyword
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')",
             alice_eid
         ))
         .expect("count failed")
@@ -1498,9 +1497,8 @@ mod tests {
 
         // Verify only 2 tags remain
         let count_after = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_keyword
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')",
             alice_eid
         ))
         .expect("count failed")
@@ -1513,9 +1511,9 @@ mod tests {
 
         // Verify :clojure is gone
         let clojure_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
+            "SELECT COUNT(*) FROM mentat.current_keyword
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
-             AND v_keyword = 'clojure' AND added = true",
+             AND v = 'clojure'",
             alice_eid
         ))
         .expect("count failed")
@@ -1524,9 +1522,9 @@ mod tests {
 
         // Verify :rust is still present
         let rust_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
+            "SELECT COUNT(*) FROM mentat.current_keyword
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
-             AND v_keyword = 'rust' AND added = true",
+             AND v = 'rust'",
             alice_eid
         ))
         .expect("count failed")
@@ -1535,9 +1533,9 @@ mod tests {
 
         // Verify :postgres is still present
         let pg_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
+            "SELECT COUNT(*) FROM mentat.current_keyword
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/tags')
-             AND v_keyword = 'postgres' AND added = true",
+             AND v = 'postgres'",
             alice_eid
         ))
         .expect("count failed")
@@ -1583,22 +1581,22 @@ mod tests {
         ))
         .expect("retract txn failed");
 
-        // Verify 2 hobbies remain
+        // Verify 2 hobbies remain in current state (append-only: count the
+        // projection, not added=true rows in the immutable log).
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_text
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')",
             bob_eid
         ))
         .expect("count failed")
         .expect("NULL count");
         assert_eq!(count, 2, "Should have 2 hobbies after retracting one");
 
-        // Verify 'reading' is gone
+        // Verify 'reading' is gone from current state
         let reading = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
+            "SELECT COUNT(*) FROM mentat.current_text
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/hobbies')
-             AND v_text = 'reading' AND added = true",
+             AND v = 'reading'",
             bob_eid
         ))
         .expect("count failed")
@@ -1644,11 +1642,10 @@ mod tests {
         ))
         .expect("retract txn failed");
 
-        // Verify 2 scores remain
+        // Verify 2 scores remain in current state (projection).
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_long
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')",
             eid
         ))
         .expect("count failed")
@@ -1657,9 +1654,9 @@ mod tests {
 
         // Verify 10 and 30 remain
         let has_10 = Spi::get_one::<bool>(&format!(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_long
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
-             AND v_long = 10 AND added = true)",
+             AND v = 10)",
             eid
         ))
         .expect("query failed")
@@ -1667,9 +1664,9 @@ mod tests {
         assert!(has_10, "Score 10 should still be present");
 
         let has_30 = Spi::get_one::<bool>(&format!(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_long
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/scores')
-             AND v_long = 30 AND added = true)",
+             AND v = 30)",
             eid
         ))
         .expect("query failed")
@@ -1747,11 +1744,10 @@ mod tests {
         ))
         .expect("retract txn failed");
 
-        // Alice should have 1 friend remaining (Carol)
+        // Alice should have 1 friend remaining (Carol) in current state.
         let friend_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/friends')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_ref
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/friends')",
             alice_eid
         ))
         .expect("count failed")
@@ -1760,9 +1756,9 @@ mod tests {
 
         // Verify Carol is still a friend
         let has_carol = Spi::get_one::<bool>(&format!(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_ref
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':person/friends')
-             AND v_ref = {} AND added = true)",
+             AND v = {})",
             alice_eid, carol_eid
         ))
         .expect("query failed")
@@ -1826,10 +1822,10 @@ mod tests {
         ))
         .expect("retract txn failed");
 
-        // e1 should have 1 label (:urgent)
+        // e1 should have 1 label (:urgent) in current state
         let e1_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = {} AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_keyword
+             WHERE e = {} AND a = {}",
             e1_eid, attr_entid
         ))
         .expect("count failed")
@@ -1838,8 +1834,8 @@ mod tests {
 
         // e2 should still have both labels
         let e2_count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = {} AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_keyword
+             WHERE e = {} AND a = {}",
             e2_eid, attr_entid
         ))
         .expect("count failed")
@@ -1848,8 +1844,8 @@ mod tests {
 
         // e2 :important should still exist
         let e2_important = Spi::get_one::<bool>(&format!(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms
-             WHERE e = {} AND a = {} AND v_keyword = 'important' AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_keyword
+             WHERE e = {} AND a = {} AND v = 'important')",
             e2_eid, attr_entid
         ))
         .expect("query failed")
@@ -1908,8 +1904,26 @@ mod tests {
             "A retraction row (added=false) should exist for history"
         );
 
-        // The original assertion row should now be marked as retracted (added=false)
-        let assertion_still_active = Spi::get_one::<bool>(&format!(
+        // Append-only model: the original assertion row is NOT flipped; it
+        // stays in the immutable log as added=true. Liveness is determined
+        // by the current-state projection, which the retraction removes
+        // :red from. Assert :red is gone from the projection (current
+        // state), and that the original assertion row IS still present in
+        // the log (history preserved).
+        let red_in_projection = Spi::get_one::<bool>(&format!(
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_keyword
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/colors')
+             AND v = 'red')",
+            eid
+        ))
+        .expect("query failed")
+        .expect("NULL");
+        assert!(
+            !red_in_projection,
+            ":red should be gone from current state after retraction"
+        );
+
+        let red_assertion_in_log = Spi::get_one::<bool>(&format!(
             "SELECT EXISTS(SELECT 1 FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':item/colors')
              AND v_keyword = 'red' AND added = true)",
@@ -1918,8 +1932,8 @@ mod tests {
         .expect("query failed")
         .expect("NULL");
         assert!(
-            !assertion_still_active,
-            "Original assertion should no longer be active (added=true)"
+            red_assertion_in_log,
+            "Append-only: the original :red assertion row is preserved in the log as history"
         );
     }
 

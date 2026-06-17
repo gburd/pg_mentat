@@ -124,14 +124,17 @@ mod tests {
             "SELECT mentat_transact('[{{:db/id {} :person/name \"Carrie\"}}]'::TEXT)", e
         )).expect("r2");
 
-        // Exactly one live name datom.
+        // Exactly one current value (append-only model: the log retains the
+        // full assert/retract history; "exactly one live value" is a property
+        // of the current-state projection, not an `added=true` count of the
+        // immutable log).
         let live = Spi::get_one::<i64>(&format!(
-            "SELECT count(*)::BIGINT FROM mentat.datoms_text_new \
-             WHERE e = {} AND a = mentat.attr_id(':person/name') AND added", e
+            "SELECT count(*)::BIGINT FROM mentat.current_text \
+             WHERE e = {} AND a = mentat.attr_id(':person/name')", e
         ))
         .expect("count")
         .expect("NULL");
-        assert_eq!(live, 1, "cardinality-one must keep exactly one live value");
+        assert_eq!(live, 1, "cardinality-one must keep exactly one current value");
 
         // And it is the latest.
         let name = Spi::get_one::<String>(&format!(

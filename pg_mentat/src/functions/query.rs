@@ -211,6 +211,31 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i64, Box<dyn std::error::Erro
 ///
 /// `store_id_param` is the $N placeholder for the store_id parameter.
 fn build_datoms_union_subquery(store_id_param: &str) -> String {
+    build_datoms_union_subquery_opt(store_id_param, false)
+}
+
+/// UNION-ALL over the nine type tables. When `use_projection` is true, reads
+/// the current-state projection tables (current_<type>, all rows live, so
+/// `true AS added`) instead of the append-only log tables. Used for
+/// variable-typed-attribute patterns where the type isn't known at compile
+/// time so a single typed table can't be selected.
+fn build_datoms_union_subquery_opt(store_id_param: &str, use_projection: bool) -> String {
+    // Pick log vs projection table names and the `added` column expression.
+    let t = |log: &str, cur: &str| -> String {
+        if use_projection { format!("mentat.{cur}") } else { format!("mentat.{log}") }
+    };
+    let added = if use_projection { "true" } else { "added" };
+    let (t_ref, t_bool, t_long, t_double, t_instant, t_text, t_kw, t_uuid, t_bytes) = (
+        t("datoms_ref_new", "current_ref"),
+        t("datoms_boolean_new", "current_boolean"),
+        t("datoms_long_new", "current_long"),
+        t("datoms_double_new", "current_double"),
+        t("datoms_instant_new", "current_instant"),
+        t("datoms_text_new", "current_text"),
+        t("datoms_keyword_new", "current_keyword"),
+        t("datoms_uuid_new", "current_uuid"),
+        t("datoms_bytes_new", "current_bytes"),
+    );
     // Cast every per-arm tag literal to SMALLINT so the UNION result column
     // is SMALLINT. Casting only the first arm is not enough — Postgres resolves
     // the UNION type across all arms and an untyped `1` / `2` / ... promotes
@@ -220,40 +245,40 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
                 v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
                 NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                 NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant, \
-                NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, added \
-         FROM mentat.datoms_ref_new WHERE store_id = {sid} \
+                NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, {added} AS added \
+         FROM {t_ref} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {bool_tag}::SMALLINT, \
-                NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_boolean_new WHERE store_id = {sid} \
+                NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_bool} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {long_tag}::SMALLINT, \
-                NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_long_new WHERE store_id = {sid} \
+                NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_long} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {double_tag}::SMALLINT, \
-                NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_double_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_double} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {instant_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, added \
-         FROM mentat.datoms_instant_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, {added} \
+         FROM {t_instant} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {str_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_text_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_text} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {kw_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_keyword_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, {added} \
+         FROM {t_kw} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {uuid_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, added \
-         FROM mentat.datoms_uuid_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, {added} \
+         FROM {t_uuid} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {bytes_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, added \
-         FROM mentat.datoms_bytes_new WHERE store_id = {sid})",
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, {added} \
+         FROM {t_bytes} WHERE store_id = {sid})",
         sid = store_id_param,
         ref_tag = type_tag::REF,
         bool_tag = type_tag::BOOLEAN,
@@ -270,10 +295,10 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
 /// Build a FROM-clause fragment for a single datoms-like table alias.
 ///
 /// This generates `(UNION ALL subquery) AS alias` with store_id filtering.
-fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
+fn build_datoms_from_fragment(alias: &str, store_id_param: &str, use_projection: bool) -> String {
     format!(
         "{} AS {}",
-        build_datoms_union_subquery(store_id_param),
+        build_datoms_union_subquery_opt(store_id_param, use_projection),
         alias
     )
 }
@@ -287,6 +312,11 @@ fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
 struct TypedTableInfo {
     /// The table name (e.g., "mentat.datoms_text_new").
     table: &'static str,
+    /// The current-state projection table for this type (e.g.,
+    /// "mentat.current_text"). Read instead of `table` for current-time
+    /// (non-as-of) queries: it holds only live datoms, so liveness needs no
+    /// `added=true` filter or latest-tx-wins resolution over the log.
+    current_table: &'static str,
     /// The SQL type of the native `v` column (e.g., "TEXT", "BIGINT").
     _sql_type: &'static str,
     /// The type tag constant for this value type.
@@ -304,54 +334,63 @@ fn value_type_to_table_info(value_type: &str) -> Option<TypedTableInfo> {
     match value_type {
         "ref" => Some(TypedTableInfo {
             table: "mentat.datoms_ref_new",
+            current_table: "mentat.current_ref",
             _sql_type: "BIGINT",
             type_tag: type_tag::REF,
             value_column: "v_ref",
         }),
         "boolean" => Some(TypedTableInfo {
             table: "mentat.datoms_boolean_new",
+            current_table: "mentat.current_boolean",
             _sql_type: "BOOLEAN",
             type_tag: type_tag::BOOLEAN,
             value_column: "v_bool",
         }),
         "long" => Some(TypedTableInfo {
             table: "mentat.datoms_long_new",
+            current_table: "mentat.current_long",
             _sql_type: "BIGINT",
             type_tag: type_tag::LONG,
             value_column: "v_long",
         }),
         "double" => Some(TypedTableInfo {
             table: "mentat.datoms_double_new",
+            current_table: "mentat.current_double",
             _sql_type: "DOUBLE PRECISION",
             type_tag: type_tag::DOUBLE,
             value_column: "v_double",
         }),
         "instant" => Some(TypedTableInfo {
             table: "mentat.datoms_instant_new",
+            current_table: "mentat.current_instant",
             _sql_type: "TIMESTAMPTZ",
             type_tag: type_tag::INSTANT,
             value_column: "v_instant",
         }),
         "string" => Some(TypedTableInfo {
             table: "mentat.datoms_text_new",
+            current_table: "mentat.current_text",
             _sql_type: "TEXT",
             type_tag: type_tag::STRING,
             value_column: "v_text",
         }),
         "keyword" => Some(TypedTableInfo {
             table: "mentat.datoms_keyword_new",
+            current_table: "mentat.current_keyword",
             _sql_type: "TEXT",
             type_tag: type_tag::KEYWORD,
             value_column: "v_keyword",
         }),
         "uuid" => Some(TypedTableInfo {
             table: "mentat.datoms_uuid_new",
+            current_table: "mentat.current_uuid",
             _sql_type: "UUID",
             type_tag: type_tag::UUID,
             value_column: "v_uuid",
         }),
         "bytes" => Some(TypedTableInfo {
             table: "mentat.datoms_bytes_new",
+            current_table: "mentat.current_bytes",
             _sql_type: "BYTEA",
             type_tag: type_tag::BYTES,
             value_column: "v_bytes",
@@ -463,6 +502,7 @@ fn build_typed_datoms_from_fragment_with_pushdown(
     store_id_param: &str,
     info: &TypedTableInfo,
     pushdown: Option<&PushdownConditions>,
+    use_projection: bool,
 ) -> String {
     // Build the SELECT list with the native column in its correct position
     // and NULLs for all other typed columns.
@@ -476,10 +516,22 @@ fn build_typed_datoms_from_fragment_with_pushdown(
     let v_uuid = if info.value_column == "v_uuid" { "v" } else { "NULL::UUID" };
     let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
 
+    // Current-time queries read the current-state projection (only live
+    // datoms, no `added` column). As-of / history queries read the
+    // append-only log and keep the `added` column for supersession logic.
+    let (table, added_col, drop_added_pushdown) = if use_projection {
+        // Projection rows are all live: synthesize `true AS added`.
+        (info.current_table, "true AS added", true)
+    } else {
+        (info.table, "added", false)
+    };
+
     // Build pushdown WHERE conditions for direct index usage
     let mut extra_where = String::new();
     if let Some(pd) = pushdown {
-        if pd.added_true {
+        // The projection has no `added` column; its presence == live, so the
+        // `AND added` pushdown is both unnecessary and invalid there.
+        if pd.added_true && !drop_added_pushdown {
             extra_where.push_str(" AND added");
         }
         if let Some(ref attr_entid) = pd.attribute_entid {
@@ -492,10 +544,9 @@ fn build_typed_datoms_from_fragment_with_pushdown(
                 {v_ref} AS v_ref, {v_bool} AS v_bool, {v_long} AS v_long, \
                 {v_double} AS v_double, {v_text} AS v_text, \
                 {v_keyword} AS v_keyword, {v_instant} AS v_instant, \
-                {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, added \
+                {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, {added_col} \
          FROM {table} WHERE store_id = {sid}{extra}) AS {alias}",
         tag = info.type_tag,
-        table = info.table,
         sid = store_id_param,
         extra = extra_where,
     )
@@ -5248,14 +5299,22 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             PushdownConditions { added_true, attribute_entid }
         };
 
+        // Read from the current-state projection for current-time queries
+        // (no as-of / since / history): it holds only live datoms, so it
+        // needs no `added` filter or latest-tx-wins resolution. Temporal
+        // queries must read the append-only log.
+        let use_projection = temporal.as_of.is_none()
+            && temporal.since.is_none()
+            && !temporal.history;
+
         // Use the typed single-table FROM fragment or fall back to UNION ALL
         if let Some(info) = &typed_info {
             joins.push(build_typed_datoms_from_fragment_with_pushdown(
-                &alias, store_id_param, info, Some(&pushdown),
+                &alias, store_id_param, info, Some(&pushdown), use_projection,
             ));
             crate::monitoring::record_schema_aware_hit();
         } else {
-            joins.push(build_datoms_from_fragment(&alias, store_id_param));
+            joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
             crate::monitoring::record_union_all_fallback();
         }
     }
@@ -5955,9 +6014,12 @@ fn build_not_exists_subquery(
                 if let Some(info) = &typed_info {
                     sub_joins.push(build_typed_datoms_from_fragment_with_pushdown(
                         &alias, store_id_param, info, Some(&not_pushdown),
+                        temporal.as_of.is_none()
+                            && temporal.since.is_none()
+                            && !temporal.history,
                     ));
                 } else {
-                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
                 }
 
                 // Track locally-bound variables for predicates within this NOT clause.
@@ -6776,9 +6838,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                 if let Some(info) = &typed_info {
                     pattern_joins.push(build_typed_datoms_from_fragment_with_pushdown(
                         &alias, store_id_param, info, Some(&rule_pushdown),
+                        temporal.as_of.is_none()
+                            && temporal.since.is_none()
+                            && !temporal.history,
                     ));
                 } else {
-                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
                 }
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {

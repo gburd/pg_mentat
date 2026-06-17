@@ -156,10 +156,12 @@ mod tests {
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :di/name \"v2\"]]'::TEXT)", eid)).expect("replace");
 
+        // Append-only: "exactly 1 active datom" is a current-state property,
+        // checked against the projection (the log retains v1's assertion).
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':di/name') AND added = true", eid
+            "SELECT COUNT(*) FROM mentat.current_text WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':di/name')", eid
         )).expect("q").expect("NULL");
-        assert_eq!(count, 1, "Should have exactly 1 active datom after replacement");
+        assert_eq!(count, 1, "Should have exactly 1 current datom after replacement");
 
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :di/name ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
@@ -178,7 +180,7 @@ mod tests {
         Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :di/val 3]]'::TEXT)", eid)).expect("replace");
 
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':di/val') AND added = true", eid
+            "SELECT COUNT(*) FROM mentat.current_long WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':di/val')", eid
         )).expect("q").expect("NULL");
         assert_eq!(count, 1);
     }

@@ -563,11 +563,14 @@ fn execute_cas_fn(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let is_ref = lookup_value_type(a).as_deref() == Some("ref");
 
-    // Get current value(s) for this (e, a) pair
+    // Get current value(s) for this (e, a) pair from the current-state
+    // projection. Append-only model: the log retains historical assertions,
+    // so an `added=true` scan of mentat.datoms would return superseded
+    // values too. mentat.current_datoms holds only live values.
     let cas_query = format!(
         "SELECT value_type_tag, v_ref, v_bool, v_long, v_double, \
                 v_text, v_keyword, v_instant, v_uuid, v_bytes \
-         FROM {}.datoms WHERE e = $1 AND a = $2 AND added = true",
+         FROM {}.current_datoms WHERE e = $1 AND a = $2",
         qs
     );
     let current_values: Vec<TypedValue> = Spi::connect(|client| {
@@ -1407,12 +1410,16 @@ fn insert_datoms(
                 }
             }
         } else {
-            // For explicit retractions (added=false), mark the existing assertion
-            // row as retracted. This updates the specific (e, a, v) datom with
-            // added=true to added=false, so queries filtering by added=true will
-            // no longer see this value. Without this, the original added=true row
-            // would remain visible and the retraction would have no effect.
-            mark_existing_datom_retracted(datom.e, datom.a, &datom.v, schema)?;
+            // Explicit retraction (added=false): append the retraction datom.
+            //
+            // Append-only model (1.5.0): we do NOT flip the existing
+            // assertion row's `added` flag. The datom log is immutable; a
+            // retraction is a new datom (e, a, v, tx, false). Current-time
+            // queries resolve liveness from the current-state projection
+            // (which this retraction removes the value from via
+            // maintain_current_projection), and as-of queries resolve via
+            // the latest-tx-wins / NOT EXISTS-newer supersession logic over
+            // the immutable log.
             rows_to_insert.push((datom.e, datom.a, datom.v.clone(), tx_id, false));
         }
     }
@@ -1953,124 +1960,6 @@ fn validate_datom_constraints(
 /// If the new value is identical to the existing value, no retraction is needed (idempotent).
 ///
 /// The `schema` parameter is the quoted PostgreSQL schema name.
-/// Helper function to query all type-specific tables for an (e, a) pair.
-/// Returns the most recent value (by tx) if found.
-/// Find the current (latest, `added = true`) value for an `(entity,
-/// attribute)` pair.
-///
-/// When `expected_type` is `Some` only the single narrow table for that
-/// value type is queried -- collapsing the 9-way `UNION ALL` to one index
-/// lookup on the EAVT covering index. This is the hot path for
-/// cardinality-one assertion: the new value's type is always known at the
-/// call site, and a cardinality-one attribute's type never changes, so the
-/// current value (if any) lives in exactly the same narrow table.
-///
-/// When `expected_type` is `None` all nine type tables are scanned via
-/// `UNION ALL` (used when the caller genuinely does not know the type).
-fn find_current_value_for_ea_typed(
-    store_id: i64,
-    entity_id: i64,
-    attr_id: i64,
-    expected_type: Option<&TypedValue>,
-) -> Result<Option<TypedValue>, Box<dyn std::error::Error + Send + Sync>> {
-    // Fast path: query only the table matching the known value type.
-    if let Some(tv) = expected_type {
-        let (table, tag): (&str, i16) = match tv {
-            TypedValue::Ref(_) => ("datoms_ref_new", 0),
-            TypedValue::Boolean(_) => ("datoms_boolean_new", 1),
-            TypedValue::Long(_) => ("datoms_long_new", 2),
-            TypedValue::Double(_) => ("datoms_double_new", 3),
-            TypedValue::Instant(_) => ("datoms_instant_new", 4),
-            TypedValue::Text(_) => ("datoms_text_new", 7),
-            TypedValue::Keyword(_) => ("datoms_keyword_new", 8),
-            TypedValue::Uuid(_) => ("datoms_uuid_new", 10),
-            TypedValue::Bytes(_) => ("datoms_bytes_new", 11),
-        };
-        // Render the value as text the same way the UNION-ALL variant does,
-        // so parse_typed_value_from_tag decodes both identically.
-        let value_expr = match tag {
-            4 => "(EXTRACT(EPOCH FROM v)::bigint * 1000000)::text",
-            7 | 8 => "v",
-            11 => "encode(v, 'hex')",
-            _ => "v::text",
-        };
-        let query = format!(
-            "SELECT {value_expr} AS value, tx FROM mentat.{table} \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true \
-             ORDER BY tx DESC LIMIT 1"
-        );
-        return Spi::connect(|client| {
-            let mut rows = client.select(
-                &query,
-                None,
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                ],
-            )?;
-            if let Some(row) = rows.next() {
-                let value_str: String = row.get(1)?.ok_or("Missing value")?;
-                Ok(Some(parse_typed_value_from_tag(tag, value_str)?))
-            } else {
-                Ok(None)
-            }
-        });
-    }
-
-    // Slow path: type unknown -- query all type-specific tables with UNION ALL,
-    // ordered by tx DESC. This finds the most recent value across all types.
-    let query = "
-        SELECT 0::SMALLINT AS type_tag, v::text AS value, tx FROM mentat.datoms_ref_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 1::SMALLINT, v::text, tx FROM mentat.datoms_boolean_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 2::SMALLINT, v::text, tx FROM mentat.datoms_long_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 3::SMALLINT, v::text, tx FROM mentat.datoms_double_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 4::SMALLINT, (EXTRACT(EPOCH FROM v)::bigint * 1000000)::text AS value, tx FROM mentat.datoms_instant_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 7::SMALLINT, v, tx FROM mentat.datoms_text_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 8::SMALLINT, v, tx FROM mentat.datoms_keyword_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 10::SMALLINT, v::text, tx FROM mentat.datoms_uuid_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        UNION ALL
-        SELECT 11::SMALLINT, encode(v, 'hex'), tx FROM mentat.datoms_bytes_new
-        WHERE store_id = $1 AND e = $2 AND a = $3 AND added = true
-        ORDER BY tx DESC LIMIT 1
-    ";
-
-    Spi::connect(|client| {
-        let mut rows = client.select(
-            query,
-            None,
-            &[
-                DatumWithOid::from(store_id),
-                DatumWithOid::from(entity_id),
-                DatumWithOid::from(attr_id),
-            ],
-        )?;
-
-        if let Some(row) = rows.next() {
-            let type_tag: i16 = row.get(1)?.ok_or("Missing type_tag")?;
-            let value_str: String = row.get(2)?.ok_or("Missing value")?;
-            Ok(Some(parse_typed_value_from_tag(type_tag, value_str)?))
-        } else {
-            Ok(None)
-        }
-    })
-}
-
 /// Parse a value-as-text plus its narrow-table type tag back into a
 /// `TypedValue`. Shared by both the fast (single-table) and slow
 /// (UNION-ALL) variants of `find_current_value_for_ea_typed` so the
@@ -2097,181 +1986,92 @@ fn parse_typed_value_from_tag(
     Ok(typed_value)
 }
 
-/// Returns `CardinalityOneResult::Skip` if the new value equals the existing
-/// one (idempotent), `CardinalityOneResult::Insert` if there is no existing
-/// value, or `CardinalityOneResult::Replace(old_v)` if an existing *different*
-/// value was found.
+/// Decide what a cardinality-one assertion of `new_v` for `(e, a)` implies
+/// against the current value held in the projection:
+///   * `Skip`         -- new_v equals the current value (idempotent no-op).
+///   * `Insert`       -- no current value exists; just assert new_v.
+///   * `Replace(old)` -- a different current value exists; the caller must
+///                       append a retraction datom `(e, a, old, tx, false)`
+///                       before the new assertion.
 ///
-/// When `Replace` is returned the old value has **already been marked
-/// retracted** via an `UPDATE` on the appropriate type table (so it is
-/// invisible to subsequent `added = true` queries within this transaction).
-/// The caller is responsible for queuing the retraction datom row
-/// `(e, a, old_v, tx, false)` into the batch.
+/// Append-only model (1.5.0): this NO LONGER flips the existing log row's
+/// `added` flag. The datom log is immutable. The current value is read from
+/// the current-state projection (mentat.current_<type>), which is the
+/// authoritative, latest-tx-wins source; maintain_current_projection then
+/// applies the retraction (delete old) + assertion (upsert new) to keep the
+/// projection correct.
 fn retract_existing_cardinality_one(
     entity_id: i64,
     attr_id: i64,
     new_v: &TypedValue,
     schema: &str,
 ) -> Result<CardinalityOneResult, Box<dyn std::error::Error + Send + Sync>> {
-    // Get store_id — fast path via TX_STORE_ID thread-local.
     let store_id = get_store_id_from_schema(schema)?;
 
-    // Find the current value (if any) for this (e, a). The new value's type
-    // is known, and a cardinality-one attribute's type is fixed, so the
-    // current value lives in the same narrow table -- use the single-table
-    // fast path instead of the 9-way UNION ALL.
-    let existing = find_current_value_for_ea_typed(store_id, entity_id, attr_id, Some(new_v))?;
+    // Read the current value (if any) from the projection -- authoritative
+    // and latest-tx-wins-correct, unlike a raw `added=true` scan of the
+    // append-only log.
+    let existing = current_projection_value_for_ea(store_id, entity_id, attr_id, new_v)?;
 
     if let Some(old_v) = existing {
-        // If the value is identical, no retraction needed (idempotent assertion)
         if old_v == *new_v {
-            return Ok(CardinalityOneResult::Skip);
+            return Ok(CardinalityOneResult::Skip); // idempotent
         }
-
-        // Mark the existing assertion row as retracted so queries filtering
-        // by added=true will no longer return the old value.
-        mark_existing_datom_retracted(entity_id, attr_id, &old_v, schema)?;
-
+        // Different value: caller appends the retraction datom. No log flip.
         return Ok(CardinalityOneResult::Replace(old_v));
     }
 
     Ok(CardinalityOneResult::Insert)
 }
 
-/// Mark an existing assertion datom as retracted by updating its `added` column
-/// from `true` to `false`. This targets the specific (e, a, v) tuple so that
-/// only the exact value is retracted -- other values for the same (e, a) pair
-/// (as found with cardinality-many attributes) are left intact.
-///
-/// This is the core fix for the cardinality-many retraction bug: without this,
-/// inserting a retraction row (added=false) would have no effect because the
-/// original assertion row (added=true) would still be returned by queries.
-///
-/// The `schema` parameter is the quoted PostgreSQL schema name.
-fn mark_existing_datom_retracted(
+/// Read the current value of a cardinality-one (e, a) from the current-state
+/// projection. `type_hint` selects which current_<type> table to query (a
+/// cardinality-one attribute's type is fixed, so the current value lives in
+/// exactly one projection table). Returns None if no current value exists.
+fn current_projection_value_for_ea(
+    store_id: i64,
     entity_id: i64,
     attr_id: i64,
-    v: &TypedValue,
-    schema: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Get store_id from schema
-    let store_id = get_store_id_from_schema(schema)?;
-
-    // Update the appropriate type-specific table
-    // Much simpler than updating wide row with value_type_tag discrimination
-    match v {
-        TypedValue::Ref(id) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_ref_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(*id),
-                ],
-            )?;
+    type_hint: &TypedValue,
+) -> Result<Option<TypedValue>, Box<dyn std::error::Error + Send + Sync>> {
+    let (table, tag): (&str, i16) = match type_hint {
+        TypedValue::Ref(_) => ("current_ref", 0),
+        TypedValue::Boolean(_) => ("current_boolean", 1),
+        TypedValue::Long(_) => ("current_long", 2),
+        TypedValue::Double(_) => ("current_double", 3),
+        TypedValue::Instant(_) => ("current_instant", 4),
+        TypedValue::Text(_) => ("current_text", 7),
+        TypedValue::Keyword(_) => ("current_keyword", 8),
+        TypedValue::Uuid(_) => ("current_uuid", 10),
+        TypedValue::Bytes(_) => ("current_bytes", 11),
+    };
+    let value_expr = match tag {
+        4 => "(EXTRACT(EPOCH FROM v)::bigint * 1000000)::text",
+        7 | 8 => "v",
+        11 => "encode(v, 'hex')",
+        _ => "v::text",
+    };
+    let query = format!(
+        "SELECT {value_expr} AS value FROM mentat.{table} \
+         WHERE store_id = $1 AND e = $2 AND a = $3 LIMIT 1"
+    );
+    Spi::connect(|client| {
+        let mut rows = client.select(
+            &query,
+            None,
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+            ],
+        )?;
+        if let Some(row) = rows.next() {
+            let value_str: String = row.get(1)?.ok_or("Missing value")?;
+            Ok(Some(parse_typed_value_from_tag(tag, value_str)?))
+        } else {
+            Ok(None)
         }
-        TypedValue::Boolean(b) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_boolean_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(*b),
-                ],
-            )?;
-        }
-        TypedValue::Long(n) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_long_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(*n),
-                ],
-            )?;
-        }
-        TypedValue::Double(f) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_double_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(*f),
-                ],
-            )?;
-        }
-        TypedValue::Text(s) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_text_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(s.as_str()),
-                ],
-            )?;
-        }
-        TypedValue::Keyword(s) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_keyword_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(s.as_str()),
-                ],
-            )?;
-        }
-        TypedValue::Instant(micros) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_instant_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 \
-                 AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(*micros),
-                ],
-            )?;
-        }
-        TypedValue::Uuid(u) => {
-            let uuid_str = u.to_string();
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_uuid_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(uuid_str.as_str()),
-                ],
-            )?;
-        }
-        TypedValue::Bytes(b) => {
-            Spi::run_with_args(
-                "UPDATE mentat.datoms_bytes_new SET added = false \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(entity_id),
-                    DatumWithOid::from(attr_id),
-                    DatumWithOid::from(b.clone()),
-                ],
-            )?;
-        }
-    }
-    Ok(())
+    })
 }
 
 /// For cardinality-many attributes, check if the exact (e, a, v) triple already
@@ -2285,59 +2085,61 @@ fn is_duplicate_cardinality_many(
     v: &TypedValue,
     schema: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    // Get store_id from schema
     let store_id = get_store_id_from_schema(schema)?;
 
-    // Query the appropriate type-specific table based on value type
-    // Much simpler than querying the wide row with value_type_tag discrimination
+    // Append-only model: "is this (e,a,v) already live?" is answered by the
+    // current-state projection (presence == live), NOT by an `added=true`
+    // scan of the immutable log (which would also match a value that was
+    // later retracted). Each current_<type> table has no `added` column;
+    // a row's existence means the value is currently asserted.
     let exists = match v {
         TypedValue::Ref(id) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_ref_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_ref \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(*id)]),
         TypedValue::Boolean(b) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_boolean_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_boolean \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(*b)]),
         TypedValue::Long(n) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_long_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_long \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(*n)]),
         TypedValue::Double(f) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_double_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_double \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(*f)]),
         TypedValue::Text(s) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_text_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_text \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
         TypedValue::Keyword(s) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_keyword_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_keyword \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
         TypedValue::Instant(micros) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_instant_new \
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_instant \
              WHERE store_id = $1 AND e = $2 AND a = $3 \
-             AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0) AND added = true)",
+             AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0))",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(*micros)]),
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
             Spi::get_one_with_args::<bool>(
-                "SELECT EXISTS(SELECT 1 FROM mentat.datoms_uuid_new \
-                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID AND added = true)",
+                "SELECT EXISTS(SELECT 1 FROM mentat.current_uuid \
+                 WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID)",
                 &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
                   DatumWithOid::from(attr_id), DatumWithOid::from(uuid_str.as_str())])
         }
         TypedValue::Bytes(b) => Spi::get_one_with_args::<bool>(
-            "SELECT EXISTS(SELECT 1 FROM mentat.datoms_bytes_new \
-             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4 AND added = true)",
+            "SELECT EXISTS(SELECT 1 FROM mentat.current_bytes \
+             WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
             &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
               DatumWithOid::from(attr_id), DatumWithOid::from(b.clone())]),
     }.ok().flatten().unwrap_or(false);
@@ -2524,6 +2326,25 @@ fn batch_insert_datoms(
         return Ok(());
     }
 
+    // Dedup by the full PK (e, a, v, tx, added). Some transaction paths can
+    // queue the same datom twice -- e.g. :db.fn/cas pushes a retraction of
+    // the old value, and the cardinality-one replace logic in insert_datoms
+    // independently queues the same retraction. Identical datoms are
+    // idempotent, but a single INSERT ... ON CONFLICT (store_id,e,a,v,tx)
+    // cannot list the same key twice ("cannot affect row a second time").
+    // Collapse duplicates before building the batch.
+    use std::collections::HashSet;
+    let mut seen: HashSet<(i64, i64, String, i64, bool)> = HashSet::new();
+    let mut deduped: Vec<&(i64, i64, TypedValue, i64, bool)> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (e, a, v, tx, added) = row;
+        let key = (*e, *a, typed_value_sql_literal(v), *tx, *added);
+        if seen.insert(key) {
+            deduped.push(row);
+        }
+    }
+    let rows: &[&(i64, i64, TypedValue, i64, bool)] = &deduped;
+
     // TX_STORE_ID fast-path: no DB query after the first call in this tx.
     let store_id = get_store_id_from_schema(schema)?;
 
@@ -2693,24 +2514,39 @@ fn maintain_current_projection(
     }
     let store_id = get_store_id_from_schema(schema)?;
 
-    // Per-type accumulators for assertions (upsert) and retractions (delete).
+    // Per-type accumulators. Upserts are keyed by their conflict tuple
+    // (store_id,e,a,v) so a single INSERT ... ON CONFLICT never lists the
+    // same row twice (PostgreSQL rejects that with "ON CONFLICT DO UPDATE
+    // command cannot affect row a second time"). The last write in the
+    // batch for a given conflict key wins (highest tx, since rows are in
+    // assertion order).
     use std::collections::HashMap;
-    let mut upserts: HashMap<&'static str, Vec<String>> = HashMap::new();
-    let mut deletes: HashMap<&'static str, Vec<String>> = HashMap::new();
+    // table -> ( (e,a,v_sql) -> values_row )
+    let mut upserts: HashMap<&'static str, HashMap<(i64, i64, String), String>> = HashMap::new();
+    // table -> set of (e,a,v_sql) delete tuples (dedup via map key)
+    let mut deletes: HashMap<&'static str, HashMap<(i64, i64, String), String>> = HashMap::new();
 
     for (e, a, v, tx, added) in rows {
         let table = current_projection_table(v);
         let v_sql = typed_value_sql_literal(v);
+        let key = (*e, *a, v_sql.clone());
         if *added {
-            upserts.entry(table).or_default().push(format!(
-                "({},{},{},{},{})", store_id, e, a, v_sql, tx
-            ));
+            // Last assertion of this (e,a,v) in the batch wins. Also drop any
+            // pending delete of the same key (retract-then-reassert in one tx
+            // ends with the value live).
+            deletes.get_mut(table).map(|m| m.remove(&key));
+            upserts.entry(table).or_default().insert(
+                key,
+                format!("({},{},{},{},{})", store_id, e, a, v_sql, tx),
+            );
         } else {
-            // Collect (e,a,v) tuples to delete. We delete by exact value so a
-            // cardinality-many retraction removes only the retracted value.
-            deletes.entry(table).or_default().push(format!(
-                "({},{},{},{})", store_id, e, a, v_sql
-            ));
+            // Retraction. Drop any pending upsert of the same key (assert-then-
+            // retract in one tx ends with the value gone), and queue a delete.
+            upserts.get_mut(table).map(|m| m.remove(&key));
+            deletes.entry(table).or_default().insert(
+                key,
+                format!("({},{},{},{})", store_id, e, a, v_sql),
+            );
         }
     }
 
@@ -2722,22 +2558,23 @@ fn maintain_current_projection(
         if tuples.is_empty() {
             continue;
         }
-        // DELETE ... WHERE (store_id,e,a,v) IN (VALUES ...).
+        let rows_sql: Vec<&String> = tuples.values().collect();
+        let joined = rows_sql.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
         Spi::run(&format!(
             "DELETE FROM mentat.{} WHERE (store_id,e,a,v) IN (VALUES {})",
-            table,
-            tuples.join(",")
+            table, joined
         ))?;
     }
     for (table, vals) in &upserts {
         if vals.is_empty() {
             continue;
         }
+        let rows_sql: Vec<&String> = vals.values().collect();
+        let joined = rows_sql.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
         Spi::run(&format!(
             "INSERT INTO mentat.{} (store_id,e,a,v,tx) VALUES {} \
              ON CONFLICT (store_id,e,a,v) DO UPDATE SET tx = EXCLUDED.tx",
-            table,
-            vals.join(",")
+            table, joined
         ))?;
     }
 

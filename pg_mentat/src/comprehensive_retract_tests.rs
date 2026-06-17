@@ -229,8 +229,12 @@ mod tests {
             retracts.push(format!("[:db/retractEntity {}]", eid));
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", retracts.join("\n"))).expect("batch retract");
+        // Append-only model: retractEntity appends retraction datoms; the
+        // original assertions remain in the immutable log. "Are these
+        // entities gone?" is a current-state question, answered by the
+        // projection (current_text), not by an `added=true` scan of the log.
         let count = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':cr/name') AND v_text LIKE 'doomed-%' AND added = true",
+            "SELECT COUNT(DISTINCT e) FROM mentat.current_text WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':cr/name') AND v LIKE 'doomed-%'",
         ).expect("q").expect("NULL");
         assert_eq!(count, 0);
     }
