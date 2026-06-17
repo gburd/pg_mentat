@@ -847,6 +847,8 @@ pub mod infra_extensions_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod operational_accessors_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod current_projection_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -1084,6 +1086,18 @@ extension_sql_file!(
 extension_sql_file!(
     "../sql/23_operational_accessors.sql",
     name = "operational_accessors",
+    requires = ["narrow_storage"],
+);
+
+// Current-state projection: nine mentat.current_<type> tables holding only
+// the live datoms, maintained by the transact path. Foundation of the
+// 1.5.0 append-only work -- lets current-time reads avoid latest-tx-wins
+// resolution over the full log, and lets history be dropped wholesale in
+// 1.6.0. Includes rebuild + verify helpers. See docs/src/operations.md
+// and .agent/notes/v1.5.0-plan.md.
+extension_sql_file!(
+    "../sql/24_current_projection.sql",
+    name = "current_projection",
     requires = ["narrow_storage"],
 );
 

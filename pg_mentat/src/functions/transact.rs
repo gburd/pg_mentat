@@ -862,6 +862,27 @@ fn execute_transaction_inner(
         ],
     )?;
 
+    // The txInstant datom is cardinality-one and Datalog-queryable
+    // ([?tx :db/txInstant ?inst]); mirror it into the current-state
+    // projection so current-time reads resolve it from current_instant like
+    // any other live datom. It is never retracted, so a plain upsert keyed
+    // by (store_id, e=tx_id, a=DB_TX_INSTANT) suffices.
+    Spi::run_with_args(
+        &format!(
+            "INSERT INTO {}.current_instant (store_id, e, a, v, tx) \
+             VALUES ($1, $2, $3, to_timestamp($4::DOUBLE PRECISION / 1000000.0), $5) \
+             ON CONFLICT (store_id, e, a, v) DO UPDATE SET tx = EXCLUDED.tx",
+            qs
+        ),
+        &[
+            DatumWithOid::from(tx_store_id),
+            DatumWithOid::from(tx_id),
+            DatumWithOid::from(bootstrap_entids::DB_TX_INSTANT),
+            DatumWithOid::from(tx_instant_micros),
+            DatumWithOid::from(tx_id),
+        ],
+    )?;
+
     // ========================================================================
     // Three-pass transaction processing:
     //   Pass 1: Scan for schema definitions, allocate tempids for schema entities
@@ -1398,6 +1419,12 @@ fn insert_datoms(
 
     // Flush all collected datoms via one batch INSERT per type table.
     batch_insert_datoms(&rows_to_insert, schema)?;
+
+    // Maintain the current-state projection from the same rows: assertions
+    // upsert into mentat.current_<type>, retractions delete from it. This
+    // keeps the projection in lock-step with the append-only log inside the
+    // same transaction. See sql/24_current_projection.sql.
+    maintain_current_projection(&rows_to_insert, schema)?;
 
     // Fulltext inserts remain per-row (typically low volume).
     for text_value in &fulltext_values {
@@ -2593,6 +2620,126 @@ fn batch_insert_datoms(
     flush("datoms_keyword_new", kw_vals)?;
     flush("datoms_uuid_new",    uuid_vals)?;
     flush("datoms_bytes_new",   bytes_vals)?;
+
+    Ok(())
+}
+
+/// Render a TypedValue as a SQL literal for the `v` column, matching the
+/// encoding `batch_insert_datoms` uses. Shared with the current-projection
+/// maintenance so both produce byte-identical value SQL.
+fn typed_value_sql_literal(v: &TypedValue) -> String {
+    match v {
+        TypedValue::Ref(id) => id.to_string(),
+        TypedValue::Boolean(b) => if *b { "true".to_string() } else { "false".to_string() },
+        TypedValue::Long(n) => n.to_string(),
+        TypedValue::Double(f) => {
+            if f.is_nan() {
+                "'NaN'::double precision".to_string()
+            } else if f.is_infinite() {
+                if *f > 0.0 {
+                    "'Infinity'::double precision".to_string()
+                } else {
+                    "'-Infinity'::double precision".to_string()
+                }
+            } else {
+                format!("{:e}::double precision", f)
+            }
+        }
+        TypedValue::Instant(micros) => {
+            format!("to_timestamp({}::double precision/1000000.0)", micros)
+        }
+        TypedValue::Text(s) => format!("'{}'", sql_escape_str(s)),
+        TypedValue::Keyword(s) => format!("'{}'", sql_escape_str(s)),
+        TypedValue::Uuid(u) => format!("'{}'", u),
+        TypedValue::Bytes(b) => format!("decode('{}','hex')", hex::encode(b)),
+    }
+}
+
+/// The current_<type> projection table name for a TypedValue.
+fn current_projection_table(v: &TypedValue) -> &'static str {
+    match v {
+        TypedValue::Ref(_) => "current_ref",
+        TypedValue::Boolean(_) => "current_boolean",
+        TypedValue::Long(_) => "current_long",
+        TypedValue::Double(_) => "current_double",
+        TypedValue::Instant(_) => "current_instant",
+        TypedValue::Text(_) => "current_text",
+        TypedValue::Keyword(_) => "current_keyword",
+        TypedValue::Uuid(_) => "current_uuid",
+        TypedValue::Bytes(_) => "current_bytes",
+    }
+}
+
+/// Maintain the current-state projection from the batch of (e,a,v,tx,added)
+/// rows just written to the log.
+///
+/// Assertions (added=true) upsert into mentat.current_<type>; retractions
+/// (added=false) delete the matching (store_id,e,a,v) projection row.
+///
+/// Batched per type table (one INSERT ... ON CONFLICT and one DELETE per
+/// type that appears in the batch) so a 463-datom tx issues at most ~18
+/// statements, not 463. Cardinality-one replace is expressed in the log as
+/// a retraction of the old value + an assertion of the new; the
+/// corresponding projection ops (delete old v, upsert new v) leave exactly
+/// one row per (e,a) -- the PK (store_id,e,a,v) does not enforce that, the
+/// transact path's cardinality handling does, identically to how it governs
+/// the log.
+fn maintain_current_projection(
+    rows: &[(i64, i64, TypedValue, i64, bool)],
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let store_id = get_store_id_from_schema(schema)?;
+
+    // Per-type accumulators for assertions (upsert) and retractions (delete).
+    use std::collections::HashMap;
+    let mut upserts: HashMap<&'static str, Vec<String>> = HashMap::new();
+    let mut deletes: HashMap<&'static str, Vec<String>> = HashMap::new();
+
+    for (e, a, v, tx, added) in rows {
+        let table = current_projection_table(v);
+        let v_sql = typed_value_sql_literal(v);
+        if *added {
+            upserts.entry(table).or_default().push(format!(
+                "({},{},{},{},{})", store_id, e, a, v_sql, tx
+            ));
+        } else {
+            // Collect (e,a,v) tuples to delete. We delete by exact value so a
+            // cardinality-many retraction removes only the retracted value.
+            deletes.entry(table).or_default().push(format!(
+                "({},{},{},{})", store_id, e, a, v_sql
+            ));
+        }
+    }
+
+    // Apply deletes first, then upserts: within a single tx a value can be
+    // retracted then re-asserted (cardinality-many) or replaced
+    // (cardinality-one: old retracted, new asserted). Deleting first then
+    // upserting yields the correct final set in both cases.
+    for (table, tuples) in &deletes {
+        if tuples.is_empty() {
+            continue;
+        }
+        // DELETE ... WHERE (store_id,e,a,v) IN (VALUES ...).
+        Spi::run(&format!(
+            "DELETE FROM mentat.{} WHERE (store_id,e,a,v) IN (VALUES {})",
+            table,
+            tuples.join(",")
+        ))?;
+    }
+    for (table, vals) in &upserts {
+        if vals.is_empty() {
+            continue;
+        }
+        Spi::run(&format!(
+            "INSERT INTO mentat.{} (store_id,e,a,v,tx) VALUES {} \
+             ON CONFLICT (store_id,e,a,v) DO UPDATE SET tx = EXCLUDED.tx",
+            table,
+            vals.join(",")
+        ))?;
+    }
 
     Ok(())
 }
