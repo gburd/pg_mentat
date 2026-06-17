@@ -177,14 +177,16 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&alice_age).expect("parse");
         assert_eq!(json["result"].as_i64().expect("age"), 26);
 
-        // Carol should exist
+        // Carol should exist. Bind ?e (the value position is a constant, so a
+        // find variable in the value slot like ?name would never bind and the
+        // scalar query would return NULL). Query the entity instead.
         let carol = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?name . :where [?e :bat/name \"Carol\"]]'::TEXT, '{}'::jsonb)::TEXT",
+            "SELECT mentat_query('[:find ?e . :where [?e :bat/name \"Carol\"]]'::TEXT, '{}'::jsonb)::TEXT",
         )
         .expect("query")
         .expect("NULL");
         let json: serde_json::Value = serde_json::from_str(&carol).expect("parse");
-        assert_eq!(json["result"].as_str().expect("name"), "Carol");
+        assert!(json["result"].as_i64().expect("entity") > 0);
     }
 
     // ========================================================================

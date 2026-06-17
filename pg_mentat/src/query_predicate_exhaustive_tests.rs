@@ -473,8 +473,10 @@ mod tests {
             "SELECT mentat_query('[:find [?n ...] :where [?e :qpe/name ?n] [?e :qpe/flag true] [?e :qpe/status :active] [?e :qpe/val ?v] [(> ?v 100)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        // flag=true, status=active, val>100: i=10,20,30,40 (i=0 has val=0) = 4
-        assert_eq!(v["result"].as_array().expect("arr").len(), 4);
+        // flag=true (even i), status=:active (i%5==0), val=i*10 > 100 (i>10):
+        // even AND i%5==0 AND i>10 => i in {20,30,40} = 3. (i=10 has val=100,
+        // which is not strictly > 100, so it is excluded.)
+        assert_eq!(v["result"].as_array().expect("arr").len(), 3);
     }
 
     #[pg_test]

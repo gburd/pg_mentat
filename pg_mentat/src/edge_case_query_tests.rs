@@ -278,7 +278,9 @@ mod tests {
     #[pg_test]
     fn test_eq_many_join_across_entities() {
         setup(); setup_eq_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :eq/name \"E1\" :eq/tags \"shared\" :eq/tags \"unique1\"} {:db/id \"e2\" :eq/name \"E2\" :eq/tags \"shared\" :eq/tags \"unique2\"}]'::TEXT)").expect("data");
+        // Cardinality-many tags must be separate datoms (duplicate map keys
+        // collapse). Assert each tag with a [:db/add ...] vector op.
+        Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :eq/name \"E1\"} [:db/add \"e1\" :eq/tags \"shared\"] [:db/add \"e1\" :eq/tags \"unique1\"] {:db/id \"e2\" :eq/name \"E2\"} [:db/add \"e2\" :eq/tags \"shared\"] [:db/add \"e2\" :eq/tags \"unique2\"]]'::TEXT)").expect("data");
         // Find entities with tag "shared"
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :eq/name ?n] [?e :eq/tags \"shared\"]]'::TEXT, '{}'::jsonb)::TEXT",

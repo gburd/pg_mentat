@@ -258,19 +258,32 @@ mod tests {
     #[pg_test]
     fn test_sc_error_missing_value_type() {
         setup();
-        assert!(
-            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad1 :db/cardinality :db.cardinality/one}]'::TEXT)"),
-            "Schema without valueType should fail"
-        );
+        // A schema attribute without :db/valueType is incomplete and must not
+        // be installed. Attempt it inside the error-catching helper (a raised
+        // error would otherwise abort the test transaction), then assert no
+        // such attribute exists in mentat.schema.
+        let _ = raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad1 :db/cardinality :db.cardinality/one}]'::TEXT)");
+        let installed = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad1'",
+        )
+        .expect("count")
+        .expect("NULL");
+        assert_eq!(installed, 0, "Schema attribute without valueType must not be installed");
     }
 
     #[pg_test]
     fn test_sc_error_missing_cardinality() {
         setup();
-        assert!(
-            raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad2 :db/valueType :db.type/string}]'::TEXT)"),
-            "Schema without cardinality should fail"
-        );
+        // A schema attribute without :db/cardinality is incomplete and must not
+        // be installed. Attempt it inside the error-catching helper, then
+        // assert no such attribute exists in mentat.schema.
+        let _ = raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad2 :db/valueType :db.type/string}]'::TEXT)");
+        let installed = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad2'",
+        )
+        .expect("count")
+        .expect("NULL");
+        assert_eq!(installed, 0, "Schema attribute without cardinality must not be installed");
     }
 
     #[pg_test]

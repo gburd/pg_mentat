@@ -257,9 +257,10 @@ mod tests {
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", retract_ops.join("\n"))).expect("batch retract");
 
-        // All should be retracted
+        // Append-only log retains the original assertions after
+        // retractEntity; verify liveness via the current-state projection.
         let count = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':ss/name') AND v_text LIKE 'doomed-%' AND added = true",
+            "SELECT COUNT(DISTINCT e) FROM mentat.current_text WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':ss/name') AND v LIKE 'doomed-%'",
         ).expect("q").expect("NULL");
         assert_eq!(count, 0, "All 100 entities should be retracted");
     }

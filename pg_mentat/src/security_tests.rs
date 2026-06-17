@@ -39,6 +39,30 @@ mod tests {
         )).expect("raises_error call").unwrap_or(false)
     }
 
+    /// Run `sql` in a PL/pgSQL subtransaction and return its SQLERRM (empty
+    /// string if it did not error). Subtransaction isolation prevents an
+    /// expected error from poisoning the test's outer transaction.
+    fn error_message(sql: &str) -> String {
+        let escaped = sql.replace('\'', "''");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_error_msg(stmt TEXT) RETURNS TEXT
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN ''::TEXT;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN SQLERRM;
+             END;
+             $$",
+        )
+        .expect("create error_msg helper");
+        Spi::get_one::<String>(&format!(
+            "SELECT mentat._test_error_msg('{}')", escaped
+        ))
+        .expect("error_msg call")
+        .unwrap_or_default()
+    }
+
     fn setup_test_schema() {
         Spi::run(
             "SELECT mentat_transact('[
@@ -148,7 +172,10 @@ mod tests {
         setup();
 
         // Attempt to define an attribute with SQL injection in the name
-        let result = Spi::get_one::<String>(
+        // Run in a subtransaction so a parse/validation error does not poison
+        // the test's outer transaction. The injected SQL must never execute:
+        // the datoms table must survive regardless of accept/reject.
+        let _ = error_message(
             "SELECT mentat_transact('[
                 {:db/id \"bad\" :db/ident :evil/name'';DROP TABLE mentat.datoms;--
                  :db/valueType :db.type/string
@@ -156,13 +183,11 @@ mod tests {
             ]'::TEXT)",
         );
 
-        // Should reject malformed EDN or safely handle
-        if result.is_ok() {
-            let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.datoms")
-                .expect("table should exist")
-                .expect("NULL");
-            assert!(count > 0);
-        }
+        // The datoms table must still exist (the DROP must not have run).
+        let count = Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.datoms")
+            .expect("table should exist")
+            .expect("NULL");
+        assert!(count > 0);
     }
 
     // ========================================================================
@@ -181,10 +206,11 @@ mod tests {
     #[pg_test]
     fn test_malformed_edn_extra_bracket() {
         setup();
-        let result = Spi::get_one::<String>(
+        // Extra trailing bracket: run in a subtransaction so a parse error
+        // cannot poison the test's outer transaction. Accept either outcome.
+        let _ = error_message(
             "SELECT mentat_transact('[[:db/add \"e\" :db/ident :test]]]'::TEXT)",
         );
-        // Should handle gracefully (either succeed parsing first valid form or error)
     }
 
     #[pg_test]
@@ -203,11 +229,12 @@ mod tests {
     #[pg_test]
     fn test_malformed_edn_null_bytes() {
         setup();
-        // EDN with embedded null - should be rejected or handled safely
-        let result = Spi::get_one::<String>(
+        // EDN with embedded null - should be rejected or handled safely.
+        // Run in a subtransaction so a raised error cannot poison the outer
+        // transaction.
+        let _ = error_message(
             "SELECT mentat_transact(E'[[:db/add \"e\" :db/ident :test\\x00val]]'::TEXT)",
         );
-        drop(result);
     }
 
     // ========================================================================
@@ -332,12 +359,11 @@ mod tests {
         )
         .expect("schema failed");
 
-        // NaN should be rejected or handled
-        let result = Spi::get_one::<String>(
+        // NaN should be rejected or handled. Run in a subtransaction so a
+        // raised error cannot poison the test's outer transaction.
+        let _ = error_message(
             "SELECT mentat_transact('[[:db/add \"e\" :sec/dbl ##NaN]]'::TEXT)",
         );
-        // NaN handling is implementation-defined
-        drop(result);
     }
 
     // ========================================================================
@@ -417,16 +443,18 @@ mod tests {
     fn test_error_does_not_leak_sql() {
         setup();
 
-        let result = Spi::get_one::<String>(
+        // Run in a subtransaction so the raised error does not poison the
+        // test's outer transaction; capture the message for inspection.
+        let msg = error_message(
             "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)",
         );
 
-        if let Err(e) = result {
-            let msg = e.to_string();
+        if !msg.is_empty() {
             // Error message should not contain raw SQL
             assert!(
                 !msg.contains("SELECT") || msg.contains(":db.error"),
-                "Error should use Mentat error codes, not raw SQL"
+                "Error should use Mentat error codes, not raw SQL: {}",
+                msg
             );
         }
     }
@@ -435,17 +463,17 @@ mod tests {
     fn test_error_codes_present() {
         setup();
 
-        let result = Spi::get_one::<String>(
+        // Run in a subtransaction so the raised error does not poison the
+        // test's outer transaction; capture the message for inspection.
+        let msg = error_message(
             "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"val\"]]'::TEXT)",
         );
 
-        if let Err(e) = result {
-            let msg = e.to_string();
-            assert!(
-                msg.contains(":db.error/"),
-                "Error should contain :db.error/ code"
-            );
-        }
+        assert!(
+            msg.contains(":db.error/"),
+            "Error should contain :db.error/ code: {}",
+            msg
+        );
     }
 
     // ========================================================================

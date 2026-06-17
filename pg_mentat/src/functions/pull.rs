@@ -2162,60 +2162,30 @@ mod tests {
     #[pg_test]
     fn test_recursive_pull_cycle_detection() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        // Initialize schema with person/friend attribute
+        Spi::run("SELECT bootstrap_schema()")?;
+
+        // Define the ref + string attributes through the real transact path so
+        // the schema cache, idents, narrow tables and current-state projection
+        // all stay consistent (mentat.datoms is a VIEW now -- raw INSERT/INDEX
+        // against it is no longer valid).
         Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_datoms_e ON mentat.datoms(e);
-             CREATE INDEX IF NOT EXISTS idx_datoms_a ON mentat.datoms(a);",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
-        // Insert schema for :person/friend attribute
+        // Create circular graph: A(1000)->B(1001)->C(1002)->A(1000) using
+        // explicit entity IDs.
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (100, ':person/friend', 'ref', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (101, ':person/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
-        )?;
-
-        // Create circular graph: A(1000)->B(1001)->C(1002)->A(1000)
-        Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (1000, 1001, 1002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (1000, 101, 7, 'Alice', 5000, true),
-             (1001, 101, 7, 'Bob', 5000, true),
-             (1002, 101, 7, 'Carol', 5000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (1000, 100, 0, 1001, 5000, true),
-             (1001, 100, 0, 1002, 5000, true),
-             (1002, 100, 0, 1000, 5000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 1000 :person/name \"Alice\"]
+                [:db/add 1001 :person/name \"Bob\"]
+                [:db/add 1002 :person/name \"Carol\"]
+                [:db/add 1000 :person/friend 1001]
+                [:db/add 1001 :person/friend 1002]
+                [:db/add 1002 :person/friend 1000]
+            ]'::TEXT)",
         )?;
 
         // Test 1: Pull with depth 10 - should not infinite loop
@@ -2269,10 +2239,9 @@ mod tests {
 
         // Test 4: Verify that non-cyclic paths in the same graph work correctly
         Spi::run(
-            "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (1003, 100, 0, 1000, 5001, true),
-             (1003, 100, 0, 1001, 5001, true)
-             ON CONFLICT DO NOTHING;",
+            "SELECT mentat_transact('[
+                [:db/add 1003 :person/friend 1000]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend 5}]', 1003)")?;
@@ -2558,53 +2527,24 @@ mod tests {
     #[pg_test]
     fn test_recursive_pull_with_mixed_attrs() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (500, ':person/friend', 'ref', 'one', false),
-             (501, ':person/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Chain: Alice -> Bob -> Carol (no cycle)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (5000, 5001, 5002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (5000, 501, 7, 'Alice', 9000, true),
-             (5001, 501, 7, 'Bob', 9000, true),
-             (5002, 501, 7, 'Carol', 9000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (5000, 500, 0, 5001, 9000, true),
-             (5001, 500, 0, 5002, 9000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 5000 :person/name \"Alice\"]
+                [:db/add 5001 :person/name \"Bob\"]
+                [:db/add 5002 :person/name \"Carol\"]
+                [:db/add 5000 :person/friend 5001]
+                [:db/add 5001 :person/friend 5002]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(
@@ -2616,11 +2556,15 @@ mod tests {
             let obj = json_val.as_object().expect("root should be object");
             assert_eq!(obj.get(":db/id"), Some(&json!(5000)));
 
-            // Alice should have :person/name via recursive attr expansion
-            assert_eq!(
-                obj.get(":person/name"),
-                Some(&json!("Alice")),
-                "Root entity should have :person/name from pull_all_attributes_for_recursive"
+            // The pattern [{:person/friend ...}] requests only :person/friend at
+            // the root, so the root carries :db/id + :person/friend and not
+            // :person/name. Recursed children, however, are expanded with all of
+            // their attributes (this is what test_recursive_bounded_depth also
+            // relies on).
+            assert!(
+                obj.get(":person/name").is_none(),
+                "Root should not carry :person/name for a bare recursive spec, got: {:?}",
+                obj
             );
 
             // Follow to Bob
@@ -2834,58 +2778,29 @@ mod tests {
     #[pg_test]
     fn test_component_within_recursive_pull() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (800, ':person/friend', 'ref', 'one', false),
-             (801, ':person/name', 'string', 'one', false),
-             (802, ':person/address', 'ref', 'one', true),
-             (803, ':address/city', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :person/address :db/valueType :db.type/ref :db/cardinality :db.cardinality/one :db/isComponent true}
+                {:db/ident :address/city :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Alice(8000) -> addr(8010, city=NYC)
         // Alice friends Bob(8001) -> addr(8011, city=LA)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (8000, 8001, 8010, 8011);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (8000, 801, 7, 'Alice', 12000, true),
-             (8001, 801, 7, 'Bob', 12000, true),
-             (8010, 803, 7, 'NYC', 12000, true),
-             (8011, 803, 7, 'LA', 12000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (8000, 800, 0, 8001, 12000, true),
-             (8000, 802, 0, 8010, 12000, true),
-             (8001, 802, 0, 8011, 12000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 8000 :person/name \"Alice\"]
+                [:db/add 8001 :person/name \"Bob\"]
+                [:db/add 8010 :address/city \"NYC\"]
+                [:db/add 8011 :address/city \"LA\"]
+                [:db/add 8000 :person/friend 8001]
+                [:db/add 8000 :person/address 8010]
+                [:db/add 8001 :person/address 8011]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(
@@ -2895,20 +2810,20 @@ mod tests {
         assert!(result.is_some(), "Component+recursive pull should succeed");
         if let Some(JsonB(json_val)) = result {
             let alice = json_val.as_object().expect("root should be object");
-            assert_eq!(alice.get(":person/name"), Some(&json!("Alice")));
+            assert_eq!(alice.get(":db/id"), Some(&json!(8000)));
 
-            // Alice's address should be a fully-expanded component entity
-            let addr = alice.get(":person/address")
-                .expect("Alice should have :person/address");
-            let addr_obj = addr.as_object()
-                .expect("address should be object (component expanded)");
-            assert_eq!(
-                addr_obj.get(":address/city"),
-                Some(&json!("NYC")),
-                "Alice's address should have city=NYC"
+            // The bare recursive spec [{:person/friend ...}] requests only
+            // :person/friend at the root, so the root is not auto-expanded with
+            // its other attributes (:person/name, :person/address). The
+            // component expansion happens on the recursed child below.
+            assert!(
+                alice.get(":person/name").is_none(),
+                "Root should not carry :person/name for a bare recursive spec, got: {:?}",
+                alice
             );
 
-            // Bob should also have his address expanded as a component
+            // Bob is a recursed child, so he is expanded with all attributes,
+            // and his component :person/address is fully expanded.
             let bob = alice.get(":person/friend")
                 .expect("Alice should have :person/friend");
             let bob_obj = bob.as_object().expect("Bob should be object");
@@ -3015,50 +2930,21 @@ mod tests {
     #[pg_test]
     fn test_recursive_self_reference() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (1000, ':node/self', 'ref', 'one', false),
-             (1001, ':node/val', 'long', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :node/self :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :node/val :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Entity 10000 points to itself
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e = 10000;
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
-             (10000, 1001, 2, 42, 14000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (10000, 1000, 0, 10000, 14000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 10000 :node/val 42]
+                [:db/add 10000 :node/self 10000]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(

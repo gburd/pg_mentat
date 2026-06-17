@@ -157,17 +157,19 @@ mod tests {
         setup(); setup_fts_schema();
         Spi::run("SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"The runners are running in the race\"}
-            {:db/id \"e2\" :fts/title \"She ran quickly to the finish line\"}
+            {:db/id \"e2\" :fts/title \"She runs quickly to the finish line\"}
             {:db/id \"e3\" :fts/title \"The swimming pool is closed\"}
         ]'::TEXT)").expect("data");
 
-        // "run" should match "runners", "running", and "ran" via English stemming
+        // "run" matches "runners/running" and "runs" via English (Snowball)
+        // stemming. Note: the Snowball stemmer does NOT reduce the irregular
+        // past tense "ran" to "run", so a regular inflection ("runs") is used.
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?val ...] :where [(fulltext $ :fts/title \"run\") [[?x ?val]]]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let results = v["result"].as_array().expect("arr");
-        // Should match at least the "runners/running" and "ran" documents
+        // Should match the "runners/running" and "runs" documents
         assert!(results.len() >= 2, "English stemming should match inflected forms of 'run'");
     }
 

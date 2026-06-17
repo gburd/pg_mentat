@@ -220,7 +220,10 @@ mod tests {
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :cas/val 42]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let _ = Spi::run(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val 99 100]]'::TEXT)", eid));
+        // Isolate the failing CAS in a subtransaction so its error does not
+        // poison the outer transaction; the value must remain 42.
+        assert!(raises_error(&format!("SELECT mentat_transact('[[:db/cas {} :cas/val 99 100]]'::TEXT)", eid)),
+            "CAS with wrong old value should fail");
         // Value should remain 42
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :cas/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid

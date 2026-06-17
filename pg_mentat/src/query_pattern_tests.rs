@@ -517,7 +517,10 @@ mod tests {
     #[pg_test]
     fn test_qp_many_tags_query() {
         setup(); setup_qp_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :qp/name \"Tagged\" :qp/tags \"a\" :qp/tags \"b\" :qp/tags \"c\"}]'::TEXT)").expect("tx");
+        // Cardinality-many values must be asserted as separate datoms; a map
+        // with duplicate keys collapses to the last value (EDN maps are sets of
+        // keys). Use [:db/add ...] vector ops to assert all three tags.
+        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :qp/name \"Tagged\"} [:db/add \"e\" :qp/tags \"a\"] [:db/add \"e\" :qp/tags \"b\"] [:db/add \"e\" :qp/tags \"c\"]]'::TEXT)").expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?t ...] :where [?e :qp/name \"Tagged\"] [?e :qp/tags ?t]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -554,7 +557,7 @@ mod tests {
     #[pg_test]
     fn test_qp_many_tags_with_filter() {
         setup(); setup_qp_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :qp/name \"E1\" :qp/tags \"common\" :qp/tags \"unique1\"} {:db/id \"e2\" :qp/name \"E2\" :qp/tags \"common\" :qp/tags \"unique2\"}]'::TEXT)").expect("tx");
+        Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :qp/name \"E1\"} [:db/add \"e1\" :qp/tags \"common\"] [:db/add \"e1\" :qp/tags \"unique1\"] {:db/id \"e2\" :qp/name \"E2\"} [:db/add \"e2\" :qp/tags \"common\"] [:db/add \"e2\" :qp/tags \"unique2\"]]'::TEXT)").expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/tags \"common\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");

@@ -488,7 +488,9 @@ mod tests {
         setup_all_types_schema();
         let mut ops = vec!["[:db/add \"e\" :vt/name \"dbls\"]".to_string()];
         for i in 0..10 {
-            ops.push(format!("[:db/add \"e\" :vt/dbls {}]", (i as f64) * 0.1));
+            // {:?} formats integral f64 as "0.0" so EDN reads it as a double,
+            // not an integer (which would fail the double-type check).
+            ops.push(format!("[:db/add \"e\" :vt/dbls {:?}]", (i as f64) * 0.1));
         }
         Spi::run(&format!(
             "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
@@ -557,8 +559,9 @@ mod tests {
             "SELECT mentat_query('[:find ?v . :where [{} :vt/bool ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        // After 10 toggles starting from true: false(0), true(1), false(2)... false(even)
-        assert_eq!(v["result"].as_bool().expect("b"), false);
+        // After 10 toggles starting from true (i=0..=9), the LAST assertion is
+        // i=9 (odd) -> true. The current value is the last write, so it is true.
+        assert_eq!(v["result"].as_bool().expect("b"), true);
     }
 
     #[pg_test]
@@ -991,7 +994,8 @@ mod tests {
         setup_all_types_schema();
         let mut ops = Vec::new();
         for i in 0..50 {
-            ops.push(format!("[:db/add \"d{}\" :vt/dbl {}]", i, (i as f64) * 0.7));
+            // {:?} keeps the decimal point so 0 -> "0.0" (a valid EDN double).
+            ops.push(format!("[:db/add \"d{}\" :vt/dbl {:?}]", i, (i as f64) * 0.7));
         }
         Spi::run(&format!(
             "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
@@ -1011,7 +1015,7 @@ mod tests {
         let mut ops = Vec::new();
         for i in 0..25 {
             ops.push(format!(
-                "{{:db/id \"m{}\" :vt/str \"name-{}\" :vt/lng {} :vt/dbl {} :vt/bool {}}}",
+                "{{:db/id \"m{}\" :vt/str \"name-{}\" :vt/lng {} :vt/dbl {:?} :vt/bool {}}}",
                 i, i, i, (i as f64) * 1.1, if i % 2 == 0 { "true" } else { "false" }
             ));
         }

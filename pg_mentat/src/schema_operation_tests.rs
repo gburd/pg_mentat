@@ -427,17 +427,12 @@ mod tests {
             .expect("NULL");
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
-        let schema = json.as_array().expect("schema should be array");
-        assert!(schema.len() > 0, "Schema should have entries");
+        // mentat_schema() returns a JSON object keyed by ident, not an array.
+        let schema = json.as_object().expect("schema should be object");
+        assert!(!schema.is_empty(), "Schema should have entries");
 
-        // Find our attribute
-        let found = schema.iter().any(|attr| {
-            attr.get("ident")
-                .and_then(|v| v.as_str())
-                .map(|s| s == ":sot/sq1")
-                .unwrap_or(false)
-        });
-        assert!(found, "Should find :sot/sq1 in schema");
+        // Our attribute appears as a top-level key.
+        assert!(schema.contains_key(":sot/sq1"), "Should find :sot/sq1 in schema");
     }
 
     // ========================================================================

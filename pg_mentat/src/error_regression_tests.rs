@@ -35,6 +35,30 @@ mod tests {
         )).expect("raises_error call").unwrap_or(false)
     }
 
+    /// Run `sql` in a PL/pgSQL subtransaction and return its SQLERRM (empty
+    /// string if it did not error). Subtransaction isolation prevents an
+    /// expected error from poisoning the test's outer transaction.
+    fn error_message(sql: &str) -> String {
+        let escaped = sql.replace('\'', "''");
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_error_msg(stmt TEXT) RETURNS TEXT
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN ''::TEXT;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN SQLERRM;
+             END;
+             $$",
+        )
+        .expect("create error_msg helper");
+        Spi::get_one::<String>(&format!(
+            "SELECT mentat._test_error_msg('{}')", escaped
+        ))
+        .expect("error_msg call")
+        .unwrap_or_default()
+    }
+
     // ========================================================================
     // :db.error/attribute-not-found
     // ========================================================================
@@ -51,21 +75,15 @@ mod tests {
         )
         .expect("schema");
 
-        let result = Spi::get_one::<String>(
+        let msg = error_message(
             "SELECT mentat_transact('[[:db/add \"e\" :err/namee \"typo\"]]'::TEXT)",
         );
 
-        match result {
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("attribute") || msg.contains("not found"),
-                    "Should mention attribute not found: {}",
-                    msg
-                );
-            }
-            Ok(_) => {} // Some implementations may handle this differently
-        }
+        assert!(
+            msg.contains("attribute") || msg.contains("not found"),
+            "Should mention attribute not found: {}",
+            msg
+        );
     }
 
     #[pg_test]

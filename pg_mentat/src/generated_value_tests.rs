@@ -796,11 +796,32 @@ mod tests {
     #[pg_test]
     fn test_gv_upsert_unique_value_constraint() {
         setup(); setup_gv_schema();
+        // A raw Spi::run of a failing tx aborts the whole test transaction
+        // (pgrx longjmp), so a duplicate :db.unique/value insert must be caught
+        // in a PL/pgSQL subtransaction to be observable.
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._gv_raises(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN EXECUTE stmt; RETURN false;
+             EXCEPTION WHEN OTHERS THEN RETURN true; END; $$",
+        )
+        .expect("helper");
         Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :gv/code \"CODE001\" :gv/str \"first\"}]'::TEXT)").expect("create");
-        // Second entity with same unique value code should fail
-        let result = Spi::run("SELECT mentat_transact('[{:db/id \"e2\" :gv/code \"CODE001\" :gv/str \"second\"}]'::TEXT)");
-        // db.unique/value should either error or merge - verify behavior
-        assert!(result.is_ok() || result.is_err());
+        // Second entity with the same :db.unique/value code must be rejected.
+        let raised = Spi::get_one::<bool>(
+            "SELECT mentat._gv_raises('SELECT mentat_transact(''[{:db/id \"e2\" :gv/code \"CODE001\" :gv/str \"second\"}]''::TEXT)')",
+        )
+        .expect("raises")
+        .unwrap_or(false);
+        assert!(raised, "duplicate :db.unique/value should be rejected");
+        // Exactly one entity holds CODE001 in the current-state projection.
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM mentat.current_text \
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':gv/code') AND v = 'CODE001'",
+        )
+        .expect("count")
+        .expect("NULL");
+        assert_eq!(count, 1);
     }
 
     #[pg_test]

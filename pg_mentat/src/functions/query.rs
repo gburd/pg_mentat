@@ -1885,14 +1885,28 @@ fn bind_constant_value(
     alias: &str,
     place: &PatternValuePlace,
     builder: &mut SqlBuilder<'_>,
+    value_type: Option<&str>,
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     match place {
+        // An integer constant in value position is ambiguous: it can be a
+        // long or a ref (entity id). EDN parses both as EntidOrInteger.
+        // When the attribute is ref-typed, the value lives in v_ref with
+        // value_type_tag = REF, not v_long/LONG -- match that column so
+        // `[?e :attr <entid>]` patterns resolve. Without this, ref-constant
+        // value patterns never match (v_long is NULL in the ref table).
         PatternValuePlace::EntidOrInteger(i) => {
             let param = builder.bind_bigint(*i);
-            Ok(Some(format!(
-                "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
-                tag = type_tag::LONG
-            )))
+            if value_type == Some("ref") {
+                Ok(Some(format!(
+                    "({alias}.v_ref = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::REF
+                )))
+            } else {
+                Ok(Some(format!(
+                    "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::LONG
+                )))
+            }
         }
         PatternValuePlace::IdentOrKeyword(kw) => {
             let ident_str = keyword_to_ident(kw);
@@ -2449,9 +2463,9 @@ fn build_sql_from_datalog_enriched(
     }
 
     // Build the base query (skip if we only have OR clauses)
-    let (base_sql, base_var_to_alias) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
+    let (base_sql, base_var_to_alias, base_var_to_type) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
         // No base patterns, only OR clauses - will be handled below
-        (String::new(), HashMap::new())
+        (String::new(), HashMap::new(), HashMap::new())
     } else {
         build_extended_pattern_query(
             &pattern_clauses,
@@ -2691,7 +2705,7 @@ fn build_sql_from_datalog_enriched(
             let mut combined_not_joins: Vec<&edn::query::NotJoin> = not_joins.clone();
             combined_not_joins.extend(arm_not_joins);
 
-            let (arm_sql, _arm_var_to_alias) = build_extended_pattern_query(
+            let (arm_sql, _arm_var_to_alias, _arm_var_to_type) = build_extended_pattern_query(
                 &combined_patterns,
                 &combined_not_joins,
                 &combined_predicates,
@@ -2741,7 +2755,12 @@ fn build_sql_from_datalog_enriched(
     } else {
         Some(&base_var_to_alias)
     };
-    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref);
+    let var_type_ref = if has_union {
+        None
+    } else {
+        Some(&base_var_to_type)
+    };
+    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref, var_type_ref);
 
     // If no explicit ORDER BY was specified and we have fulltext joins with score
     // bindings, automatically order by relevance score descending. This ensures
@@ -4720,20 +4739,56 @@ fn append_order_by(
     order: &Option<Vec<Order>>,
     find_vars: &[String],
     var_to_alias: Option<&HashMap<String, (String, &'static str)>>,
+    var_to_type: Option<&HashMap<String, Option<String>>>,
 ) -> String {
     if let Some(ref orders) = order {
         if orders.is_empty() {
             return sql;
         }
 
-        // Check if any ordered variable is a numeric column (e, a, tx)
-        let has_numeric_order = var_to_alias.map_or(false, |vta| {
-            orders.iter().any(|Order(_, var)| {
-                let var_name = format!("{}", var);
-                vta.get(var_name.as_str())
-                    .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx")
-            })
-        });
+        // Determine whether an ordered variable needs a numeric cast. Two
+        // cases need it:
+        //   * the variable is bound to a numeric meta-column (e, a, tx), or
+        //   * the variable is bound to a value column ("v") whose attribute
+        //     value type is numeric/orderable-as-number (long, ref, double,
+        //     instant) -- those are projected as TEXT, so a bare ORDER BY
+        //     sorts them lexicographically ("10" < "2"). Cast to BIGINT /
+        //     DOUBLE PRECISION / TIMESTAMPTZ so ordering is numeric/temporal.
+        let numeric_cast_for = |var_name: &str| -> Option<&'static str> {
+            // Meta-columns e/a/tx -> BIGINT.
+            if let Some(vta) = var_to_alias {
+                if let Some((_, col)) = vta.get(var_name) {
+                    if *col == "e" || *col == "a" || *col == "tx" {
+                        return Some("BIGINT");
+                    }
+                    if *col == "v" {
+                        // Value column: cast based on the attribute's type.
+                        // Only types whose decoded TEXT form is a plain,
+                        // castable scalar qualify: long/ref decode to integer
+                        // text, instant to an ISO timestamp. double decodes to
+                        // an internal 'd:<bits>' form (for exact round-trip)
+                        // that is NOT castable, so it is intentionally left as
+                        // lexicographic ordering rather than erroring -- correct
+                        // numeric ordering for doubles needs the raw column and
+                        // is a separate fix.
+                        if let Some(vtt) = var_to_type {
+                            if let Some(Some(ty)) = vtt.get(var_name) {
+                                return match ty.as_str() {
+                                    "long" | "ref" => Some("BIGINT"),
+                                    "instant" => Some("TIMESTAMPTZ"),
+                                    _ => None,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let has_numeric_order = orders
+            .iter()
+            .any(|Order(_, var)| numeric_cast_for(&format!("{}", var)).is_some());
 
         let mut order_parts = Vec::new();
         for Order(direction, var) in orders {
@@ -4744,12 +4799,8 @@ fn append_order_by(
                     Direction::Descending => "DESC",
                 };
                 if has_numeric_order {
-                    // Use column alias from the subquery wrapper
-                    let is_numeric = var_to_alias
-                        .and_then(|vta| vta.get(var_name.as_str()))
-                        .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx");
-                    if is_numeric {
-                        order_parts.push(format!("_c{}::BIGINT {}", col_pos + 1, dir));
+                    if let Some(cast_ty) = numeric_cast_for(&var_name) {
+                        order_parts.push(format!("_c{}::{} {}", col_pos + 1, cast_ty, dir));
                     } else {
                         order_parts.push(format!("_c{} {}", col_pos + 1, dir));
                     }
@@ -5035,7 +5086,11 @@ fn build_extended_pattern_query(
     get_else_clauses: &[GetElseClause],
     missing_clauses: &[MissingClause],
 ) -> Result<
-    (String, HashMap<String, (String, &'static str)>),
+    (
+        String,
+        HashMap<String, (String, &'static str)>,
+        HashMap<String, Option<String>>,
+    ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
     // Track variable bindings to datom table aliases
@@ -5114,6 +5169,19 @@ fn build_extended_pattern_query(
         match &pattern.attribute {
             PatternNonValuePlace::Ident(kw) => {
                 let ident_str = keyword_to_ident(kw);
+                // Fail loud: a query against an unregistered attribute is a
+                // mistake, not an empty result. Resolving the ident in a
+                // subquery would silently yield NULL (matching nothing).
+                let store_name = store_name_from_prefix(schema_prefix);
+                let cache = crate::cache::get_cache_for_store(store_name);
+                if cache.resolve_ident(&ident_str).is_none() {
+                    return Err(format!(
+                        ":db.error/unknown-attribute Attribute {} is not registered in the \
+                         schema. Define it with a :db/ident schema assertion before querying it.",
+                        ident_str
+                    )
+                    .into());
+                }
                 let param = builder.bind_text(ident_str);
                 where_clauses.push(format!(
                     "{alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {param})"
@@ -5175,7 +5243,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                 }
             }
             _ => {
-                if let Some(constraint) = bind_constant_value(&alias, &pattern.value, builder)? {
+                if let Some(constraint) = bind_constant_value(
+                    &alias, &pattern.value, builder, pattern_value_type.as_deref(),
+                )? {
                     where_clauses.push(constraint);
                 }
             }
@@ -5570,7 +5640,17 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                     group_by_exprs.push(format!("{}", col_idx + 1));
                 }
             } else {
-                select_exprs.push("NULL::TEXT".to_string());
+                // Fail loud: a :find variable that is bound by no :where clause
+                // (pattern, binding, or :in input) is a query mistake. Emitting
+                // NULL silently returns a column of nulls instead of surfacing
+                // the error.
+                return Err(format!(
+                    ":db.error/unbound-variable :find variable {} is not bound by any \
+                     :where clause or :in input. Every :find variable must appear in a \
+                     data pattern, a binding function, or the :in clause.",
+                    inner_var
+                )
+                .into());
             }
         }
     }
@@ -5618,7 +5698,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         sql.push_str(&format!(" GROUP BY {}", group_by_exprs.join(", ")));
     }
 
-    Ok((sql, var_to_alias))
+    Ok((sql, var_to_alias, var_to_type))
 }
 
 /// Get the Element at the given index from a FindSpec.
@@ -5904,7 +5984,9 @@ fn build_not_exists_subquery(
                     PatternNonValuePlace::Placeholder => {}
                 }
 
-                // Value position
+                // Value position. Resolve the attribute's value type first so
+                // an integer constant against a ref attribute binds v_ref/REF.
+                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
                 match &p.value {
                     PatternValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
@@ -5929,14 +6011,15 @@ fn build_not_exists_subquery(
                         }
                     }
                     _ => {
-                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
+                        if let Some(constraint) = bind_constant_value(
+                            &alias, &p.value, builder, not_pattern_value_type.as_deref(),
+                        )? {
                             sub_where.push(constraint);
                         }
                     }
                 }
 
                 // Schema-aware: resolve type early for FROM, NOT EXISTS, and predicates
-                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
                 let typed_info = not_pattern_value_type.as_ref()
                     .and_then(|vt| value_type_to_table_info(vt));
 
@@ -6754,7 +6837,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                         }
                     }
                     _ => {
-                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
+                        if let Some(constraint) = bind_constant_value(
+                            &alias, &p.value, builder, rule_pattern_value_type.as_deref(),
+                        )? {
                             where_parts.push(constraint);
                         }
                     }

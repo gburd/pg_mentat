@@ -1038,6 +1038,20 @@ fn execute_transaction_inner(
                 let op = match &entity_vec[0] {
                     edn::Value::Keyword(kw) if kw.name() == "add" => OpType::Add,
                     edn::Value::Keyword(kw) if kw.name() == "retract" => OpType::Retract,
+                    // Fail loud: a vector that begins with a keyword but is not a
+                    // recognized operation (e.g. [:db/invalid ...]) is an unknown
+                    // transaction operation, not silently-skippable data.
+                    edn::Value::Keyword(kw) => {
+                        return Err(MentatError::InvalidTransaction {
+                            message: format!(
+                                "unknown transaction operation '{}'. Expected one of \
+                                 :db/add, :db/retract, :db/cas, :db.fn/cas, \
+                                 :db/retractEntity, :db.fn/retractEntity.",
+                                kw
+                            ),
+                        }
+                        .into());
+                    }
                     _ => continue,
                 };
 
@@ -1100,6 +1114,29 @@ fn execute_transaction_inner(
                         added: true,
                     });
                 }
+            }
+            // Fail loud: a vector beginning with a keyword that reached here
+            // matched none of the operation arms above (too few elements, e.g.
+            // [:db/add] or [:db/add "e"]). Such an assertion is malformed
+            // rather than silently-skippable data.
+            edn::Value::Vector(ref entity_vec)
+                if matches!(entity_vec.first(), Some(edn::Value::Keyword(_))) =>
+            {
+                let kw = match entity_vec.first() {
+                    Some(edn::Value::Keyword(kw)) => kw,
+                    _ => unreachable!("guard guarantees leading keyword"),
+                };
+                return Err(MentatError::InvalidTransaction {
+                    message: format!(
+                        "malformed assertion starting with '{}': got {} element(s). \
+                         Expected [:db/add e a v] or [:db/retract e a v] (4 elements), \
+                         [:db/cas e a old new] (5 elements), or \
+                         [:db/retractEntity e] (2 elements).",
+                        kw,
+                        entity_vec.len()
+                    ),
+                }
+                .into());
             }
             _ => {}
         }
@@ -1169,10 +1206,30 @@ fn execute_transaction_inner(
             }
         }
 
-        // For each pair, check if they share the same (attr, value) but different entities
+        // For each pair, check if they share the same (attr, value) but different
+        // entities. Resolve each endpoint through the existing remap chain at
+        // comparison time (not at collection time): with three+ tempids sharing
+        // one identity value, an earlier pair may already have merged one of
+        // them, and we must follow that merge so all of them collapse to a
+        // single canonical entity instead of raising a false "conflicting
+        // upsert". `effective_e` captured during collection only reflects
+        // Phase A remaps, so we re-resolve here.
+        fn resolve_root(remaps: &BTreeMap<i64, i64>, mut e: i64) -> i64 {
+            // Follow the chain to its root. The map is acyclic by construction
+            // (we only ever point a higher/younger tempid at an existing root),
+            // but bound the walk defensively.
+            for _ in 0..remaps.len() + 1 {
+                match remaps.get(&e) {
+                    Some(&next) if next != e => e = next,
+                    _ => break,
+                }
+            }
+            e
+        }
+
         for i in 0..identity_assertions.len() {
             for j in (i + 1)..identity_assertions.len() {
-                let (idx_i, a_i, e_i) = identity_assertions[i];
+                let (idx_i, a_i, _e_i) = identity_assertions[i];
                 let (idx_j, a_j, _e_j) = identity_assertions[j];
 
                 if a_i != a_j {
@@ -1182,23 +1239,35 @@ fn execute_transaction_inner(
                     continue;
                 }
 
-                // Same attr and value, different entities -- merge
-                let orig_e_j = pending_datoms[idx_j].e;
-                let target_e = e_i; // first one wins
-
-                if let Some(&prev_remap) = upsert_remaps.get(&orig_e_j) {
-                    if prev_remap != target_e {
-                        return Err(MentatError::InvalidTransaction {
-                            message: format!(
-                                "Conflicting upsert: tempid for entity {} resolves to \
-                                 both {} and {} via :db.unique/identity merging",
-                                orig_e_j, prev_remap, target_e
-                            ),
-                        }.into());
-                    }
-                } else if orig_e_j != target_e {
-                    upsert_remaps.insert(orig_e_j, target_e);
+                // Same attr and value -- unify the two entities' roots.
+                let root_i = resolve_root(&upsert_remaps, pending_datoms[idx_i].e);
+                let root_j = resolve_root(&upsert_remaps, pending_datoms[idx_j].e);
+                if root_i == root_j {
+                    continue; // already unified
                 }
+                // First one seen wins as canonical; point the other root at it.
+                let (canonical, merged) = (root_i, root_j);
+                upsert_remaps.insert(merged, canonical);
+            }
+        }
+    }
+
+    // Flatten the remap map so every entry points directly at its final root.
+    // Phase A + Phase B can produce multi-step chains (a -> b -> c); the
+    // single-lookup apply step below only resolves one hop, so collapse the
+    // chains here to guarantee all datoms land on the canonical entity.
+    if !upsert_remaps.is_empty() {
+        let keys: Vec<i64> = upsert_remaps.keys().copied().collect();
+        for k in keys {
+            let mut root = k;
+            for _ in 0..upsert_remaps.len() + 1 {
+                match upsert_remaps.get(&root) {
+                    Some(&next) if next != root => root = next,
+                    _ => break,
+                }
+            }
+            if root != k {
+                upsert_remaps.insert(k, root);
             }
         }
     }
@@ -1590,17 +1659,56 @@ fn install_schema_attributes(
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for (&entid, builder) in builders {
+        // Any entity present in `builders` asserted at least one schema-defining
+        // keyword (:db/ident, :db/valueType, :db/cardinality, ...), so it is
+        // unambiguously an attempt to define a schema attribute. Fail loud on an
+        // incomplete definition rather than silently skipping it: a partial
+        // schema attribute that is never installed but whose present fields are
+        // written as plain datoms is a silently-wrong state.
         let ident = match &builder.ident {
             Some(i) => i.clone(),
-            None => continue, // No ident => not a complete attribute definition
+            None => {
+                return Err(MentatError::InvalidTransaction {
+                    message: format!(
+                        "incomplete schema attribute definition (entity {}): \
+                         missing :db/ident. A schema attribute requires \
+                         :db/ident, :db/valueType, and :db/cardinality.",
+                        entid
+                    ),
+                }
+                .into());
+            }
         };
 
         let value_type = match &builder.value_type {
             Some(vt) => vt.clone(),
-            None => continue, // No value type => not a complete attribute definition
+            None => {
+                return Err(MentatError::InvalidTransaction {
+                    message: format!(
+                        "incomplete schema attribute definition for '{}': \
+                         missing :db/valueType. A schema attribute requires \
+                         :db/ident, :db/valueType, and :db/cardinality.",
+                        ident
+                    ),
+                }
+                .into());
+            }
         };
 
-        let cardinality = builder.cardinality.as_deref().unwrap_or("one").to_string();
+        let cardinality = match &builder.cardinality {
+            Some(c) => c.clone(),
+            None => {
+                return Err(MentatError::InvalidTransaction {
+                    message: format!(
+                        "incomplete schema attribute definition for '{}': \
+                         missing :db/cardinality. A schema attribute requires \
+                         :db/ident, :db/valueType, and :db/cardinality.",
+                        ident
+                    ),
+                }
+                .into());
+            }
+        };
         let indexed = builder.indexed.unwrap_or(false);
         let fulltext = builder.fulltext.unwrap_or(false);
         let component = builder.component.unwrap_or(false);
@@ -1829,6 +1937,10 @@ fn encode_value(
         }
         edn::Value::Uuid(u) => {
             Ok(TypedValue::Uuid(*u))
+        }
+        edn::Value::Bytes(b) => {
+            // edn::Value::Bytes wraps bytes::Bytes; TypedValue::Bytes is Vec<u8>.
+            Ok(TypedValue::Bytes(b.to_vec()))
         }
         edn::Value::Keyword(kw) => {
             // Store keyword without leading colon, using slash separator
@@ -2528,7 +2640,7 @@ fn typed_value_sql_literal(v: &TypedValue) -> String {
         }
         TypedValue::Text(s) => format!("'{}'", sql_escape_str(s)),
         TypedValue::Keyword(s) => format!("'{}'", sql_escape_str(s)),
-        TypedValue::Uuid(u) => format!("'{}'", u),
+        TypedValue::Uuid(u) => format!("'{}'::uuid", u),
         TypedValue::Bytes(b) => format!("decode('{}','hex')", hex::encode(b)),
     }
 }

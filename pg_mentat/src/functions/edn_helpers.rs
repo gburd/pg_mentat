@@ -57,7 +57,7 @@ fn batch(edn_batch: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sy
                 let op_type = &op_vec[0];
 
                 let result = match op_type {
-                    edn::Value::Keyword(kw) if kw.namespace() == Some("") => match kw.name() {
+                    edn::Value::Keyword(kw) if kw.namespace().is_none() => match kw.name() {
                         "query" => execute_query_op(&op_vec)?,
                         "transact" => execute_transact_op(&op_vec)?,
                         "pull" => execute_pull_op(&op_vec)?,

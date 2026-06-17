@@ -73,8 +73,10 @@ mod tests {
     fn test_mx_create_and_retract_entity_same_tx_batch() {
         setup(); setup_mx_schema();
         // Create entity, add tags, retract one tag - all in sequence
+        // Cardinality-many tags must be separate datoms (duplicate map keys
+        // collapse to the last value). Assert each tag explicitly.
         let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"test\" :mx/tags \"a\" :mx/tags \"b\" :mx/tags \"c\"}]'::TEXT)"
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"test\"} [:db/add \"e\" :mx/tags \"a\"] [:db/add \"e\" :mx/tags \"b\"] [:db/add \"e\" :mx/tags \"c\"]]'::TEXT)"
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
@@ -277,8 +279,10 @@ mod tests {
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", mixed_ops.join("\n"))).expect("mixed batch");
 
+        // Append-only log keeps the original assertions even after
+        // retractEntity; count live entities from the current-state projection.
         let count = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':mx/name') AND added = true",
+            "SELECT COUNT(DISTINCT e) FROM mentat.current_text WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':mx/name')",
         ).expect("q").expect("NULL");
         assert_eq!(count, 10);
     }
