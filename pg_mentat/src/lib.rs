@@ -849,6 +849,8 @@ pub mod operational_accessors_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod current_projection_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod no_history_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;

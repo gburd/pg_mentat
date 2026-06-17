@@ -1365,6 +1365,63 @@ fn insert_datoms(
             // For cardinality-many attributes, allow multiple values - no retraction,
             // but skip if the exact (e, a, v) triple already exists (idempotent).
             if let Some(attr_info) = lookup_attribute_info(datom.a) {
+                // :db/noHistory attributes keep ONLY the current value: no
+                // assert/retract trail accumulates. On assertion we
+                // physically prune the prior log row(s) for this (e,a)
+                // (cardinality-one) or (e,a,v) duplicates (cardinality-many)
+                // and skip queuing any retraction datom. The current-state
+                // projection is maintained as usual, so reads are unchanged.
+                if attr_info.no_history {
+                    match attr_info.cardinality.as_str() {
+                        "one" => {
+                            // Idempotent: if the current value already equals
+                            // the new one, skip entirely.
+                            if let CardinalityOneResult::Skip = retract_existing_cardinality_one(
+                                datom.e, datom.a, &datom.v, schema,
+                            )? {
+                                continue;
+                            }
+                            // Prune ALL prior log rows for this (e,a): noHistory
+                            // keeps no trail, so the old assertion/retraction
+                            // rows are physically removed before the new
+                            // assertion is written.
+                            prune_no_history_ea(datom.e, datom.a, &datom.v, schema)?;
+                            // The new value differs from the old (we did not
+                            // Skip), and for cardinality-one each value is a
+                            // distinct projection PK (store_id,e,a,v), so the
+                            // old projection row would otherwise linger. Prune
+                            // the projection for this (e,a) too; the upsert
+                            // below re-inserts the current value.
+                            prune_projection_ea(datom.e, datom.a, &datom.v, schema)?;
+                        }
+                        "many" => {
+                            if is_duplicate_cardinality_many(
+                                datom.e, datom.a, &datom.v, schema,
+                            )? {
+                                continue;
+                            }
+                            // For cardinality-many noHistory, prune only stale
+                            // rows of this exact (e,a,v) (e.g. a prior
+                            // retraction of the same value) so re-assertion
+                            // doesn't accumulate history.
+                            prune_no_history_eav(datom.e, datom.a, &datom.v, schema)?;
+                        }
+                        _ => {
+                            return Err(MentatError::InvalidCardinality {
+                                cardinality: attr_info.cardinality.clone(),
+                                attr_entid: datom.a,
+                            }.into());
+                        }
+                    }
+                    // Queue only the new assertion; no retraction trail.
+                    rows_to_insert.push((datom.e, datom.a, datom.v.clone(), tx_id, true));
+                    if datom.added && is_fulltext_attribute(datom.a) {
+                        if let TypedValue::Text(ref text_value) = datom.v {
+                            fulltext_values.push(text_value.clone());
+                        }
+                    }
+                    continue;
+                }
                 match attr_info.cardinality.as_str() {
                     "one" => {
                         match retract_existing_cardinality_one(
@@ -2489,6 +2546,106 @@ fn current_projection_table(v: &TypedValue) -> &'static str {
         TypedValue::Uuid(_) => "current_uuid",
         TypedValue::Bytes(_) => "current_bytes",
     }
+}
+
+/// Prune ALL prior projection rows for a (store_id, e, a) on a :db/noHistory
+/// cardinality-one attribute. Because each distinct value is its own
+/// projection PK (store_id,e,a,v), replacing the value would otherwise leave
+/// the old projection row behind (the normal retraction-driven delete is
+/// skipped for noHistory). The caller's subsequent projection upsert
+/// re-inserts the current value.
+fn prune_projection_ea(
+    e: i64,
+    a: i64,
+    type_hint: &TypedValue,
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let store_id = get_store_id_from_schema(schema)?;
+    let table = current_projection_table(type_hint);
+    Spi::run_with_args(
+        &format!(
+            "DELETE FROM mentat.{} WHERE store_id = $1 AND e = $2 AND a = $3",
+            table
+        ),
+        &[
+            DatumWithOid::from(store_id),
+            DatumWithOid::from(e),
+            DatumWithOid::from(a),
+        ],
+    )?;
+    Ok(())
+}
+
+/// The append-only log table name for a TypedValue.
+fn log_table_for(v: &TypedValue) -> &'static str {
+    match v {
+        TypedValue::Ref(_) => "datoms_ref_new",
+        TypedValue::Boolean(_) => "datoms_boolean_new",
+        TypedValue::Long(_) => "datoms_long_new",
+        TypedValue::Double(_) => "datoms_double_new",
+        TypedValue::Instant(_) => "datoms_instant_new",
+        TypedValue::Text(_) => "datoms_text_new",
+        TypedValue::Keyword(_) => "datoms_keyword_new",
+        TypedValue::Uuid(_) => "datoms_uuid_new",
+        TypedValue::Bytes(_) => "datoms_bytes_new",
+    }
+}
+
+/// Prune ALL prior log rows for a (store_id, e, a) on a :db/noHistory
+/// cardinality-one attribute, before the new assertion is written. noHistory
+/// keeps no assert/retract trail -- only the current value survives in the
+/// log (and the projection). `type_hint` selects the typed log table; a
+/// cardinality-one attribute's type is fixed.
+fn prune_no_history_ea(
+    e: i64,
+    a: i64,
+    type_hint: &TypedValue,
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let store_id = get_store_id_from_schema(schema)?;
+    let table = log_table_for(type_hint);
+    Spi::run_with_args(
+        &format!(
+            "DELETE FROM mentat.{} WHERE store_id = $1 AND e = $2 AND a = $3",
+            table
+        ),
+        &[
+            DatumWithOid::from(store_id),
+            DatumWithOid::from(e),
+            DatumWithOid::from(a),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Prune prior log rows for a specific (store_id, e, a, v) on a :db/noHistory
+/// cardinality-many attribute, so re-assertion of the same value doesn't
+/// accumulate a history trail. Only the exact value is pruned; other live
+/// values for the same (e, a) are untouched.
+fn prune_no_history_eav(
+    e: i64,
+    a: i64,
+    v: &TypedValue,
+    schema: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let store_id = get_store_id_from_schema(schema)?;
+    let table = log_table_for(v);
+    let v_sql = typed_value_sql_literal(v);
+    // v_sql is a SQL literal (escaped for text/keyword, decode() for bytes,
+    // numeric/typed literals otherwise) produced by the same helper the
+    // batch insert uses, so it is safe to interpolate.
+    Spi::run_with_args(
+        &format!(
+            "DELETE FROM mentat.{} WHERE store_id = $1 AND e = $2 AND a = $3 AND v = {}",
+            table, v_sql
+        ),
+        &[
+            DatumWithOid::from(store_id),
+            DatumWithOid::from(e),
+            DatumWithOid::from(a),
+        ],
+    )?;
+    Ok(())
 }
 
 /// Maintain the current-state projection from the batch of (e,a,v,tx,added)
