@@ -60,6 +60,15 @@ fn build_union_all_datoms_query(
     where_clause: &str,
     order_clause: &str,
 ) -> String {
+    // pull resolves CURRENT attribute values. In the append-only model the
+    // log retains every historical assertion plus its later retraction, so a
+    // `... added = true` scan of the log would return superseded and
+    // retracted values. Read the current-state projection
+    // (mentat.current_<type>) instead: it holds exactly the live datoms, has
+    // no `added` column, and is maintained in lock-step with the log.
+    // Callers still pass `added = true` for the legacy log shape, so strip
+    // that predicate (invalid against the projection, which has no `added`).
+    let whr = sanitize_added_predicate(where_clause);
     // Every arm's tag must be cast to ::SMALLINT. Casting only the first arm
     // does NOT force the UNION column type: Postgres resolves the common type
     // across ALL arms, and untyped integer literals elsewhere promote the
@@ -73,54 +82,54 @@ fn build_union_all_datoms_query(
                    NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                    NULL::TEXT AS v_keyword, \
                    NULL::BIGINT AS v_instant_micros, NULL::TEXT AS v_uuid, NULL::BYTEA AS v_bytes \
-            FROM mentat.datoms_ref_new \
+            FROM mentat.current_ref \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{bool_tag}::SMALLINT, \
                    NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_boolean_new \
+            FROM mentat.current_boolean \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{long_tag}::SMALLINT, \
                    NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_long_new \
+            FROM mentat.current_long \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{double_tag}::SMALLINT, \
                    NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_double_new \
+            FROM mentat.current_double \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{instant_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, \
                    EXTRACT(EPOCH FROM v)::BIGINT * 1000000 + \
                    EXTRACT(MICROSECOND FROM v)::BIGINT % 1000000, NULL, NULL \
-            FROM mentat.datoms_instant_new \
+            FROM mentat.current_instant \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{text_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_text_new \
+            FROM mentat.current_text \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{kw_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL \
-            FROM mentat.datoms_keyword_new \
+            FROM mentat.current_keyword \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{uuid_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, v::TEXT, NULL \
-            FROM mentat.datoms_uuid_new \
+            FROM mentat.current_uuid \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{bytes_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v \
-            FROM mentat.datoms_bytes_new \
+            FROM mentat.current_bytes \
             WHERE store_id = {sid} AND {whr} \
         ) AS _datoms {order}",
         pfx = extra_select_prefix,
         sid = store_id,
-        whr = where_clause,
+        whr = whr,
         order = order_clause,
         ref_tag = type_tag::REF,
         bool_tag = type_tag::BOOLEAN,
@@ -132,6 +141,31 @@ fn build_union_all_datoms_query(
         uuid_tag = type_tag::UUID,
         bytes_tag = type_tag::BYTES,
     )
+}
+
+/// Strip an `added = true` predicate (in its common forms) from a where
+/// clause built for the legacy log tables, so the same clause is valid
+/// against the current-state projection (which has no `added` column).
+/// Leaves all other predicates intact. If removing the predicate would
+/// leave an empty clause, returns `true` so the WHERE stays well-formed.
+fn sanitize_added_predicate(where_clause: &str) -> String {
+    let mut s = where_clause.to_string();
+    for pat in [
+        " AND d.added = true",
+        " AND added = true",
+        "d.added = true AND ",
+        "added = true AND ",
+        "d.added = true",
+        "added = true",
+    ] {
+        s = s.replace(pat, "");
+    }
+    let trimmed = s.trim().trim_end_matches("AND").trim_start_matches("AND").trim();
+    if trimmed.is_empty() {
+        "true".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------

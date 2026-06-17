@@ -3072,11 +3072,15 @@ fn build_fulltext_join(
 
     let attr_param = builder.bind_text(attr_ident);
 
+    // Fulltext resolves CURRENT values: search the current-state projection
+    // (mentat.current_text), not the append-only log. The log keeps the old
+    // assertion (added=true) after a replace, so searching it would match
+    // stale text. current_text holds only the live value and has no `added`
+    // column.
     let mut where_parts = Vec::new();
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
 
     let mut score_expr: Option<String> = None;
@@ -3144,7 +3148,7 @@ fn build_fulltext_join(
     }
 
     // Query datoms_text_new directly -- no fulltext table join needed.
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
