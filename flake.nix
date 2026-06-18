@@ -60,6 +60,10 @@
         # Additional packages for the dev shell (not needed for pure builds)
         devOnlyInputs = with pkgs; [
           postgresql
+          # pg_config is a separate derivation (postgresql.pg_config) in
+          # current nixpkgs, not in the default or .dev output; pgrx needs it
+          # on PATH for `cargo pgrx init/package/install`.
+          postgresql.pg_config
           bison
           flex
         ];
@@ -123,7 +127,7 @@
               echo "Installing cargo-pgrx 0.17..."
               cargo install --locked cargo-pgrx --version '~0.17'
               echo "Initializing pgrx with the dev-shell PostgreSQL 16..."
-              cargo pgrx init --pg16="$(command -v pg_config)"
+              cargo pgrx init --pg16="${postgresql.pg_config}/bin/pg_config"
               echo "pgrx setup complete."
             }
 
@@ -134,12 +138,12 @@
 
             # Helper: build extension in release mode
             build-extension() {
-              (cd pg_mentat && cargo pgrx package --pg-config="$(command -v pg_config)")
+              (cd pg_mentat && cargo pgrx package --pg-config="${postgresql.pg_config}/bin/pg_config")
             }
 
             # Helper: install extension to local PostgreSQL
             install-extension() {
-              (cd pg_mentat && cargo pgrx install --release --pg-config="$(command -v pg_config)")
+              (cd pg_mentat && cargo pgrx install --release --pg-config="${postgresql.pg_config}/bin/pg_config")
             }
 
             # Helper: start a local PostgreSQL instance
@@ -190,7 +194,7 @@
 
             src = ./.;
 
-            nativeBuildInputs = commonBuildInputs ++ [ postgresql ];
+            nativeBuildInputs = commonBuildInputs ++ [ postgresql postgresql.pg_config ];
 
             inherit (buildEnv) LIBCLANG_PATH LLVM_CONFIG_PATH LD_LIBRARY_PATH PKG_CONFIG_PATH;
 
@@ -200,9 +204,9 @@
             buildPhase = ''
               export CARGO_HOME=$(mktemp -d)
               cargo install --locked cargo-pgrx --version '~0.17'
-              cargo pgrx init --pg16="${postgresql}/bin/pg_config"
+              cargo pgrx init --pg16="${postgresql.pg_config}/bin/pg_config"
               cd pg_mentat
-              cargo pgrx package --pg-config="${postgresql}/bin/pg_config"
+              cargo pgrx package --pg-config="${postgresql.pg_config}/bin/pg_config"
             '';
 
             installPhase = ''
