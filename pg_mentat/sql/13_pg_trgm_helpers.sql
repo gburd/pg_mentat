@@ -53,11 +53,15 @@ BEGIN
     END IF;
 
     -- Index name is deterministic so re-runs are idempotent.
-    v_idx_name := 'datoms_text_trgm_' || v_entid;
+    v_idx_name := 'current_text_trgm_' || v_entid;
 
+    -- Built on the current-state projection (mentat.current_text), so the
+    -- (similar-to ...) where-fn searches only LIVE values -- a replaced/
+    -- retracted string is not in current_text. The projection holds one row
+    -- per live (e,a,v) and has no `added` column.
     v_sql := format(
-        'CREATE INDEX IF NOT EXISTS %I ON mentat.datoms_text_new ' ||
-        'USING GIN (v gin_trgm_ops) WHERE a = %s AND added = true',
+        'CREATE INDEX IF NOT EXISTS %I ON mentat.current_text ' ||
+        'USING GIN (v gin_trgm_ops) WHERE a = %s',
         v_idx_name, v_entid
     );
     EXECUTE v_sql;
@@ -81,7 +85,7 @@ BEGIN
     IF v_entid IS NULL THEN
         RAISE EXCEPTION ':db.error/unknown-attribute Attribute % is not registered in the schema.', attr_ident;
     END IF;
-    v_idx_name := 'datoms_text_trgm_' || v_entid;
+    v_idx_name := 'current_text_trgm_' || v_entid;
 
     SELECT EXISTS (
         SELECT 1 FROM pg_indexes

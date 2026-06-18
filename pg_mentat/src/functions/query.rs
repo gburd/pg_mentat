@@ -3238,7 +3238,6 @@ fn build_fuzzy_match_join(
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
     // The %~~ operator and tre_pattern() function are provided by the
     // pg_tre extension. Cast k to int4 since tre_pattern's two-arg variant
@@ -3267,7 +3266,7 @@ fn build_fuzzy_match_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3362,11 +3361,15 @@ fn build_similar_to_join(
     let needle_param = builder.bind_text(needle);
     let threshold_param = builder.bind_double(threshold);
 
+    // Search the current-state projection (mentat.current_text): trigram
+    // similarity should match only LIVE values, not strings replaced or
+    // retracted in the append-only log. The partial trgm index built by
+    // mentat.create_trgm_index now lives on current_text too. No `added`
+    // column on the projection.
     let mut where_parts = Vec::new();
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
     // similarity() is provided by pg_trgm. The expression returns float in
     // [0.0, 1.0]; we filter and (optionally) project it as the score.
@@ -3400,7 +3403,7 @@ fn build_similar_to_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3478,7 +3481,6 @@ fn build_rum_fulltext_join(
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
 
     let mut score_expr: Option<String> = None;
@@ -3535,7 +3537,7 @@ fn build_rum_fulltext_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3927,9 +3929,8 @@ fn build_infer_near_join(
     // scan with a sort.
     let from_fragment = format!(
         "(SELECT e, (v <~> ({needle_param})::TEXT) AS infer_dist \
-         FROM mentat.datoms_text_new \
+         FROM mentat.current_text \
          WHERE a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param}) \
-           AND added = true \
            AND store_id = {store_id_param} \
          ORDER BY v <~> ({needle_param})::TEXT \
          LIMIT {k_param}) AS {dt_alias}"
@@ -5599,7 +5600,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
             continue;
         }
-        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, builder)?;
+        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, input_bindings, builder)?;
         where_clauses.push(pred_sql);
     }
 
@@ -6137,7 +6138,13 @@ fn build_not_exists_subquery(
                 // Predicates inside NOT add WHERE conditions to the subquery.
                 // Variables referenced by the predicate must be bound either by
                 // patterns within this NOT clause or by the outer query.
-                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, builder)?;
+                // NOT-clause predicates resolve their vars from the NOT-local
+                // and outer pattern bindings. :in scalar inputs used only
+                // inside a NOT predicate are not threaded here (rare; an empty
+                // map preserves the prior behavior — such a var surfaces the
+                // usual unbound-var error).
+                let no_inputs: HashMap<String, serde_json::Value> = HashMap::new();
+                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, &no_inputs, builder)?;
                 sub_where.push(pred_sql);
             }
             _ => {
@@ -6169,6 +6176,7 @@ fn build_predicate_clause(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
     var_to_type: &HashMap<String, Option<String>>,
+    input_bindings: &HashMap<String, serde_json::Value>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
@@ -6182,8 +6190,8 @@ fn build_predicate_clause(
                 op, pred.args.len(), op
             ).into());
         }
-        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
-        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
+        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
+        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
         let sql_op = if op == "like" { "LIKE" } else { "ILIKE" };
         return Ok(format!("({} {} {})", left, sql_op, right));
     }
@@ -6222,8 +6230,8 @@ fn build_predicate_clause(
         }
     }
 
-    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
-    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
+    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
+    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
 }
@@ -6283,6 +6291,7 @@ fn pred_arg_to_sql(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
     var_to_type: &HashMap<String, Option<String>>,
+    input_bindings: &HashMap<String, serde_json::Value>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
@@ -6332,10 +6341,32 @@ fn pred_arg_to_sql(
                 } else {
                     Ok(format!("{}.{}", alias, col))
                 }
+            } else if let Some(val) = input_bindings.get(var_name.as_str()) {
+                // Not bound by a pattern, but supplied via the :in clause as a
+                // scalar input (e.g. [:find ... :in ?min-age :where ...
+                // [(>= ?age ?min-age)]]). Bind the input value directly as a
+                // parameter so predicate-only input vars work.
+                if let Some(i) = val.as_i64() {
+                    Ok(builder.bind_bigint(i))
+                } else if let Some(f) = val.as_f64() {
+                    Ok(builder.bind_double(f))
+                } else if let Some(b) = val.as_bool() {
+                    Ok(if b { "1".to_string() } else { "0".to_string() })
+                } else if let Some(s) = val.as_str() {
+                    Ok(builder.bind_text(s.to_string()))
+                } else {
+                    Err(format!(
+                        ":db.error/unsupported-pred-arg :in input '{}' has an unsupported \
+                         JSON type for use in a predicate.",
+                        var_name
+                    )
+                    .into())
+                }
             } else {
                 Err(format!(
                     ":db.error/unbound-var Unbound variable '{}' in predicate. \
-                     Every variable used in a predicate must first appear in a :where pattern. \
+                     Every variable used in a predicate must first appear in a :where pattern \
+                     or be supplied via the :in clause. \
                      Add a pattern like [?e :some-attr {}] to bind it.",
                     var_name, var_name
                 ).into())

@@ -64,13 +64,15 @@ BEGIN
     END IF;
 
     -- Sanitize model_name for inclusion in the index identifier.
-    v_idx_name := 'datoms_text_infer_' || v_entid || '_' ||
+    v_idx_name := 'current_text_infer_' || v_entid || '_' ||
         regexp_replace(model_name, '[^a-zA-Z0-9_]', '_', 'g');
 
+    -- Built on the current-state projection so (infer-near ...) ranks only
+    -- LIVE values. The projection has no `added` column.
     v_sql := format(
-        'CREATE INDEX IF NOT EXISTS %I ON mentat.datoms_text_new ' ||
+        'CREATE INDEX IF NOT EXISTS %I ON mentat.current_text ' ||
         'USING infer (v) WITH (model = %L) ' ||
-        'WHERE a = %s AND added = true',
+        'WHERE a = %s',
         v_idx_name, model_name, v_entid
     );
     EXECUTE v_sql;
@@ -96,7 +98,7 @@ BEGIN
     IF v_entid IS NULL THEN
         RAISE EXCEPTION ':db.error/unknown-attribute Attribute % is not registered in the schema.', attr_ident;
     END IF;
-    v_idx_name := 'datoms_text_infer_' || v_entid || '_' ||
+    v_idx_name := 'current_text_infer_' || v_entid || '_' ||
         regexp_replace(model_name, '[^a-zA-Z0-9_]', '_', 'g');
     SELECT EXISTS (
         SELECT 1 FROM pg_indexes

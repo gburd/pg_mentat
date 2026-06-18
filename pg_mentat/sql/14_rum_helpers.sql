@@ -52,12 +52,15 @@ BEGIN
     -- Deterministic name so re-runs are idempotent. Includes language
     -- because the same attribute could plausibly want indexes for
     -- multiple stemming configurations.
-    v_idx_name := 'datoms_text_rum_' || v_entid || '_' || lang;
+    v_idx_name := 'current_text_rum_' || v_entid || '_' || lang;
 
+    -- Built on the current-state projection so (rum-fulltext ...) ranks only
+    -- LIVE values; a replaced string is not in current_text. No `added`
+    -- column on the projection.
     v_sql := format(
-        'CREATE INDEX IF NOT EXISTS %I ON mentat.datoms_text_new ' ||
+        'CREATE INDEX IF NOT EXISTS %I ON mentat.current_text ' ||
         'USING rum (to_tsvector(%L, v) rum_tsvector_ops) ' ||
-        'WHERE a = %s AND added = true',
+        'WHERE a = %s',
         v_idx_name, lang, v_entid
     );
     EXECUTE v_sql;
@@ -84,7 +87,7 @@ BEGIN
     IF v_entid IS NULL THEN
         RAISE EXCEPTION ':db.error/unknown-attribute Attribute % is not registered in the schema.', attr_ident;
     END IF;
-    v_idx_name := 'datoms_text_rum_' || v_entid || '_' || lang;
+    v_idx_name := 'current_text_rum_' || v_entid || '_' || lang;
     SELECT EXISTS (
         SELECT 1 FROM pg_indexes
         WHERE schemaname = 'mentat' AND indexname = v_idx_name

@@ -81,19 +81,22 @@ BEGIN
                       '(automatically maintained on every datoms_<type>_new table).';
     END IF;
 
-    -- One TRE index per attribute, partial on (store_id=0, a=attr_entid, added=TRUE).
-    -- Index name is derived from the attribute's entid so it is stable across
-    -- ident renames and survives a DROP+CREATE INDEX cycle.
-    idx_name := format('idx_datoms_text_new_tre_a%s', attr_entid);
+    -- One TRE index per attribute on the current-state projection, partial on
+    -- (store_id=0, a=attr_entid). Built on mentat.current_text so
+    -- (fuzzy-match ...) matches only LIVE values (a replaced/retracted string
+    -- is not in the projection). Index name derives from the attribute entid
+    -- so it is stable across ident renames and DROP+CREATE cycles. The
+    -- projection has no `added` column.
+    idx_name := format('idx_current_text_tre_a%s', attr_entid);
 
     EXECUTE format(
-        'CREATE INDEX IF NOT EXISTS %I ON mentat.datoms_text_new USING tre (v) ' ||
-        'WHERE store_id = 0 AND a = %s AND added = TRUE',
+        'CREATE INDEX IF NOT EXISTS %I ON mentat.current_text USING tre (v) ' ||
+        'WHERE store_id = 0 AND a = %s',
         idx_name, attr_entid
     );
 
     RETURN format(
-        'TRE index %s created on mentat.datoms_text_new for attribute %s (entid %s). ' ||
+        'TRE index %s created on mentat.current_text for attribute %s (entid %s). ' ||
         'Use (fuzzy-match $ %s "pattern" k) to query.',
         idx_name, attr_ident, attr_entid, attr_ident
     );
@@ -115,7 +118,7 @@ BEGIN
     IF attr_entid IS NULL THEN
         RETURN format('Attribute %s not found; nothing to drop.', attr_ident);
     END IF;
-    idx_name := format('idx_datoms_text_new_tre_a%s', attr_entid);
+    idx_name := format('idx_current_text_tre_a%s', attr_entid);
     EXECUTE format('DROP INDEX IF EXISTS mentat.%I', idx_name);
     RETURN format('TRE index %s dropped (was for attribute %s).', idx_name, attr_ident);
 END;
