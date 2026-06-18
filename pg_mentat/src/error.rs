@@ -44,36 +44,22 @@ pub enum MentatError {
     },
 
     /// A pull pattern is structurally invalid.
-    InvalidPullPattern {
-        message: String,
-    },
+    InvalidPullPattern { message: String },
 
     /// An EDN transaction document is structurally invalid.
-    InvalidTransaction {
-        message: String,
-    },
+    InvalidTransaction { message: String },
 
     /// An entity ID, tempid, or ident could not be resolved.
-    EntityNotFound {
-        ident: String,
-        message: String,
-    },
+    EntityNotFound { ident: String, message: String },
 
     /// A lookup ref could not be resolved to an existing entity.
-    LookupRefNotFound {
-        attr: String,
-        message: String,
-    },
+    LookupRefNotFound { attr: String, message: String },
 
     /// A lookup ref targets an attribute without a unique constraint.
-    LookupRefRequiresUnique {
-        attr: String,
-    },
+    LookupRefRequiresUnique { attr: String },
 
     /// Entity ID / tempid allocation failed (partition exhausted or missing).
-    AllocationFailed {
-        partition: String,
-    },
+    AllocationFailed { partition: String },
 
     /// Cardinality-one attribute has multiple assertions in one transaction.
     CardinalityViolation {
@@ -91,32 +77,19 @@ pub enum MentatError {
     },
 
     /// Stored data is corrupt (wrong byte length for type tag, etc.).
-    DataCorruption {
-        message: String,
-    },
+    DataCorruption { message: String },
 
     /// An unsupported value type tag was encountered.
-    UnsupportedType {
-        type_tag: i16,
-    },
+    UnsupportedType { type_tag: i16 },
 
     /// An invalid entity place (not an integer, string, keyword, or lookup ref).
-    InvalidEntityPlace {
-        got_type: String,
-        got_value: String,
-    },
+    InvalidEntityPlace { got_type: String, got_value: String },
 
     /// An invalid attribute place (not an integer or keyword).
-    InvalidAttribute {
-        got_type: String,
-        got_value: String,
-    },
+    InvalidAttribute { got_type: String, got_value: String },
 
     /// A value could not be encoded for storage.
-    UnsupportedValueType {
-        got_type: String,
-        got_value: String,
-    },
+    UnsupportedValueType { got_type: String, got_value: String },
 
     /// An unknown cardinality value was found in the schema.
     InvalidCardinality {
@@ -125,67 +98,41 @@ pub enum MentatError {
     },
 
     /// Nothing to retract for a given entity.
-    NothingToRetract {
-        entity: i64,
-    },
+    NothingToRetract { entity: i64 },
 
     /// Transaction record creation failed.
-    TransactionFailed {
-        message: String,
-    },
+    TransactionFailed { message: String },
 
     /// A batch operation type is unknown.
-    UnknownBatchOp {
-        op: String,
-    },
+    UnknownBatchOp { op: String },
 
     /// A batch operation is missing required arguments.
-    BatchMissingArg {
-        op: String,
-        message: String,
-    },
+    BatchMissingArg { op: String, message: String },
 
     /// Schema data integrity issue (missing column in schema row).
-    DataIntegrity {
-        message: String,
-    },
+    DataIntegrity { message: String },
 
     /// Query exceeded the maximum allowed result row count.
-    ResultLimitExceeded {
-        limit: i32,
-        message: String,
-    },
+    ResultLimitExceeded { limit: i32, message: String },
 
     /// Query exceeded the statement timeout.
-    QueryTimeout {
-        timeout_ms: i32,
-    },
+    QueryTimeout { timeout_ms: i32 },
 
     /// A store with the given name already exists.
-    StoreExists {
-        store_name: String,
-    },
+    StoreExists { store_name: String },
 
     /// A store with the given name was not found.
-    StoreNotFound {
-        store_name: String,
-    },
+    StoreNotFound { store_name: String },
 
     /// A store name is invalid (bad characters, too long, reserved, etc.).
-    InvalidStoreName {
-        store_name: String,
-        reason: String,
-    },
+    InvalidStoreName { store_name: String, reason: String },
 
     /// Attempted to drop the default store, which is not allowed.
     CannotDropDefaultStore,
 
     /// A PostgreSQL serialization failure (SQLSTATE 40001) occurred.
     /// The caller should retry the transaction with backoff.
-    SerializationFailure {
-        message: String,
-        attempt: u32,
-    },
+    SerializationFailure { message: String, attempt: u32 },
 
     /// Wraps an upstream error (SPI, EDN parse, etc.) with context.
     Internal {
@@ -215,14 +162,9 @@ impl fmt::Display for MentatError {
                     if available.len() > 20 {
                         let shown: Vec<&str> =
                             available.iter().take(20).map(|s| s.as_str()).collect();
-                        write!(
-                            f,
-                            " Available attributes (first 20): {}.",
-                            shown.join(", ")
-                        )?;
+                        write!(f, " Available attributes (first 20): {}.", shown.join(", "))?;
                     } else {
-                        let shown: Vec<&str> =
-                            available.iter().map(|s| s.as_str()).collect();
+                        let shown: Vec<&str> = available.iter().map(|s| s.as_str()).collect();
                         write!(f, " Available attributes: {}.", shown.join(", "))?;
                     }
                 } else {
@@ -482,10 +424,7 @@ impl fmt::Display for MentatError {
                 )
             }
 
-            Self::InvalidStoreName {
-                store_name,
-                reason,
-            } => {
+            Self::InvalidStoreName { store_name, reason } => {
                 write!(
                     f,
                     ":db.error/invalid-store-name Invalid store name '{}': {}",
@@ -620,9 +559,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
         curr[0] = i + 1;
         for (j, cb) in b.chars().enumerate() {
             let cost = if ca == cb { 0 } else { 1 };
-            curr[j + 1] = (prev[j] + cost)
-                .min(prev[j + 1] + 1)
-                .min(curr[j] + 1);
+            curr[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(curr[j] + 1);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -731,10 +668,7 @@ mod tests {
 
     #[test]
     fn test_suggest_closest_no_match() {
-        let candidates = vec![
-            ":person/name".to_string(),
-            ":person/age".to_string(),
-        ];
+        let candidates = vec![":person/name".to_string(), ":person/age".to_string()];
         // Too different -- should return None
         assert_eq!(suggest_closest(":zzz/yyy", &candidates), None);
     }

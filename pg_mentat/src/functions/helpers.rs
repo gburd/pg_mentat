@@ -156,8 +156,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         let mut retract_list = Vec::new();
 
         for row in client.select(facts_query, None, &[DatumWithOid::from(entity_id)])? {
-            if let (Ok(Some(attr_id)), Ok(Some(type_tag))) =
-                (row.get::<i64>(1), row.get::<i16>(2))
+            if let (Ok(Some(attr_id)), Ok(Some(type_tag))) = (row.get::<i64>(1), row.get::<i16>(2))
             {
                 if let Ok(decoded) = decode_row_value(&row, type_tag, 3) {
                     let edn_repr = format_edn_value(&decoded);
@@ -170,9 +169,7 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
     })?;
 
     if retractions.is_empty() {
-        return Err(MentatError::NothingToRetract {
-            entity: entity_id,
-        }.into());
+        return Err(MentatError::NothingToRetract { entity: entity_id }.into());
     }
 
     let count = retractions.len() as i64;
@@ -186,15 +183,16 @@ fn retract_entity(entity_id: i64) -> Result<i64, Box<dyn std::error::Error + Sen
         }
 
         // Resolve attribute ident
-        let attr_ident = crate::cache::get_cache()
-            .get_ident(*attr_id)
-            .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+        let attr_ident = crate::cache::get_cache().get_ident(*attr_id).ok_or_else(
+            || -> Box<dyn std::error::Error + Send + Sync> {
                 MentatError::AttributeNotFound {
                     attr: format!("entid:{}", attr_id),
                     available: crate::error::get_available_attributes(),
                     suggestion: None,
-                }.into()
-            })?;
+                }
+                .into()
+            },
+        )?;
 
         // Format as retraction: [:db/retract entity attr value]
         tx_data.push_str(&format!(
@@ -223,57 +221,75 @@ fn decode_row_value(
 ) -> Result<serde_json::Value, Box<dyn std::error::Error + Send + Sync>> {
     match type_tag {
         type_tag::REF => {
-            let ref_id: i64 = row.get(col_offset)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_ref for ref type".to_string(),
-            })?;
+            let ref_id: i64 = row
+                .get(col_offset)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_ref for ref type".to_string(),
+                })?;
             Ok(json!(ref_id))
         }
         type_tag::BOOLEAN => {
-            let b: bool = row.get(col_offset + 1)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_bool for boolean type".to_string(),
-            })?;
+            let b: bool = row
+                .get(col_offset + 1)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_bool for boolean type".to_string(),
+                })?;
             Ok(json!(b))
         }
         type_tag::LONG => {
-            let n: i64 = row.get(col_offset + 2)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_long for long type".to_string(),
-            })?;
+            let n: i64 = row
+                .get(col_offset + 2)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_long for long type".to_string(),
+                })?;
             Ok(json!(n))
         }
         type_tag::DOUBLE => {
-            let f: f64 = row.get(col_offset + 3)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_double for double type".to_string(),
-            })?;
+            let f: f64 = row
+                .get(col_offset + 3)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_double for double type".to_string(),
+                })?;
             Ok(json!(f))
         }
         type_tag::STRING => {
-            let s: String = row.get(col_offset + 4)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_text for string type".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 4)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_text for string type".to_string(),
+                    })?;
             Ok(json!(s))
         }
         type_tag::KEYWORD => {
-            let s: String = row.get(col_offset + 5)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_keyword for keyword type".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 5)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_keyword for keyword type".to_string(),
+                    })?;
             Ok(json!(format!(":{s}")))
         }
         type_tag::INSTANT => {
-            let micros: i64 = row.get(col_offset + 6)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_instant_micros for instant type".to_string(),
-            })?;
+            let micros: i64 =
+                row.get(col_offset + 6)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_instant_micros for instant type".to_string(),
+                    })?;
             Ok(json!(micros))
         }
         type_tag::UUID => {
-            let s: String = row.get(col_offset + 7)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_uuid for uuid type".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 7)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_uuid for uuid type".to_string(),
+                    })?;
             Ok(json!(s))
         }
         type_tag::BYTES => {
-            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_bytes for bytes type".to_string(),
-            })?;
+            let b: Vec<u8> =
+                row.get(col_offset + 8)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_bytes for bytes type".to_string(),
+                    })?;
             Ok(json!(hex::encode(b)))
         }
         _ => Err(MentatError::UnsupportedType { type_tag }.into()),

@@ -51,7 +51,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_find_manager_name() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?mn . :where [?e :qj/name \"Alice\"] [?e :qj/mgr ?m] [?m :qj/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -61,7 +63,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_find_all_reports() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?m :qj/name \"Mgr-FE\"] [?e :qj/mgr ?m] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -71,7 +75,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_find_ceo_reports() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?c :qj/name \"CEO\"] [?e :qj/mgr ?c] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -81,7 +87,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_ref_with_predicate() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?m :qj/name \"Mgr-BE\"] [?e :qj/mgr ?m] [?e :qj/name ?n] [?e :qj/val ?v] [(> ?v 120)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -91,7 +99,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_ref_with_flag_filter() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?m :qj/name \"Mgr-FE\"] [?e :qj/mgr ?m] [?e :qj/name ?n] [?e :qj/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -101,7 +111,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_ref_with_status_filter() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?m :qj/name \"VP-Eng\"] [?e :qj/mgr ?m] [?e :qj/name ?n] [?e :qj/status :active]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -111,7 +123,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_all_people_with_managers() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/mgr _] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -121,7 +135,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_employee_manager_pairs() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?en ?mn :where [?e :qj/name ?en] [?e :qj/mgr ?m] [?m :qj/name ?mn] [?e :qj/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -131,7 +147,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_manager_dept_cross() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?en ?md :where [?e :qj/name ?en] [?e :qj/mgr ?m] [?m :qj/dept ?md] [?e :qj/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -141,7 +159,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_scalar_manager_of() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?mn . :where [?e :qj/name \"Carol\"] [?e :qj/mgr ?m] [?m :qj/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -155,7 +175,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_grandmanager() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?gm . :where [?e :qj/name \"Alice\"] [?e :qj/mgr ?m] [?m :qj/mgr ?g] [?g :qj/name ?gm]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -165,7 +187,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_three_hop_to_ceo() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?top . :where [?e :qj/name \"Alice\"] [?e :qj/mgr ?m] [?m :qj/mgr ?g] [?g :qj/mgr ?t] [?t :qj/name ?top]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -175,7 +199,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_all_grandreports() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?vp :qj/name \"VP-Eng\"] [?m :qj/mgr ?vp] [?e :qj/mgr ?m] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -186,7 +212,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_two_hop_with_predicate() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?vp :qj/name \"VP-Eng\"] [?m :qj/mgr ?vp] [?e :qj/mgr ?m] [?e :qj/name ?n] [?e :qj/val ?v] [(> ?v 115)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -197,7 +225,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_two_hop_with_flag() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?vp :qj/name \"VP-Eng\"] [?m :qj/mgr ?vp] [?e :qj/mgr ?m] [?e :qj/name ?n] [?e :qj/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -208,7 +238,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_two_hop_relation() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?en ?mn :where [?vp :qj/name \"VP-Eng\"] [?m :qj/mgr ?vp] [?m :qj/name ?mn] [?e :qj/mgr ?m] [?e :qj/name ?en]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -222,7 +254,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_ceo_all_grandreports() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?c :qj/name \"CEO\"] [?vp :qj/mgr ?c] [?m :qj/mgr ?vp] [?m :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -233,7 +267,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_three_hop_count() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?c :qj/name \"CEO\"] [?vp :qj/mgr ?c] [?m :qj/mgr ?vp] [?e :qj/mgr ?m] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -248,7 +284,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_two_attr_same_entity() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v :where [?e :qj/name ?n] [?e :qj/val ?v] [?e :qj/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -258,7 +296,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_three_attr_same_entity() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v ?d :where [?e :qj/name ?n] [?e :qj/val ?v] [?e :qj/dept ?d]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -268,7 +308,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_four_attr_same_entity() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v ?d ?s :where [?e :qj/name ?n] [?e :qj/val ?v] [?e :qj/dept ?d] [?e :qj/status ?s] [?e :qj/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -278,7 +320,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_name_and_dept() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/name ?n] [?e :qj/dept \"sales\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -288,7 +332,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_active_eng() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/name ?n] [?e :qj/dept \"eng\"] [?e :qj/status :active]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -299,7 +345,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_flagged_active_eng() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/name ?n] [?e :qj/dept \"eng\"] [?e :qj/status :active] [?e :qj/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -310,7 +358,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_val_range_with_dept() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/name ?n] [?e :qj/dept \"eng\"] [?e :qj/val ?v] [(> ?v 115)] [(< ?v 160)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -321,7 +371,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_all_filters_combined() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/name ?n] [?e :qj/dept \"eng\"] [?e :qj/flag true] [?e :qj/status :active] [?e :qj/val ?v] [(> ?v 100)] [(< ?v 160)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -336,7 +388,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_same_dept_different_entities() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n1 ?n2 :where [?e1 :qj/name ?n1] [?e2 :qj/name ?n2] [?e1 :qj/dept ?d] [?e2 :qj/dept ?d] [?e1 :qj/name \"Alice\"] [(!= ?n1 ?n2)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -346,7 +400,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_same_manager() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?alice :qj/name \"Alice\"] [?alice :qj/mgr ?m] [?e :qj/mgr ?m] [?e :qj/name ?n] [(!= ?n \"Alice\")]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -356,7 +412,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_same_status() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [_ :qj/status :inactive] [?e :qj/status :inactive] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -366,7 +424,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_higher_val_than_specific() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?alice :qj/name \"Alice\"] [?alice :qj/val ?av] [?e :qj/name ?n] [?e :qj/val ?v] [(> ?v ?av)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -377,7 +437,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_peers_same_level() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         // Find people who share the same manager as Bob
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?bob :qj/name \"Bob\"] [?bob :qj/mgr ?m] [?e :qj/mgr ?m] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -388,7 +450,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_cross_dept_same_val_range() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?d :where [?e :qj/name ?n] [?e :qj/dept ?d] [?e :qj/val ?v] [(>= ?v 100)] [(<= ?v 120)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -403,7 +467,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_add_entity_then_join() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         Spi::run("SELECT mentat_transact('[{:db/id \"new\" :qj/name \"NewHire\" :qj/dept \"eng\" :qj/val 90 :qj/flag true :qj/status :active}]'::TEXT)").expect("add");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/dept \"eng\"] [?e :qj/name ?n] [?e :qj/val ?v] [(< ?v 100)]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -414,14 +480,20 @@ mod tests {
 
     #[pg_test]
     fn test_qj_update_then_join() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         // Update Alice's val
         let q_eid = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :qj/name \"Alice\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q_eid).expect("parse");
         let eid = j["result"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :qj/val 999]]'::TEXT)", eid)).expect("update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :qj/val 999]]'::TEXT)",
+            eid
+        ))
+        .expect("update");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :qj/name ?n] [?e :qj/val ?v] [(> ?v 500)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -431,13 +503,19 @@ mod tests {
 
     #[pg_test]
     fn test_qj_retract_then_join() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let q_eid = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :qj/name \"Dave\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q_eid).expect("parse");
         let eid = j["result"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)", eid)).expect("retract");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)",
+            eid
+        ))
+        .expect("retract");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/dept \"sales\"] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -447,15 +525,24 @@ mod tests {
 
     #[pg_test]
     fn test_qj_add_50_then_join() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         let mut ops = vec![];
         for i in 0..50 {
             ops.push(format!(
                 "{{:db/id \"n{}\" :qj/name \"new-{}\" :qj/dept \"eng\" :qj/val {} :qj/flag {}}}",
-                i, i, i + 200, if i % 2 == 0 { "true" } else { "false" }
+                i,
+                i,
+                i + 200,
+                if i % 2 == 0 { "true" } else { "false" }
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("batch");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qj/dept \"eng\"] [?e :qj/name ?n] [?e :qj/val ?v] [(> ?v 200)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -465,14 +552,18 @@ mod tests {
 
     #[pg_test]
     fn test_qj_link_then_navigate() {
-        setup(); setup_qj_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_qj_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"p1\" :qj/pname \"ProjectA\"}
             {:db/id \"p2\" :qj/pname \"ProjectB\"}
             {:db/id \"e1\" :qj/name \"Alice\" :qj/proj \"p1\"}
             {:db/id \"e2\" :qj/name \"Bob\" :qj/proj \"p1\"}
             {:db/id \"e3\" :qj/name \"Carol\" :qj/proj \"p2\"}
-        ]'::TEXT)").expect("tx");
+        ]'::TEXT)",
+        )
+        .expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?p :qj/pname \"ProjectA\"] [?e :qj/proj ?p] [?e :qj/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -482,8 +573,10 @@ mod tests {
 
     #[pg_test]
     fn test_qj_multi_ref_navigate() {
-        setup(); setup_qj_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_qj_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"p1\" :qj/pname \"ProjectA\"}
             {:db/id \"p2\" :qj/pname \"ProjectB\"}
             {:db/id \"p3\" :qj/pname \"ProjectC\"}
@@ -491,7 +584,9 @@ mod tests {
             [:db/add \"e\" :qj/projs \"p1\"]
             [:db/add \"e\" :qj/projs \"p2\"]
             [:db/add \"e\" :qj/projs \"p3\"]
-        ]'::TEXT)").expect("tx");
+        ]'::TEXT)",
+        )
+        .expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?pn ...] :where [?e :qj/name \"Alice\"] [?e :qj/projs ?p] [?p :qj/pname ?pn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -501,7 +596,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_bidirectional_ref() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         // Forward: who is Alice's manager?
         let q1 = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?mn . :where [?a :qj/name \"Alice\"] [?a :qj/mgr ?m] [?m :qj/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -518,7 +615,9 @@ mod tests {
 
     #[pg_test]
     fn test_qj_chain_query_results() {
-        setup(); setup_qj_schema(); setup_org_data();
+        setup();
+        setup_qj_schema();
+        setup_org_data();
         // First query: find all managers
         let q1 = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?mn ...] :where [_ :qj/mgr ?m] [?m :qj/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",

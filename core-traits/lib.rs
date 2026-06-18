@@ -302,7 +302,6 @@ impl ValueType {
     }
 }
 
-
 impl ValueType {
     pub fn into_keyword(self) -> Keyword {
         Keyword::namespaced(

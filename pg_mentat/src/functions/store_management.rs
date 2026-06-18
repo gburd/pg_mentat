@@ -262,10 +262,7 @@ pub fn create_store(
     }
 
     // Create virtual table views (entities, attributes, facts, etc.)
-    crate::functions::virtual_tables::create_virtual_tables_for_schema(
-        &quoted_schema,
-        store_name,
-    )?;
+    crate::functions::virtual_tables::create_virtual_tables_for_schema(&quoted_schema, store_name)?;
 
     Ok(format!("Store '{}' created successfully.", store_name))
 }
@@ -279,9 +276,7 @@ pub fn create_store(
 /// SELECT mentat_drop_store('my_store');
 /// ```
 #[pg_extern]
-pub fn drop_store(
-    store_name: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+pub fn drop_store(store_name: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     if store_name == "default" {
         return Err(Box::new(MentatError::CannotDropDefaultStore));
     }
@@ -298,10 +293,7 @@ pub fn drop_store(
     let quoted_schema = quote_ident(&schema_name);
 
     // Drop the schema with CASCADE
-    Spi::run(&format!(
-        "DROP SCHEMA IF EXISTS {} CASCADE",
-        quoted_schema
-    ))?;
+    Spi::run(&format!("DROP SCHEMA IF EXISTS {} CASCADE", quoted_schema))?;
 
     // Remove from metadata table
     Spi::run_with_args(

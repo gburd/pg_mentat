@@ -36,12 +36,9 @@ mod tests {
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')",
-            escaped
-        ))
-        .expect("raises_error call")
-        .unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     // ========================================================================
@@ -381,10 +378,8 @@ mod tests {
         )
         .expect("schema failed");
 
-        Spi::run(
-            r#"SELECT mentat_transact('[[:db/add "e" :tu/uni "hello ☃ 日本語 🎉"]]'::TEXT)"#,
-        )
-        .expect("data failed");
+        Spi::run(r#"SELECT mentat_transact('[[:db/add "e" :tu/uni "hello ☃ 日本語 🎉"]]'::TEXT)"#)
+            .expect("data failed");
 
         let v = Spi::get_one::<String>(
             "SELECT v_text FROM mentat.datoms
@@ -528,8 +523,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         Spi::run(&format!(
@@ -572,8 +566,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         Spi::run(&format!(
@@ -614,8 +607,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // CAS should succeed: current value is "old", swap to "new"
@@ -655,8 +647,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // CAS should fail: expected "wrong" but actual is "current"
@@ -687,8 +678,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // CAS from nil should fail since there IS a value
@@ -723,8 +713,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         Spi::run(&format!(
@@ -775,8 +764,7 @@ mod tests {
         .expect("add failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["e"].as_i64().expect("get eid");
 
         // Assert same value again -- should be idempotent
@@ -842,15 +830,11 @@ mod tests {
         )
         .expect("schema failed");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :tu/tags2 \"duplicate\"]]'::TEXT)",
-        )
-        .expect("first assert failed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :tu/tags2 \"duplicate\"]]'::TEXT)")
+            .expect("first assert failed");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :tu/tags2 \"duplicate\"]]'::TEXT)",
-        )
-        .expect("second assert should succeed (idempotent)");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :tu/tags2 \"duplicate\"]]'::TEXT)")
+            .expect("second assert should succeed (idempotent)");
 
         // The duplicate should be skipped, so only 1 active datom
         // Note: "e" might resolve to a different tempid each time
@@ -920,30 +904,25 @@ mod tests {
         .expect("transact failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid = tx_report["tempids"]["person1"].as_i64().expect("get eid");
 
         // Both datoms should have the same entity ID
-        let name_eid = Spi::get_one::<i64>(
-            &format!(
-                "SELECT e FROM mentat.datoms
+        let name_eid = Spi::get_one::<i64>(&format!(
+            "SELECT e FROM mentat.datoms
                  WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':tu/tname')
                  AND e = {} AND added = true LIMIT 1",
-                eid
-            ),
-        )
+            eid
+        ))
         .expect("query failed")
         .expect("NULL");
 
-        let age_eid = Spi::get_one::<i64>(
-            &format!(
-                "SELECT e FROM mentat.datoms
+        let age_eid = Spi::get_one::<i64>(&format!(
+            "SELECT e FROM mentat.datoms
                  WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':tu/tage')
                  AND e = {} AND added = true LIMIT 1",
-                eid
-            ),
-        )
+            eid
+        ))
         .expect("query failed")
         .expect("NULL");
 
@@ -971,12 +950,14 @@ mod tests {
         .expect("transact failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let eid_a = tx_report["tempids"]["a"].as_i64().expect("get eid a");
         let eid_b = tx_report["tempids"]["b"].as_i64().expect("get eid b");
 
-        assert_ne!(eid_a, eid_b, "Different tempids should yield different entities");
+        assert_ne!(
+            eid_a, eid_b,
+            "Different tempids should yield different entities"
+        );
     }
 
     // ========================================================================
@@ -1006,8 +987,7 @@ mod tests {
         .expect("map entity failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         assert!(
             tx_report["tempids"]["p1"].as_i64().is_some(),
             "Should allocate entity for map"
@@ -1065,11 +1045,10 @@ mod tests {
         )
         .expect("full schema definition failed");
 
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident = ':tu/fullattr'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident = ':tu/fullattr'")
+                .expect("query failed")
+                .expect("NULL");
 
         assert_eq!(count, 1, "Should be in schema table");
     }
@@ -1116,15 +1095,11 @@ mod tests {
         )
         .expect("schema failed");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e1\" :tu/code \"ABC\"]]'::TEXT)",
-        )
-        .expect("first insert");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :tu/code \"ABC\"]]'::TEXT)")
+            .expect("first insert");
 
         assert!(
-            raises_error(
-                "SELECT mentat_transact('[[:db/add \"e2\" :tu/code \"ABC\"]]'::TEXT)"
-            ),
+            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :tu/code \"ABC\"]]'::TEXT)"),
             "Should reject duplicate unique value"
         );
     }
@@ -1142,16 +1117,12 @@ mod tests {
         )
         .expect("schema failed");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e1\" :tu/email \"alice@test.com\"]]'::TEXT)",
-        )
-        .expect("first insert");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :tu/email \"alice@test.com\"]]'::TEXT)")
+            .expect("first insert");
 
         // Second insert with same identity value should upsert
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e2\" :tu/email \"alice@test.com\"]]'::TEXT)",
-        )
-        .expect("upsert should succeed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e2\" :tu/email \"alice@test.com\"]]'::TEXT)")
+            .expect("upsert should succeed");
 
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
@@ -1186,8 +1157,7 @@ mod tests {
         .expect("transact failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
 
         assert!(tx_report.get("db-before").is_some(), "Missing db-before");
         assert!(tx_report.get("db-after").is_some(), "Missing db-after");
@@ -1195,10 +1165,16 @@ mod tests {
         assert!(tx_report.get("tempids").is_some(), "Missing tempids");
 
         let db_before = &tx_report["db-before"];
-        assert!(db_before.get("basis-t").is_some(), "db-before missing basis-t");
+        assert!(
+            db_before.get("basis-t").is_some(),
+            "db-before missing basis-t"
+        );
 
         let db_after = &tx_report["db-after"];
-        assert!(db_after.get("basis-t").is_some(), "db-after missing basis-t");
+        assert!(
+            db_after.get("basis-t").is_some(),
+            "db-after missing basis-t"
+        );
 
         let tx_data = tx_report["tx-data"].as_array().expect("tx-data array");
         assert!(!tx_data.is_empty(), "tx-data should not be empty");
@@ -1422,7 +1398,10 @@ mod tests {
         let results = json["results"].as_array().expect("results array");
         assert_eq!(results.len(), 20);
 
-        let vals: Vec<i64> = results.iter().map(|r| r[0].as_i64().expect("int")).collect();
+        let vals: Vec<i64> = results
+            .iter()
+            .map(|r| r[0].as_i64().expect("int"))
+            .collect();
         assert_eq!(vals, (0..20).collect::<Vec<i64>>());
     }
 }

@@ -378,8 +378,7 @@ async fn test_transit_json_invalid_operation() {
 async fn test_transit_json_connect() {
     let server = TestServer::start().await;
 
-    let request =
-        r#"["^ ","~:op","~:connect","~:args",["^ ","~:db-name","postgres"]]"#;
+    let request = r#"["^ ","~:op","~:connect","~:args",["^ ","~:db-name","postgres"]]"#;
     let response = server.client.post_transit_json("/", request).await;
 
     assert_eq!(response.status, 200);

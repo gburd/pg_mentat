@@ -6,12 +6,12 @@ use edn::query::{
     ParsedQuery, PatternNonValuePlace, PatternValuePlace, Predicate, Rule, RuleInvocation,
     VariableOrPlaceholder, WhereClause, WhereFn,
 };
+use lru::LruCache;
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 use pgrx::spi::OwnedPreparedStatement;
 use pgrx::JsonB;
 use serde_json::json;
-use lru::LruCache;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
@@ -70,19 +70,18 @@ fn execute_cached_query<'a>(
     // Try to execute with a cached statement.
     // The borrow of the RefCell is scoped to the closure and released
     // before the SpiTupleTable is used (it references SPI memory, not the plan).
-    let cached_result: Option<Result<pgrx::spi::SpiTupleTable<'a>, _>> =
-        STMT_CACHE.with(|cache| {
-            let mut cache = cache.borrow_mut();
-            if let Some(entry) = cache.get_mut(sql) {
-                entry.hits += 1;
-                // Execute using the cached prepared statement.
-                // SPI_execute_plan copies what it needs from the plan;
-                // the returned SpiTupleTable only references SPI memory context.
-                Some(client.select(&entry.stmt, None, params))
-            } else {
-                None
-            }
-        });
+    let cached_result: Option<Result<pgrx::spi::SpiTupleTable<'a>, _>> = STMT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(entry) = cache.get_mut(sql) {
+            entry.hits += 1;
+            // Execute using the cached prepared statement.
+            // SPI_execute_plan copies what it needs from the plan;
+            // the returned SpiTupleTable only references SPI memory context.
+            Some(client.select(&entry.stmt, None, params))
+        } else {
+            None
+        }
+    });
 
     if let Some(result) = cached_result {
         crate::monitoring::record_stmt_cache_hit();
@@ -91,7 +90,10 @@ fn execute_cached_query<'a>(
 
     // Cache miss: prepare, execute, then cache the plan.
     crate::monitoring::record_stmt_cache_miss();
-    let arg_types: Vec<PgOid> = params.iter().map(|p| PgOid::from_untagged(p.oid())).collect();
+    let arg_types: Vec<PgOid> = params
+        .iter()
+        .map(|p| PgOid::from_untagged(p.oid()))
+        .collect();
     let prepared = client.prepare(sql, &arg_types)?;
 
     // Execute using the borrowed prepared statement (does not consume it).
@@ -183,7 +185,8 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i64, Box<dyn std::error::Erro
         return Err(MentatError::InvalidQuery {
             message: format!("Cannot resolve store_id for schema '{}'", schema),
             suggestion: Some("Schema must be 'mentat' or 'mentat_*'".to_string()),
-        }.into());
+        }
+        .into());
     };
 
     let store_id: Option<i64> = Spi::get_one_with_args(
@@ -222,7 +225,11 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
 fn build_datoms_union_subquery_opt(store_id_param: &str, use_projection: bool) -> String {
     // Pick log vs projection table names and the `added` column expression.
     let t = |log: &str, cur: &str| -> String {
-        if use_projection { format!("mentat.{cur}") } else { format!("mentat.{log}") }
+        if use_projection {
+            format!("mentat.{cur}")
+        } else {
+            format!("mentat.{log}")
+        }
     };
     let added = if use_projection { "true" } else { "added" };
     let (t_ref, t_bool, t_long, t_double, t_instant, t_text, t_kw, t_uuid, t_bytes) = (
@@ -459,13 +466,11 @@ fn resolve_pattern_value_type(
     match attribute {
         PatternNonValuePlace::Ident(kw) => {
             let ident_str = keyword_to_ident(kw);
-            cache.get_attribute_by_ident(&ident_str)
+            cache
+                .get_attribute_by_ident(&ident_str)
                 .map(|info| info.value_type)
         }
-        PatternNonValuePlace::Entid(id) => {
-            cache.get_attribute(*id)
-                .map(|info| info.value_type)
-        }
+        PatternNonValuePlace::Entid(id) => cache.get_attribute(*id).map(|info| info.value_type),
         // Variable or placeholder: type is unknown at compile time
         PatternNonValuePlace::Variable(_) | PatternNonValuePlace::Placeholder => None,
     }
@@ -506,15 +511,51 @@ fn build_typed_datoms_from_fragment_with_pushdown(
 ) -> String {
     // Build the SELECT list with the native column in its correct position
     // and NULLs for all other typed columns.
-    let v_ref = if info.value_column == "v_ref" { "v" } else { "NULL::BIGINT" };
-    let v_bool = if info.value_column == "v_bool" { "v" } else { "NULL::BOOLEAN" };
-    let v_long = if info.value_column == "v_long" { "v" } else { "NULL::BIGINT" };
-    let v_double = if info.value_column == "v_double" { "v" } else { "NULL::DOUBLE PRECISION" };
-    let v_text = if info.value_column == "v_text" { "v" } else { "NULL::TEXT" };
-    let v_keyword = if info.value_column == "v_keyword" { "v" } else { "NULL::TEXT" };
-    let v_instant = if info.value_column == "v_instant" { "v" } else { "NULL::TIMESTAMPTZ" };
-    let v_uuid = if info.value_column == "v_uuid" { "v" } else { "NULL::UUID" };
-    let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
+    let v_ref = if info.value_column == "v_ref" {
+        "v"
+    } else {
+        "NULL::BIGINT"
+    };
+    let v_bool = if info.value_column == "v_bool" {
+        "v"
+    } else {
+        "NULL::BOOLEAN"
+    };
+    let v_long = if info.value_column == "v_long" {
+        "v"
+    } else {
+        "NULL::BIGINT"
+    };
+    let v_double = if info.value_column == "v_double" {
+        "v"
+    } else {
+        "NULL::DOUBLE PRECISION"
+    };
+    let v_text = if info.value_column == "v_text" {
+        "v"
+    } else {
+        "NULL::TEXT"
+    };
+    let v_keyword = if info.value_column == "v_keyword" {
+        "v"
+    } else {
+        "NULL::TEXT"
+    };
+    let v_instant = if info.value_column == "v_instant" {
+        "v"
+    } else {
+        "NULL::TIMESTAMPTZ"
+    };
+    let v_uuid = if info.value_column == "v_uuid" {
+        "v"
+    } else {
+        "NULL::UUID"
+    };
+    let v_bytes = if info.value_column == "v_bytes" {
+        "v"
+    } else {
+        "NULL::BYTEA"
+    };
 
     // Current-time queries read the current-state projection (only live
     // datoms, no `added` column). As-of / history queries read the
@@ -642,10 +683,7 @@ struct ComplexityInfo {
 ///
 /// Note: Recursive CTE depth is controlled via the LIMIT clause in the CTE
 /// output (see recursive_queries.rs), governed by `mentat.max_recursion_depth`.
-fn apply_optimizer_hints(
-    client: &mut pgrx::spi::SpiClient<'_>,
-    complexity: &QueryComplexity,
-) {
+fn apply_optimizer_hints(client: &mut pgrx::spi::SpiClient<'_>, complexity: &QueryComplexity) {
     // --- Resource limits (always applied, regardless of optimizer hints setting) ---
 
     // Statement timeout: prevents runaway queries
@@ -746,13 +784,25 @@ fn parse_pagination_options(inputs: &serde_json::Value) -> PaginationOption {
 #[expect(dead_code)]
 enum InputBinding {
     /// Scalar: a single variable bound to a single value.
-    Scalar { var: String, value: serde_json::Value },
+    Scalar {
+        var: String,
+        value: serde_json::Value,
+    },
     /// Collection: a single variable bound to multiple values (IN clause).
-    Collection { var: String, values: Vec<serde_json::Value> },
+    Collection {
+        var: String,
+        values: Vec<serde_json::Value>,
+    },
     /// Tuple: multiple variables bound simultaneously to a single tuple.
-    Tuple { vars: Vec<String>, values: Vec<serde_json::Value> },
+    Tuple {
+        vars: Vec<String>,
+        values: Vec<serde_json::Value>,
+    },
     /// Relation: multiple variables bound to multiple tuples (VALUES join).
-    Relation { vars: Vec<String>, rows: Vec<Vec<serde_json::Value>> },
+    Relation {
+        vars: Vec<String>,
+        rows: Vec<Vec<serde_json::Value>>,
+    },
 }
 
 /// Parse :in clause input bindings from the inputs JSON parameter.
@@ -994,7 +1044,11 @@ fn resolve_lookup_ref_to_eid(arr: &[serde_json::Value], schema_prefix: &str) -> 
 ///
 /// Queries the appropriate type-specific table directly based on the value type,
 /// using store_id for multi-store isolation.
-fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &str) -> Option<i64> {
+fn lookup_ref_query(
+    attr_entid: i64,
+    value: &serde_json::Value,
+    schema_prefix: &str,
+) -> Option<i64> {
     // Resolve store_id for the type-specific tables
     let store_id = resolve_store_id(schema_prefix).ok()?;
 
@@ -1009,7 +1063,9 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &
                         DatumWithOid::from(attr_entid),
                         DatumWithOid::from(stripped),
                     ],
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             } else {
                 Spi::get_one_with_args::<i64>(
                     "SELECT e FROM mentat.datoms_text_new \
@@ -1019,7 +1075,9 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &
                         DatumWithOid::from(attr_entid),
                         DatumWithOid::from(s.as_str()),
                     ],
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             }
         }
         serde_json::Value::Number(n) => {
@@ -1032,7 +1090,9 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &
                         DatumWithOid::from(attr_entid),
                         DatumWithOid::from(i),
                     ],
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             } else if let Some(f) = n.as_f64() {
                 Spi::get_one_with_args::<i64>(
                     "SELECT e FROM mentat.datoms_double_new \
@@ -1042,22 +1102,24 @@ fn lookup_ref_query(attr_entid: i64, value: &serde_json::Value, schema_prefix: &
                         DatumWithOid::from(attr_entid),
                         DatumWithOid::from(f),
                     ],
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             } else {
                 None
             }
         }
-        serde_json::Value::Bool(b) => {
-            Spi::get_one_with_args::<i64>(
-                "SELECT e FROM mentat.datoms_boolean_new \
+        serde_json::Value::Bool(b) => Spi::get_one_with_args::<i64>(
+            "SELECT e FROM mentat.datoms_boolean_new \
                  WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
-                &[
-                    DatumWithOid::from(store_id),
-                    DatumWithOid::from(attr_entid),
-                    DatumWithOid::from(*b),
-                ],
-            ).ok().flatten()
-        }
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(attr_entid),
+                DatumWithOid::from(*b),
+            ],
+        )
+        .ok()
+        .flatten(),
         _ => None,
     }
 }
@@ -1103,8 +1165,7 @@ pub(crate) fn mentat_query_internal(
 
     // Apply pagination from inputs JSON. This appends LIMIT/OFFSET to the
     // generated SQL, overriding any Datalog :limit if both are present.
-    let has_explicit_limit = pagination.limit.is_some()
-        || sql_query.contains(" LIMIT ");
+    let has_explicit_limit = pagination.limit.is_some() || sql_query.contains(" LIMIT ");
     if let Some(limit) = pagination.limit {
         // Remove any existing LIMIT clause (from Datalog :limit) to avoid
         // a SQL syntax error from duplicate LIMIT. The generated SQL always
@@ -1140,7 +1201,12 @@ pub(crate) fn mentat_query_internal(
         // Pull columns return a JSON object as text; parse those as JSON so
         // they nest as real objects in the result rather than as a string.
         let pull_cols: Vec<bool> = (0..find_vars.len())
-            .map(|i| matches!(get_find_element(&parsed_query.find_spec, i), Some(Element::Pull(_))))
+            .map(|i| {
+                matches!(
+                    get_find_element(&parsed_query.find_spec, i),
+                    Some(Element::Pull(_))
+                )
+            })
             .collect();
 
         let mut rows_json = Vec::new();
@@ -1150,11 +1216,12 @@ pub(crate) fn mentat_query_internal(
             usize::MAX
         };
 
-        for row in execute_cached_query(client, &sql_query, &params)
-            .map_err(|e| Box::new(crate::error::MentatError::InvalidQuery {
+        for row in execute_cached_query(client, &sql_query, &params).map_err(|e| {
+            Box::new(crate::error::MentatError::InvalidQuery {
                 message: format!("SPI execution error: {}", e),
                 suggestion: None,
-            }) as Box<dyn std::error::Error + Send + Sync>)? {
+            }) as Box<dyn std::error::Error + Send + Sync>
+        })? {
             if rows_json.len() >= row_limit {
                 return Err(Box::new(crate::error::MentatError::ResultLimitExceeded {
                     limit: max_rows,
@@ -1164,7 +1231,8 @@ pub(crate) fn mentat_query_internal(
                          or increase mentat.max_result_rows",
                         max_rows
                     ),
-                }) as Box<dyn std::error::Error + Send + Sync>);
+                })
+                    as Box<dyn std::error::Error + Send + Sync>);
             }
 
             let mut row_values = Vec::new();
@@ -1336,8 +1404,10 @@ fn mentat_explain_internal(
         // works for literal queries, but EXPLAIN wrappers around parameterised SQL need the OID list
         // attached to a prepared plan or SPI returns an empty result set and the JSON parse below
         // fails with "EOF while parsing a value at line 1 column 0".
-        let arg_types: Vec<PgOid> =
-            params.iter().map(|p| PgOid::from_untagged(p.oid())).collect();
+        let arg_types: Vec<PgOid> = params
+            .iter()
+            .map(|p| PgOid::from_untagged(p.oid()))
+            .collect();
         let prepared = client.prepare(&explain_sql, &arg_types)?;
 
         let mut plan_rows: Vec<String> = Vec::new();
@@ -1498,9 +1568,7 @@ fn mentat_query_sql_internal(
             // Strip the leading '?' and any aggregate wrapper for SQL column names
             let name = v.trim_start_matches('?');
             // Replace special chars with underscore for valid SQL identifiers
-            name.replace('/', "_")
-                .replace('-', "_")
-                .replace('.', "_")
+            name.replace('/', "_").replace('-', "_").replace('.', "_")
         })
         .collect();
 
@@ -1588,9 +1656,7 @@ fn mentat_query_view_internal(
                 "query_view supports up to 8 columns, but this query has {}",
                 num_cols
             ),
-            suggestion: Some(
-                "Use mentat_query() for queries with more than 8 columns".to_string(),
-            ),
+            suggestion: Some("Use mentat_query() for queries with more than 8 columns".to_string()),
         }));
     }
 
@@ -1622,14 +1688,12 @@ fn mentat_query_view_internal(
         let mut result_rows: Vec<QueryViewRow> = Vec::new();
 
         let mut row_num: i64 = 1;
-        for row in execute_cached_query(client, &sql_query, &params)
-            .map_err(|e| {
-                Box::new(MentatError::InvalidQuery {
-                    message: format!("SPI execution error: {}", e),
-                    suggestion: None,
-                }) as Box<dyn std::error::Error + Send + Sync>
-            })?
-        {
+        for row in execute_cached_query(client, &sql_query, &params).map_err(|e| {
+            Box::new(MentatError::InvalidQuery {
+                message: format!("SPI execution error: {}", e),
+                suggestion: None,
+            }) as Box<dyn std::error::Error + Send + Sync>
+        })? {
             let mut cols: [Option<String>; 8] = Default::default();
             for idx in 0..num_cols {
                 let col_idx = (idx + 1) as usize;
@@ -1975,10 +2039,11 @@ fn bind_constant_value(
                     tag = type_tag::UUID
                 )))
             }
-            NonIntegerConstant::BigInteger(_) => {
-                Err(":db.error/unsupported-constant BigInteger constants are not supported \
-                     in query patterns. Use a regular integer (long) value instead.".into())
-            }
+            NonIntegerConstant::BigInteger(_) => Err(
+                ":db.error/unsupported-constant BigInteger constants are not supported \
+                     in query patterns. Use a regular integer (long) value instead."
+                    .into(),
+            ),
         },
         PatternValuePlace::Variable(_) | PatternValuePlace::Placeholder => Ok(None),
     }
@@ -2006,7 +2071,15 @@ fn build_sql_from_datalog(
     // Wrapper that passes empty enriched bindings for backward compat.
     // Callers that need collection/tuple/relation bindings should call
     // build_sql_from_datalog_enriched directly.
-    build_sql_from_datalog_enriched(parsed, find_vars, builder, temporal, input_bindings, &[], schema_prefix)
+    build_sql_from_datalog_enriched(
+        parsed,
+        find_vars,
+        builder,
+        temporal,
+        input_bindings,
+        &[],
+        schema_prefix,
+    )
 }
 
 fn build_sql_from_datalog_enriched(
@@ -2058,7 +2131,14 @@ fn build_sql_from_datalog_enriched(
     for (fts_idx, wf) in where_fns.iter().enumerate() {
         let op_name = wf.operator.0.as_str();
         if op_name == "fulltext" {
-            let fj = build_fulltext_join(wf, fts_idx, builder, &mut extra_var_bindings, schema_prefix, &store_id_param)?;
+            let fj = build_fulltext_join(
+                wf,
+                fts_idx,
+                builder,
+                &mut extra_var_bindings,
+                schema_prefix,
+                &store_id_param,
+            )?;
             fts_joins.push(fj);
         } else if op_name == "fuzzy-match" {
             // (fuzzy-match $ :attr "pattern" k)  — approximate-regex search
@@ -2136,12 +2216,7 @@ fn build_sql_from_datalog_enriched(
             //   (infer-predict "prompt" top [model])  — forward-pass prediction
             //     binds [[?token ?probability ?rank]]
             // See build_pg_infer_table_join + docs/src/pg_infer.md.
-            let fj = build_pg_infer_table_join(
-                wf,
-                fts_idx,
-                builder,
-                &mut extra_var_bindings,
-            )?;
+            let fj = build_pg_infer_table_join(wf, fts_idx, builder, &mut extra_var_bindings)?;
             fts_joins.push(fj);
         } else if matches!(
             op_name,
@@ -2157,12 +2232,7 @@ fn build_sql_from_datalog_enriched(
             //   (geom-intersects $ :attr "WKT") — ST_Intersects filter
             //     binds [[?e]]
             // See build_postgis_join + docs/src/postgis.md.
-            let fj = build_postgis_join(
-                wf,
-                fts_idx,
-                builder,
-                &mut extra_var_bindings,
-            )?;
+            let fj = build_postgis_join(wf, fts_idx, builder, &mut extra_var_bindings)?;
             fts_joins.push(fj);
         } else if op_name == "get-else" {
             // [(get-else $ ?e :attr default-val) ?result]
@@ -2173,32 +2243,38 @@ fn build_sql_from_datalog_enriched(
                      ($ entity-var attr-keyword default-value), got {}. \
                      Example: [(get-else $ ?e :person/name \"Unknown\") ?name]",
                     wf.args.len()
-                ).into());
+                )
+                .into());
             }
             let result_var = match &wf.binding {
                 Binding::BindScalar(v) => format!("{}", v),
-                _ => return Err(
-                    ":db.error/fn-binding get-else requires a scalar binding. \
-                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
-                ),
+                _ => {
+                    return Err(":db.error/fn-binding get-else requires a scalar binding. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]"
+                        .into())
+                }
             };
             // args[0] = $ (database, ignored)
             // args[1] = entity variable
-            let entity_var = match &wf.args[1] {
-                FnArg::Variable(v) => format!("{}", v),
-                _ => return Err(
-                    ":db.error/fn-arg get-else second argument must be an entity variable. \
-                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
-                ),
-            };
+            let entity_var =
+                match &wf.args[1] {
+                    FnArg::Variable(v) => format!("{}", v),
+                    _ => return Err(
+                        ":db.error/fn-arg get-else second argument must be an entity variable. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]"
+                            .into(),
+                    ),
+                };
             // args[2] = attribute keyword
-            let attr_ident = match &wf.args[2] {
-                FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
-                _ => return Err(
-                    ":db.error/fn-arg get-else third argument must be an attribute keyword. \
-                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]".into(),
-                ),
-            };
+            let attr_ident =
+                match &wf.args[2] {
+                    FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+                    _ => return Err(
+                        ":db.error/fn-arg get-else third argument must be an attribute keyword. \
+                     Example: [(get-else $ ?e :person/name \"Unknown\") ?name]"
+                            .into(),
+                    ),
+                };
             // args[3] = default value
             let default_sql = match &wf.args[3] {
                 FnArg::EntidOrInteger(i) => format!("{}::TEXT", i),
@@ -2206,7 +2282,9 @@ fn build_sql_from_datalog_enriched(
                     let p = builder.bind_text(s.as_ref().to_string());
                     format!("{}::TEXT", p)
                 }
-                FnArg::Constant(NonIntegerConstant::Float(f)) => format!("{}::TEXT", f.into_inner()),
+                FnArg::Constant(NonIntegerConstant::Float(f)) => {
+                    format!("{}::TEXT", f.into_inner())
+                }
                 FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
                     format!("'{}'::TEXT", if *b { "true" } else { "false" })
                 }
@@ -2215,10 +2293,13 @@ fn build_sql_from_datalog_enriched(
                     let p = builder.bind_text(kw_str);
                     format!("{}::TEXT", p)
                 }
-                _ => return Err(
-                    ":db.error/fn-arg get-else default value must be a constant \
-                     (integer, string, float, boolean, or keyword).".into(),
-                ),
+                _ => {
+                    return Err(
+                        ":db.error/fn-arg get-else default value must be a constant \
+                     (integer, string, float, boolean, or keyword)."
+                            .into(),
+                    )
+                }
             };
             get_else_clauses.push(GetElseClause {
                 entity_var,
@@ -2237,25 +2318,30 @@ fn build_sql_from_datalog_enriched(
                      ($ entity-var attr-keyword), got {}. \
                      Example: [(missing? $ ?e :person/email)]",
                     wf.args.len()
-                ).into());
+                )
+                .into());
             }
             // args[0] = $ (database, ignored)
             // args[1] = entity variable
-            let entity_var = match &wf.args[1] {
-                FnArg::Variable(v) => format!("{}", v),
-                _ => return Err(
-                    ":db.error/fn-arg missing? second argument must be an entity variable. \
-                     Example: [(missing? $ ?e :person/email)]".into(),
-                ),
-            };
+            let entity_var =
+                match &wf.args[1] {
+                    FnArg::Variable(v) => format!("{}", v),
+                    _ => return Err(
+                        ":db.error/fn-arg missing? second argument must be an entity variable. \
+                     Example: [(missing? $ ?e :person/email)]"
+                            .into(),
+                    ),
+                };
             // args[2] = attribute keyword
-            let attr_ident = match &wf.args[2] {
-                FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
-                _ => return Err(
-                    ":db.error/fn-arg missing? third argument must be an attribute keyword. \
-                     Example: [(missing? $ ?e :person/email)]".into(),
-                ),
-            };
+            let attr_ident =
+                match &wf.args[2] {
+                    FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
+                    _ => return Err(
+                        ":db.error/fn-arg missing? third argument must be an attribute keyword. \
+                     Example: [(missing? $ ?e :person/email)]"
+                            .into(),
+                    ),
+                };
             missing_clauses.push(MissingClause {
                 entity_var,
                 attr_ident,
@@ -2318,14 +2404,15 @@ fn build_sql_from_datalog_enriched(
                     });
                 }
                 Binding::BindTuple(vops) => {
-                    let items = match arg {
-                        FnArg::Vector(items) => items,
-                        _ => return Err(
-                            ":db.error/fn-arg ground tuple binding requires a vector value. \
+                    let items =
+                        match arg {
+                            FnArg::Vector(items) => items,
+                            _ => return Err(
+                                ":db.error/fn-arg ground tuple binding requires a vector value. \
                              Example: [(ground [v1 v2 v3]) [?x ?y ?z]]"
-                                .into(),
-                        ),
-                    };
+                                    .into(),
+                            ),
+                        };
                     if items.len() != vops.len() {
                         return Err(format!(
                             ":db.error/fn-arg ground tuple binding requires a {}-tuple value, \
@@ -2349,14 +2436,15 @@ fn build_sql_from_datalog_enriched(
                     ground_enriched.push(InputBinding::Tuple { vars, values });
                 }
                 Binding::BindRel(vops) => {
-                    let outer = match arg {
-                        FnArg::Vector(items) => items,
-                        _ => return Err(
-                            ":db.error/fn-arg ground relation binding requires a vector of \
+                    let outer =
+                        match arg {
+                            FnArg::Vector(items) => items,
+                            _ => return Err(
+                                ":db.error/fn-arg ground relation binding requires a vector of \
                              vectors. Example: [(ground [[v1 v2] [v3 v4]]) [[?x ?y]]]"
-                                .into(),
-                        ),
-                    };
+                                    .into(),
+                            ),
+                        };
                     let mut rows: Vec<Vec<serde_json::Value>> = Vec::with_capacity(outer.len());
                     for row in outer {
                         let row_items = match row {
@@ -2479,29 +2567,30 @@ fn build_sql_from_datalog_enriched(
     }
 
     // Build the base query (skip if we only have OR clauses)
-    let (base_sql, base_var_to_alias, base_var_to_type) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
-        // No base patterns, only OR clauses - will be handled below
-        (String::new(), HashMap::new(), HashMap::new())
-    } else {
-        build_extended_pattern_query(
-            &pattern_clauses,
-            &not_joins,
-            &predicates,
-            &fts_joins,
-            &extra_var_bindings,
-            find_vars,
-            &parsed.find_spec,
-            builder,
-            temporal,
-            &rule_cte_info,
-            &effective_bindings,
-            &enriched_bindings,
-            schema_prefix,
-            &store_id_param,
-            &get_else_clauses,
-            &missing_clauses,
-        )?
-    };
+    let (base_sql, base_var_to_alias, base_var_to_type) =
+        if pattern_clauses.is_empty() && !or_joins.is_empty() {
+            // No base patterns, only OR clauses - will be handled below
+            (String::new(), HashMap::new(), HashMap::new())
+        } else {
+            build_extended_pattern_query(
+                &pattern_clauses,
+                &not_joins,
+                &predicates,
+                &fts_joins,
+                &extra_var_bindings,
+                find_vars,
+                &parsed.find_spec,
+                builder,
+                temporal,
+                &rule_cte_info,
+                &effective_bindings,
+                &enriched_bindings,
+                schema_prefix,
+                &store_id_param,
+                &get_else_clauses,
+                &missing_clauses,
+            )?
+        };
 
     // Handle OR-joins using Datalog union semantics.
     //
@@ -2514,9 +2603,12 @@ fn build_sql_from_datalog_enriched(
         (base_sql, false)
     } else {
         if or_joins.len() > 1 {
-            return Err(":db.error/unsupported-query Multiple OR-join clauses in a single query \
+            return Err(
+                ":db.error/unsupported-query Multiple OR-join clauses in a single query \
                         are not yet supported. Combine conditions into a single (or ...) clause \
-                        or split into separate queries.".into());
+                        or split into separate queries."
+                    .into(),
+            );
         }
 
         let or_join = or_joins[0];
@@ -2573,8 +2665,11 @@ fn build_sql_from_datalog_enriched(
                 for arg in &pred.args {
                     if let FnArg::Variable(v) = arg {
                         let var_name = format!("{}", v);
-                        let bound_in_base = pattern_clauses.iter().any(|p| pattern_binds_var(p, &var_name));
-                        let bound_in_arm = arm_patterns.iter().any(|p| pattern_binds_var(p, &var_name));
+                        let bound_in_base = pattern_clauses
+                            .iter()
+                            .any(|p| pattern_binds_var(p, &var_name));
+                        let bound_in_arm =
+                            arm_patterns.iter().any(|p| pattern_binds_var(p, &var_name));
                         let bound_in_rule = combined_rule_invocations.iter().any(|ri| {
                             ri.args.iter().any(|a| matches!(a, FnArg::Variable(rv) if format!("{}", rv) == var_name))
                         });
@@ -2614,7 +2709,14 @@ fn build_sql_from_datalog_enriched(
                 let op_name = wf.operator.0.as_str();
                 if op_name == "fulltext" {
                     let fts_idx = fts_joins.len() + idx;
-                    let fts_join = build_fulltext_join(wf, fts_idx, &mut arm_builder, &mut arm_extra_var_bindings, schema_prefix, &arm_store_id_param)?;
+                    let fts_join = build_fulltext_join(
+                        wf,
+                        fts_idx,
+                        &mut arm_builder,
+                        &mut arm_extra_var_bindings,
+                        schema_prefix,
+                        &arm_store_id_param,
+                    )?;
                     arm_fts_joins.push(fts_join);
                 } else if op_name == "fuzzy-match" {
                     let fts_idx = fts_joins.len() + idx;
@@ -2694,9 +2796,15 @@ fn build_sql_from_datalog_enriched(
                     arm_fts_joins.push(fts_join);
                 } else if matches!(
                     op_name,
-                    "*" | "+" | "-" | "/" |
-                    "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff" |
-                    "infer-similar" | "infer-implies"
+                    "*" | "+"
+                        | "-"
+                        | "/"
+                        | "levenshtein"
+                        | "soundex"
+                        | "metaphone"
+                        | "daitch-mokotoff"
+                        | "infer-similar"
+                        | "infer-implies"
                 ) {
                     // Arithmetic + fuzzystrmatch binding functions work the
                     // same as in the main query. Use the OR-arm builder so
@@ -2776,27 +2884,36 @@ fn build_sql_from_datalog_enriched(
     } else {
         Some(&base_var_to_type)
     };
-    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref, var_type_ref);
+    let query_sql = append_order_by(
+        query_sql,
+        &parsed.order,
+        find_vars,
+        var_alias_ref,
+        var_type_ref,
+    );
 
     // If no explicit ORDER BY was specified and we have fulltext joins with score
     // bindings, automatically order by relevance score descending. This ensures
     // fulltext queries return the most relevant results first by default.
-    let query_sql = if parsed.order.is_none() || parsed.order.as_ref().map_or(true, |o| o.is_empty()) {
-        if let Some(score) = fts_joins.iter().find_map(|fj| fj.score_expr.as_ref()) {
-            // Find the column position of the score expression in the SELECT list
-            if let Some(score_col_pos) = find_vars.iter().position(|v| {
-                extra_var_bindings.get(v).map_or(false, |expr| expr == score)
-            }) {
-                format!("{} ORDER BY {} DESC", query_sql, score_col_pos + 1)
+    let query_sql =
+        if parsed.order.is_none() || parsed.order.as_ref().map_or(true, |o| o.is_empty()) {
+            if let Some(score) = fts_joins.iter().find_map(|fj| fj.score_expr.as_ref()) {
+                // Find the column position of the score expression in the SELECT list
+                if let Some(score_col_pos) = find_vars.iter().position(|v| {
+                    extra_var_bindings
+                        .get(v)
+                        .map_or(false, |expr| expr == score)
+                }) {
+                    format!("{} ORDER BY {} DESC", query_sql, score_col_pos + 1)
+                } else {
+                    query_sql
+                }
             } else {
                 query_sql
             }
         } else {
             query_sql
-        }
-    } else {
-        query_sql
-    };
+        };
 
     // Append LIMIT
     let query_sql = append_limit(query_sql, &parsed.limit, &parsed.find_spec);
@@ -2877,7 +2994,17 @@ fn build_sql_from_datalog_enriched(
         // Collect predicate descriptions
         let pred_descs: Vec<String> = predicates
             .iter()
-            .map(|p| format!("[({} {})]", p.operator.0, p.args.iter().map(|a| format!("{:?}", a)).collect::<Vec<_>>().join(" ")))
+            .map(|p| {
+                format!(
+                    "[({} {})]",
+                    p.operator.0,
+                    p.args
+                        .iter()
+                        .map(|a| format!("{:?}", a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            })
             .collect();
 
         // Collect where-function descriptions
@@ -2893,10 +3020,7 @@ fn build_sql_from_datalog_enriched(
             .collect();
 
         // Count OR branches
-        let or_branch_count: usize = or_joins
-            .iter()
-            .map(|oj| oj.clauses.len())
-            .sum();
+        let or_branch_count: usize = or_joins.iter().map(|oj| oj.clauses.len()).sum();
 
         DatalogPlan {
             patterns: patterns_info,
@@ -3028,12 +3152,35 @@ fn parse_fts_lang_tag(doc: &str) -> Option<String> {
 
     // Validate against known PostgreSQL text search configurations
     const VALID_CONFIGS: &[&str] = &[
-        "simple", "english", "spanish", "french", "german",
-        "italian", "portuguese", "dutch", "finnish", "swedish",
-        "russian", "danish", "hungarian", "norwegian", "romanian",
-        "turkish", "arabic", "armenian", "basque", "catalan",
-        "greek", "hindi", "indonesian", "irish", "lithuanian",
-        "nepali", "serbian", "tamil", "yiddish",
+        "simple",
+        "english",
+        "spanish",
+        "french",
+        "german",
+        "italian",
+        "portuguese",
+        "dutch",
+        "finnish",
+        "swedish",
+        "russian",
+        "danish",
+        "hungarian",
+        "norwegian",
+        "romanian",
+        "turkish",
+        "arabic",
+        "armenian",
+        "basque",
+        "catalan",
+        "greek",
+        "hindi",
+        "indonesian",
+        "irish",
+        "lithuanian",
+        "nepali",
+        "serbian",
+        "tamil",
+        "yiddish",
     ];
 
     if VALID_CONFIGS.contains(&lang.as_str()) {
@@ -3057,22 +3204,35 @@ fn build_fulltext_join(
     store_id_param: &str,
 ) -> Result<FtsJoin, Box<dyn std::error::Error + Send + Sync>> {
     if wf.args.len() < 3 {
-        return Err(":db.error/fulltext-args fulltext requires at least 3 arguments: \
+        return Err(
+            ":db.error/fulltext-args fulltext requires at least 3 arguments: \
                     (fulltext $ :attr \"search-term\"). Got only {} arguments. \
                     Example: [(fulltext $ :person/bio \"engineer\") [[?e ?val]]]"
-            .replace("{}", &wf.args.len().to_string()).into());
+                .replace("{}", &wf.args.len().to_string())
+                .into(),
+        );
     }
 
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
-        _ => return Err(":db.error/fulltext-args fulltext second argument must be a keyword \
-                        attribute (e.g. :person/bio). Format: (fulltext $ :attr \"term\")".into()),
+        _ => {
+            return Err(
+                ":db.error/fulltext-args fulltext second argument must be a keyword \
+                        attribute (e.g. :person/bio). Format: (fulltext $ :attr \"term\")"
+                    .into(),
+            )
+        }
     };
 
     let search_term = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
-        _ => return Err(":db.error/fulltext-args fulltext third argument must be a string \
-                        search term. Format: (fulltext $ :attr \"search words\")".into()),
+        _ => {
+            return Err(
+                ":db.error/fulltext-args fulltext third argument must be a string \
+                        search term. Format: (fulltext $ :attr \"search words\")"
+                    .into(),
+            )
+        }
     };
 
     // Resolve stemming language from attribute schema metadata.
@@ -3211,29 +3371,35 @@ fn build_fuzzy_match_join(
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
         _ => {
-            return Err(":db.error/fn-arg fuzzy-match second argument must be a keyword \
+            return Err(
+                ":db.error/fn-arg fuzzy-match second argument must be a keyword \
                         attribute (e.g. :issue/title). Format: \
                         (fuzzy-match $ :attr \"pattern\" k)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let pattern = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
         _ => {
-            return Err(":db.error/fn-arg fuzzy-match third argument must be a string \
+            return Err(
+                ":db.error/fn-arg fuzzy-match third argument must be a string \
                         pattern (TRE regex syntax with optional `{~k}` edit budgets). \
                         Format: (fuzzy-match $ :attr \"databse\" 1)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let k_edits: i64 = match &wf.args[3] {
         FnArg::EntidOrInteger(i) => *i,
         _ => {
-            return Err(":db.error/fn-arg fuzzy-match fourth argument must be an integer \
+            return Err(
+                ":db.error/fn-arg fuzzy-match fourth argument must be an integer \
                         edit budget (k >= 0). Format: (fuzzy-match $ :attr \"pat\" 1)"
-                .into());
+                    .into(),
+            );
         }
     };
     if !(0..=8).contains(&k_edits) {
@@ -3338,19 +3504,23 @@ fn build_similar_to_join(
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
         _ => {
-            return Err(":db.error/fn-arg similar-to second argument must be a keyword \
+            return Err(
+                ":db.error/fn-arg similar-to second argument must be a keyword \
                         attribute (e.g. :issue/title). Format: \
                         (similar-to $ :attr \"needle\" 0.3)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let needle = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
         _ => {
-            return Err(":db.error/fn-arg similar-to third argument must be a string. \
+            return Err(
+                ":db.error/fn-arg similar-to third argument must be a string. \
                         Format: (similar-to $ :attr \"databse\" 0.3)"
-                .into());
+                    .into(),
+            );
         }
     };
 
@@ -3358,9 +3528,11 @@ fn build_similar_to_join(
         FnArg::Constant(NonIntegerConstant::Float(f)) => f.into_inner(),
         FnArg::EntidOrInteger(i) => *i as f64,
         _ => {
-            return Err(":db.error/fn-arg similar-to fourth argument must be a numeric \
+            return Err(
+                ":db.error/fn-arg similar-to fourth argument must be a numeric \
                         threshold in (0.0, 1.0]. Format: (similar-to $ :attr \"pat\" 0.3)"
-                .into());
+                    .into(),
+            );
         }
     };
     if !(threshold > 0.0 && threshold <= 1.0) {
@@ -3425,9 +3597,7 @@ fn build_similar_to_join(
         from_fragment,
         where_parts,
         // Expose pg_trgm similarity as the score so :order :score works.
-        score_expr: Some(format!(
-            "similarity({dt_alias}.v, {needle_param})"
-        )),
+        score_expr: Some(format!("similarity({dt_alias}.v, {needle_param})")),
         entity_alias: sim_entity_var.map(|n| (n, dt_alias.clone())),
     })
 }
@@ -3473,19 +3643,23 @@ fn build_rum_fulltext_join(
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
         _ => {
-            return Err(":db.error/fn-arg rum-fulltext second argument must be a keyword \
+            return Err(
+                ":db.error/fn-arg rum-fulltext second argument must be a keyword \
                         attribute (e.g. :issue/body). Format: \
                         (rum-fulltext $ :attr \"term\")"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let search_term = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
         _ => {
-            return Err(":db.error/fn-arg rum-fulltext third argument must be a string. \
+            return Err(
+                ":db.error/fn-arg rum-fulltext third argument must be a string. \
                         Format: (rum-fulltext $ :attr \"search words\")"
-                .into());
+                    .into(),
+            );
         }
     };
 
@@ -3604,36 +3778,38 @@ fn build_vector_near_join(
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
         _ => {
-            return Err(":db.error/fn-arg vector-near second argument must be a keyword \
+            return Err(
+                ":db.error/fn-arg vector-near second argument must be a keyword \
                         attribute (e.g. :doc/embedding). Format: \
                         (vector-near $ :attr \"[...]\" k)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let vec_literal = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
         _ => {
-            return Err(":db.error/fn-arg vector-near third argument must be a string of the \
+            return Err(
+                ":db.error/fn-arg vector-near third argument must be a string of the \
                         form \"[v1,v2,...]\" (pgvector textual literal)."
-                .into());
+                    .into(),
+            );
         }
     };
 
     let k: i64 = match &wf.args[3] {
         FnArg::EntidOrInteger(i) => *i,
         _ => {
-            return Err(":db.error/fn-arg vector-near fourth argument must be a positive \
+            return Err(
+                ":db.error/fn-arg vector-near fourth argument must be a positive \
                         integer K (top-K)."
-                .into());
+                    .into(),
+            );
         }
     };
     if k <= 0 {
-        return Err(format!(
-            ":db.error/fn-arg vector-near k must be > 0, got {}.",
-            k
-        )
-        .into());
+        return Err(format!(":db.error/fn-arg vector-near k must be > 0, got {}.", k).into());
     }
 
     let dist_op: &'static str = if wf.args.len() == 5 {
@@ -3652,9 +3828,11 @@ fn build_vector_near_join(
                 }
             },
             _ => {
-                return Err(":db.error/fn-arg vector-near distance op must be a keyword \
+                return Err(
+                    ":db.error/fn-arg vector-near distance op must be a keyword \
                             (:cosine, :l2, :inner)."
-                    .into());
+                        .into(),
+                );
             }
         }
     } else {
@@ -3784,12 +3962,14 @@ fn build_pg_infer_scalar_binding(
         return Err(format!(
             ":db.error/fn-arity pg_infer '{}' requires 2 or 3 arguments \
              (a b [model-keyword]), got {}.",
-            op, wf.args.len()
+            op,
+            wf.args.len()
         )
         .into());
     }
 
-    let render_text = |a: &FnArg, b: &mut SqlBuilder<'_>|
+    let render_text = |a: &FnArg,
+                       b: &mut SqlBuilder<'_>|
      -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match a {
             FnArg::Variable(v) => Ok(format!("VAR_REF:{}", v)),
@@ -3841,7 +4021,10 @@ fn build_pg_infer_scalar_binding(
             Some(m) => format!("(implies({arg0}, {arg1}, {m}))::INT"),
             None => format!("(implies({arg0}, {arg1}))::INT"),
         },
-        _ => unreachable!("build_pg_infer_scalar_binding called with non-pg_infer op '{}'", op),
+        _ => unreachable!(
+            "build_pg_infer_scalar_binding called with non-pg_infer op '{}'",
+            op
+        ),
     };
 
     Ok((result_var, expr))
@@ -3882,36 +4065,38 @@ fn build_infer_near_join(
     let attr_ident = match &wf.args[1] {
         FnArg::IdentOrKeyword(kw) => keyword_to_ident(kw),
         _ => {
-            return Err(":db.error/fn-arg infer-near second argument must be a keyword \
+            return Err(
+                ":db.error/fn-arg infer-near second argument must be a keyword \
                         attribute (e.g. :paper/title). Format: \
                         (infer-near $ :attr \"text\" k)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let needle = match &wf.args[2] {
         FnArg::Constant(NonIntegerConstant::Text(s)) => s.as_ref().clone(),
         _ => {
-            return Err(":db.error/fn-arg infer-near third argument must be a string. \
+            return Err(
+                ":db.error/fn-arg infer-near third argument must be a string. \
                         Format: (infer-near $ :attr \"text\" k)"
-                .into());
+                    .into(),
+            );
         }
     };
 
     let k: i64 = match &wf.args[3] {
         FnArg::EntidOrInteger(i) => *i,
         _ => {
-            return Err(":db.error/fn-arg infer-near fourth argument must be a positive \
+            return Err(
+                ":db.error/fn-arg infer-near fourth argument must be a positive \
                         integer K (top-K)."
-                .into());
+                    .into(),
+            );
         }
     };
     if k <= 0 {
-        return Err(format!(
-            ":db.error/fn-arg infer-near k must be > 0, got {}.",
-            k
-        )
-        .into());
+        return Err(format!(":db.error/fn-arg infer-near k must be > 0, got {}.", k).into());
     }
 
     // Optional 5th-arg model keyword. pg_infer's <~> distance uses the
@@ -3926,9 +4111,11 @@ fn build_infer_near_join(
         match &wf.args[4] {
             FnArg::IdentOrKeyword(kw) => Some(keyword_to_ident(kw)),
             _ => {
-                return Err(":db.error/fn-arg infer-near fifth argument (model) must be a \
+                return Err(
+                    ":db.error/fn-arg infer-near fifth argument (model) must be a \
                             keyword (e.g. :qwen05b)."
-                    .into());
+                        .into(),
+                );
             }
         }
     } else {
@@ -4097,7 +4284,10 @@ fn build_pg_infer_table_join(
                 cols,
             )
         }
-        _ => unreachable!("build_pg_infer_table_join called with non-pg_infer op '{}'", op),
+        _ => unreachable!(
+            "build_pg_infer_table_join called with non-pg_infer op '{}'",
+            op
+        ),
     };
 
     // Bind output columns.
@@ -4149,10 +4339,7 @@ fn render_text_arg_or_var(
 }
 
 /// Helper: render an integer argument as a literal SQL int.
-fn render_int_arg(
-    a: &FnArg,
-    op: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+fn render_int_arg(a: &FnArg, op: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match a {
         FnArg::EntidOrInteger(i) => Ok(i.to_string()),
         _ => Err(format!(
@@ -4239,7 +4426,9 @@ fn build_postgis_join(
     if wf.args.len() < min_args || wf.args.len() > max_args {
         return Err(format!(
             ":db.error/fn-arity {} requires {} arguments, got {}.",
-            op, min_args, wf.args.len()
+            op,
+            min_args,
+            wf.args.len()
         )
         .into());
     }
@@ -4277,11 +4466,9 @@ fn build_postgis_join(
             FnArg::EntidOrInteger(i) => Some(*i as f64),
             FnArg::Constant(NonIntegerConstant::Float(f)) => Some(f.into_inner()),
             _ => {
-                return Err(format!(
-                    ":db.error/fn-arg {} fourth argument must be a number.",
-                    op
-                )
-                .into());
+                return Err(
+                    format!(":db.error/fn-arg {} fourth argument must be a number.", op).into(),
+                );
             }
         }
     } else {
@@ -4352,11 +4539,7 @@ fn build_postgis_join(
         "geom-near" => {
             let k = arg4.expect("arity-checked") as i64;
             if k <= 0 {
-                return Err(format!(
-                    ":db.error/fn-arg geom-near k must be > 0, got {}.",
-                    k
-                )
-                .into());
+                return Err(format!(":db.error/fn-arg geom-near k must be > 0, got {}.", k).into());
             }
             let k_param = builder.bind_bigint(k);
             // ST_GeomFromText returns SRID 0 unless given; we use the
@@ -4466,7 +4649,10 @@ fn ground_arg_to_json_scalar(
         FnArg::IdentOrKeyword(kw) => {
             // Match the existing scalar-ground encoding: prefix with ':' so
             // bind_input_value's keyword branch picks up the value via v_keyword.
-            Ok(serde_json::Value::String(format!(":{}", keyword_to_ident(kw))))
+            Ok(serde_json::Value::String(format!(
+                ":{}",
+                keyword_to_ident(kw)
+            )))
         }
         FnArg::Vector(_) => Err(
             ":db.error/fn-arg ground does not accept nested vectors except in the relation \
@@ -4563,7 +4749,10 @@ fn build_where_fn_binding(
     // mentat.has_fuzzystrmatch() returns true when it is. Without it the
     // generated SQL fails at execution with the standard PG error
     // "function levenshtein(...) does not exist".
-    if matches!(op, "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff") {
+    if matches!(
+        op,
+        "levenshtein" | "soundex" | "metaphone" | "daitch-mokotoff"
+    ) {
         return Ok(Some(build_fuzzystrmatch_binding(wf, builder, op)?));
     }
 
@@ -4584,8 +4773,11 @@ fn build_where_fn_binding(
         return Err(format!(
             ":db.error/fn-arity Arithmetic function '{}' requires exactly 2 arguments, got {}. \
              Example: [({} ?x 2) ?result]",
-            op, wf.args.len(), op
-        ).into());
+            op,
+            wf.args.len(),
+            op
+        )
+        .into());
     }
 
     let result_var = match &wf.binding {
@@ -4638,7 +4830,9 @@ fn build_fuzzystrmatch_binding(
 
     // Per-function arity check + arg encoding. Text args are SqlBuilder-bound
     // for safety; variable args become VAR_REF:?x placeholders.
-    let render_text_arg = |a: &FnArg, b: &mut SqlBuilder<'_>| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let render_text_arg = |a: &FnArg,
+                           b: &mut SqlBuilder<'_>|
+     -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         match a {
             FnArg::Variable(v) => Ok(format!("VAR_REF:{}", v)),
             FnArg::Constant(NonIntegerConstant::Text(s)) => Ok(b.bind_text(s.as_ref().to_string())),
@@ -4715,7 +4909,10 @@ fn build_fuzzystrmatch_binding(
             // downstream predicates can compare or just inspect.
             format!("daitch_mokotoff({})::TEXT", a)
         }
-        _ => unreachable!("build_fuzzystrmatch_binding called with non-fuzzystrmatch op '{}'", op),
+        _ => unreachable!(
+            "build_fuzzystrmatch_binding called with non-fuzzystrmatch op '{}'",
+            op
+        ),
     };
 
     Ok((result_var, expr))
@@ -4927,10 +5124,7 @@ fn build_collection_in_clause(
                 if params.is_empty() {
                     return None;
                 }
-                Some(format!(
-                    "{alias}.v_long IN ({})",
-                    params.join(", ")
-                ))
+                Some(format!("{alias}.v_long IN ({})", params.join(", ")))
             } else if first.is_f64() {
                 let params: Vec<String> = values
                     .iter()
@@ -4939,10 +5133,7 @@ fn build_collection_in_clause(
                 if params.is_empty() {
                     return None;
                 }
-                Some(format!(
-                    "{alias}.v_double IN ({})",
-                    params.join(", ")
-                ))
+                Some(format!("{alias}.v_double IN ({})", params.join(", ")))
             } else if first.is_string() {
                 // Determine if keywords or strings
                 let first_str = first.as_str().unwrap_or("");
@@ -4958,10 +5149,7 @@ fn build_collection_in_clause(
                     if params.is_empty() {
                         return None;
                     }
-                    Some(format!(
-                        "{alias}.v_keyword IN ({})",
-                        params.join(", ")
-                    ))
+                    Some(format!("{alias}.v_keyword IN ({})", params.join(", ")))
                 } else {
                     let params: Vec<String> = values
                         .iter()
@@ -4971,10 +5159,7 @@ fn build_collection_in_clause(
                     if params.is_empty() {
                         return None;
                     }
-                    Some(format!(
-                        "{alias}.v_text IN ({})",
-                        params.join(", ")
-                    ))
+                    Some(format!("{alias}.v_text IN ({})", params.join(", ")))
                 }
             } else {
                 None
@@ -5070,10 +5255,7 @@ fn build_relation_values_join(
                 Some(serde_json::Value::Bool(_)) => "v_bool",
                 _ => continue,
             };
-            on_parts.push(format!(
-                "{}.{} = {}.c{}",
-                alias, typed_col, values_alias, i
-            ));
+            on_parts.push(format!("{}.{} = {}.c{}", alias, typed_col, values_alias, i));
         } else {
             on_parts.push(format!("{}.{} = {}.c{}", alias, col, values_alias, i));
         }
@@ -5161,9 +5343,7 @@ fn build_extended_pattern_query(
                         // Variable was bound from a value column (BYTEA ref).
                         // Variable was bound from a value column (ref type).
                         // Use v_ref directly for comparison with entity column.
-                        where_clauses.push(format!(
-                            "{alias}.e = {existing_alias}.v_ref"
-                        ));
+                        where_clauses.push(format!("{alias}.e = {existing_alias}.v_ref"));
                     } else {
                         where_clauses.push(format!(
                             "{alias}.e = {existing}.{col}",
@@ -5267,7 +5447,10 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
             _ => {
                 if let Some(constraint) = bind_constant_value(
-                    &alias, &pattern.value, builder, pattern_value_type.as_deref(),
+                    &alias,
+                    &pattern.value,
+                    builder,
+                    pattern_value_type.as_deref(),
                 )? {
                     where_clauses.push(constraint);
                 }
@@ -5291,7 +5474,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
         // Schema-aware optimization: reuse the already-resolved value type for
         // both the FROM fragment and the NOT EXISTS subquery.
-        let typed_info = pattern_value_type.as_ref()
+        let typed_info = pattern_value_type
+            .as_ref()
             .and_then(|vt| value_type_to_table_info(vt));
 
         // Temporal filtering per datom table
@@ -5384,30 +5568,41 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                     let ident_str = keyword_to_ident(kw);
                     let store_name = store_name_from_prefix(schema_prefix);
                     let cache = crate::cache::get_cache_for_store(store_name);
-                    cache.resolve_ident(&format!(":{}", ident_str))
+                    cache
+                        .resolve_ident(&format!(":{}", ident_str))
                         .map(|eid| format!("{}", eid))
                 }
                 _ => None,
             };
-            PushdownConditions { added_true, attribute_entid }
+            PushdownConditions {
+                added_true,
+                attribute_entid,
+            }
         };
 
         // Read from the current-state projection for current-time queries
         // (no as-of / since / history): it holds only live datoms, so it
         // needs no `added` filter or latest-tx-wins resolution. Temporal
         // queries must read the append-only log.
-        let use_projection = temporal.as_of.is_none()
-            && temporal.since.is_none()
-            && !temporal.history;
+        let use_projection =
+            temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history;
 
         // Use the typed single-table FROM fragment or fall back to UNION ALL
         if let Some(info) = &typed_info {
             joins.push(build_typed_datoms_from_fragment_with_pushdown(
-                &alias, store_id_param, info, Some(&pushdown), use_projection,
+                &alias,
+                store_id_param,
+                info,
+                Some(&pushdown),
+                use_projection,
             ));
             crate::monitoring::record_schema_aware_hit();
         } else {
-            joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
+            joins.push(build_datoms_from_fragment(
+                &alias,
+                store_id_param,
+                temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history,
+            ));
             crate::monitoring::record_union_all_fallback();
         }
     }
@@ -5529,9 +5724,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             InputBinding::Collection { var, values } => {
                 // Generate IN clause: alias.v_long IN ($1, $2, $3) etc.
                 if let Some((alias, col)) = var_to_alias.get(var.as_str()) {
-                    let in_clause = build_collection_in_clause(
-                        alias, col, values, builder, schema_prefix,
-                    );
+                    let in_clause =
+                        build_collection_in_clause(alias, col, values, builder, schema_prefix);
                     if let Some(c) = in_clause {
                         where_clauses.push(c);
                     }
@@ -5568,7 +5762,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             InputBinding::Relation { vars, rows } => {
                 // Generate a VALUES join for relation bindings
                 if let Some(values_join) = build_relation_values_join(
-                    vars, rows, &var_to_alias, builder, schema_prefix, &mut joins,
+                    vars,
+                    rows,
+                    &var_to_alias,
+                    builder,
+                    schema_prefix,
+                    &mut joins,
                 ) {
                     where_clauses.push(values_join);
                 }
@@ -5578,7 +5777,15 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
 
     // Handle NOT clauses as NOT EXISTS subqueries
     for not_join in not_joins {
-        let not_sql = build_not_exists_subquery(not_join, &var_to_alias, &var_to_type, builder, temporal, schema_prefix, store_id_param)?;
+        let not_sql = build_not_exists_subquery(
+            not_join,
+            &var_to_alias,
+            &var_to_type,
+            builder,
+            temporal,
+            schema_prefix,
+            store_id_param,
+        )?;
         where_clauses.push(not_sql);
     }
 
@@ -5618,7 +5825,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
             continue;
         }
-        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, input_bindings, builder)?;
+        let pred_sql =
+            build_predicate_clause(pred, &var_to_alias, &var_to_type, input_bindings, builder)?;
         where_clauses.push(pred_sql);
     }
 
@@ -5648,7 +5856,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             let pull_var = format!("{}", pull.var);
             let entity_expr = match var_to_alias.get(pull_var.as_str()) {
                 Some((alias, "e")) => format!("{alias}.e"),
-                Some((alias, "v")) => format!("({})::BIGINT", build_numeric_value_decode_expr(alias)),
+                Some((alias, "v")) => {
+                    format!("({})::BIGINT", build_numeric_value_decode_expr(alias))
+                }
                 Some((alias, col)) => format!("{alias}.{col}"),
                 None => {
                     return Err(format!(
@@ -5716,17 +5926,23 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
     if select_exprs.is_empty() {
         return Err(MentatError::InvalidQuery {
             message: "No :find variables could be resolved to pattern bindings. \
-                      Ensure every variable in :find also appears in a :where pattern.".to_string(),
+                      Ensure every variable in :find also appears in a :where pattern."
+                .to_string(),
             suggestion: Some("Example: [:find ?name :where [?e :person/name ?name]]".to_string()),
-        }.into());
+        }
+        .into());
     }
 
     if joins.is_empty() && fts_joins.is_empty() {
         return Err(MentatError::InvalidQuery {
             message: "No :where clauses produced any datom table joins. \
-                      Ensure your query has at least one data pattern like [?e :attr ?v].".to_string(),
-            suggestion: Some("Pure predicate or function-only queries are not supported.".to_string()),
-        }.into());
+                      Ensure your query has at least one data pattern like [?e :attr ?v]."
+                .to_string(),
+            suggestion: Some(
+                "Pure predicate or function-only queries are not supported.".to_string(),
+            ),
+        }
+        .into());
     }
 
     let distinct = if !has_aggregates && find_spec.requires_distinct() {
@@ -5795,12 +6011,15 @@ fn build_aggregate_select(
         "avg" => "AVG",
         "min" => "MIN",
         "max" => "MAX",
-        _ => return Err(format!(
-            ":db.error/unsupported-aggregate Unsupported aggregate function '{}'. \
+        _ => {
+            return Err(format!(
+                ":db.error/unsupported-aggregate Unsupported aggregate function '{}'. \
              Supported aggregates: count, sum, avg, min, max. \
              Example: [:find (count ?e) :where [?e :person/name]]",
-            func_name
-        ).into()),
+                func_name
+            )
+            .into())
+        }
     };
 
     // Get the variable argument
@@ -5958,8 +6177,7 @@ fn build_not_exists_subquery(
     let unbound: Vec<&String> = all_not_vars
         .iter()
         .filter(|v| {
-            !outer_var_to_alias.contains_key(v.as_str())
-                && !locally_bound_vars.contains(v.as_str())
+            !outer_var_to_alias.contains_key(v.as_str()) && !locally_bound_vars.contains(v.as_str())
         })
         .collect();
 
@@ -6044,7 +6262,8 @@ fn build_not_exists_subquery(
 
                 // Value position. Resolve the attribute's value type first so
                 // an integer constant against a ref attribute binds v_ref/REF.
-                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
+                let not_pattern_value_type =
+                    resolve_pattern_value_type(&p.attribute, schema_prefix);
                 match &p.value {
                     PatternValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
@@ -6064,13 +6283,17 @@ fn build_not_exists_subquery(
                                 ));
                             } else {
                                 // Non-value column (e, a, tx) used in value position = ref lookup
-                                sub_where.push(format!("{alias}.v_ref = {outer_alias}.{outer_col}"));
+                                sub_where
+                                    .push(format!("{alias}.v_ref = {outer_alias}.{outer_col}"));
                             }
                         }
                     }
                     _ => {
                         if let Some(constraint) = bind_constant_value(
-                            &alias, &p.value, builder, not_pattern_value_type.as_deref(),
+                            &alias,
+                            &p.value,
+                            builder,
+                            not_pattern_value_type.as_deref(),
                         )? {
                             sub_where.push(constraint);
                         }
@@ -6078,7 +6301,8 @@ fn build_not_exists_subquery(
                 }
 
                 // Schema-aware: resolve type early for FROM, NOT EXISTS, and predicates
-                let typed_info = not_pattern_value_type.as_ref()
+                let typed_info = not_pattern_value_type
+                    .as_ref()
                     .and_then(|vt| value_type_to_table_info(vt));
 
                 // Temporal filtering in subquery too
@@ -6143,24 +6367,33 @@ fn build_not_exists_subquery(
                             let ident_str = keyword_to_ident(kw);
                             let store_name = store_name_from_prefix(schema_prefix);
                             let cache = crate::cache::get_cache_for_store(store_name);
-                            cache.resolve_ident(&format!(":{}", ident_str))
+                            cache
+                                .resolve_ident(&format!(":{}", ident_str))
                                 .map(|eid| format!("{}", eid))
                         }
                         _ => None,
                     };
-                    PushdownConditions { added_true, attribute_entid }
+                    PushdownConditions {
+                        added_true,
+                        attribute_entid,
+                    }
                 };
 
                 // Use typed single-table FROM or fall back to UNION ALL
                 if let Some(info) = &typed_info {
                     sub_joins.push(build_typed_datoms_from_fragment_with_pushdown(
-                        &alias, store_id_param, info, Some(&not_pushdown),
-                        temporal.as_of.is_none()
-                            && temporal.since.is_none()
-                            && !temporal.history,
+                        &alias,
+                        store_id_param,
+                        info,
+                        Some(&not_pushdown),
+                        temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history,
                     ));
                 } else {
-                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
+                    sub_joins.push(build_datoms_from_fragment(
+                        &alias,
+                        store_id_param,
+                        temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history,
+                    ));
                 }
 
                 // Track locally-bound variables for predicates within this NOT clause.
@@ -6197,20 +6430,32 @@ fn build_not_exists_subquery(
                 // map preserves the prior behavior — such a var surfaces the
                 // usual unbound-var error).
                 let no_inputs: HashMap<String, serde_json::Value> = HashMap::new();
-                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, &no_inputs, builder)?;
+                let pred_sql = build_predicate_clause(
+                    pred,
+                    &not_var_to_alias,
+                    &not_var_to_type,
+                    &no_inputs,
+                    builder,
+                )?;
                 sub_where.push(pred_sql);
             }
             _ => {
-                return Err(":db.error/unsupported-query Only pattern clauses and predicates \
+                return Err(
+                    ":db.error/unsupported-query Only pattern clauses and predicates \
                             are supported inside (not ...) / (not-join ...). Function calls \
-                            and rule invocations inside NOT are not yet supported.".into());
+                            and rule invocations inside NOT are not yet supported."
+                        .into(),
+                );
             }
         }
     }
 
     if sub_joins.is_empty() {
-        return Err(":db.error/empty-not NOT clause must contain at least one data pattern. \
-                    Example: (not [?e :person/retired true])".into());
+        return Err(
+            ":db.error/empty-not NOT clause must contain at least one data pattern. \
+                    Example: (not [?e :person/retired true])"
+                .into(),
+        );
     }
 
     Ok(format!(
@@ -6240,11 +6485,26 @@ fn build_predicate_clause(
             return Err(format!(
                 ":db.error/predicate-arity Predicate '{}' requires exactly 2 arguments, got {}. \
                  Example: [({} ?name \"Alice%\")]",
-                op, pred.args.len(), op
-            ).into());
+                op,
+                pred.args.len(),
+                op
+            )
+            .into());
         }
-        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
-        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
+        let left = pred_arg_to_sql(
+            &pred.args[0],
+            var_to_alias,
+            var_to_type,
+            input_bindings,
+            builder,
+        )?;
+        let right = pred_arg_to_sql(
+            &pred.args[1],
+            var_to_alias,
+            var_to_type,
+            input_bindings,
+            builder,
+        )?;
         let sql_op = if op == "like" { "LIKE" } else { "ILIKE" };
         return Ok(format!("({} {} {})", left, sql_op, right));
     }
@@ -6256,20 +6516,26 @@ fn build_predicate_clause(
         ">=" => ">=",
         "=" => "=",
         "!=" => "!=",
-        _ => return Err(format!(
-            ":db.error/unsupported-predicate Unsupported predicate operator '{}'. \
+        _ => {
+            return Err(format!(
+                ":db.error/unsupported-predicate Unsupported predicate operator '{}'. \
              Supported operators: <, >, <=, >=, =, !=, like, ilike. \
              Example: [(< ?age 30)]",
-            op
-        ).into()),
+                op
+            )
+            .into())
+        }
     };
 
     if pred.args.len() != 2 {
         return Err(format!(
             ":db.error/predicate-arity Predicate '{}' requires exactly 2 arguments, got {}. \
              Example: [({} ?var value)]",
-            op, pred.args.len(), op
-        ).into());
+            op,
+            pred.args.len(),
+            op
+        )
+        .into());
     }
 
     // Type-safety guard for inequality operators (Mozilla #520):
@@ -6283,8 +6549,20 @@ fn build_predicate_clause(
         }
     }
 
-    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
-    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
+    let left = pred_arg_to_sql(
+        &pred.args[0],
+        var_to_alias,
+        var_to_type,
+        input_bindings,
+        builder,
+    )?;
+    let right = pred_arg_to_sql(
+        &pred.args[1],
+        var_to_alias,
+        var_to_type,
+        input_bindings,
+        builder,
+    )?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
 }
@@ -6422,7 +6700,8 @@ fn pred_arg_to_sql(
                      or be supplied via the :in clause. \
                      Add a pattern like [?e :some-attr {}] to bind it.",
                     var_name, var_name
-                ).into())
+                )
+                .into())
             }
         }
         FnArg::EntidOrInteger(i) => Ok(builder.bind_bigint(*i)),
@@ -6433,8 +6712,11 @@ fn pred_arg_to_sql(
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
             Ok(if *b { "1".to_string() } else { "0".to_string() })
         }
-        _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type. \
-                  Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
+        _ => Err(
+            ":db.error/unsupported-pred-arg Unsupported predicate argument type. \
+                  Supported types: variables (?x), integers, floats, strings, and booleans."
+                .into(),
+        ),
     }
 }
 
@@ -6526,7 +6808,8 @@ fn build_rule_ctes(
                 ":db.error/empty-rule Rule '{}' has no clauses. Each rule must have at least one \
                  clause with a head and body patterns.",
                 rule_name
-            ).into());
+            )
+            .into());
         };
 
         // Generate column names for the CTE: col0, col1, ...
@@ -6539,8 +6822,15 @@ fn build_rule_ctes(
         // produce the same binding tuple, and the result should be a set.
         let mut union_parts = Vec::new();
         for clause in &rule.clauses {
-            let clause_sql =
-                build_rule_clause_sql(clause, &cte_cols, builder, temporal, rule_name, schema_prefix, store_id_param)?;
+            let clause_sql = build_rule_clause_sql(
+                clause,
+                &cte_cols,
+                builder,
+                temporal,
+                rule_name,
+                schema_prefix,
+                store_id_param,
+            )?;
             union_parts.push(clause_sql);
         }
 
@@ -6556,9 +6846,7 @@ fn build_rule_ctes(
         // (no WITH prefix); a single WITH is added at the end.
         // RECURSIVE on any one CTE in a WITH list applies to all of them in
         // PostgreSQL, so a single global flag is correct.
-        cte_parts.push(format!(
-            "{rule_name}({cte_col_list}) AS ({cte_body})"
-        ));
+        cte_parts.push(format!("{rule_name}({cte_col_list}) AS ({cte_body})"));
         if is_recursive {
             any_recursive = true;
         }
@@ -6638,12 +6926,15 @@ fn build_predicate_clause_for_rule(
         ">=" => ">=",
         "=" => "=",
         "!=" => "!=",
-        _ => return Err(format!(
-            ":db.error/unsupported-predicate Unsupported predicate operator '{}' in rule. \
+        _ => {
+            return Err(format!(
+                ":db.error/unsupported-predicate Unsupported predicate operator '{}' in rule. \
              Supported operators: <, >, <=, >=, =, !=. \
              Example: [(< ?age 30)]",
-            op
-        ).into()),
+                op
+            )
+            .into())
+        }
     };
 
     if pred.args.len() != 2 {
@@ -6805,8 +7096,11 @@ fn pred_arg_to_sql_for_rule(
         FnArg::Constant(NonIntegerConstant::Boolean(b)) => {
             Ok(if *b { "1".to_string() } else { "0".to_string() })
         }
-        _ => Err(":db.error/unsupported-pred-arg Unsupported predicate argument type in rule. \
-                  Supported types: variables (?x), integers, floats, strings, and booleans.".into()),
+        _ => Err(
+            ":db.error/unsupported-pred-arg Unsupported predicate argument type in rule. \
+                  Supported types: variables (?x), integers, floats, strings, and booleans."
+                .into(),
+        ),
     }
 }
 
@@ -6895,7 +7189,8 @@ fn build_rule_clause_sql(
                 }
 
                 // Resolve attribute type early for predicates and FROM optimization
-                let rule_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
+                let rule_pattern_value_type =
+                    resolve_pattern_value_type(&p.attribute, schema_prefix);
 
                 // Value position
                 match &p.value {
@@ -6926,7 +7221,10 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                     }
                     _ => {
                         if let Some(constraint) = bind_constant_value(
-                            &alias, &p.value, builder, rule_pattern_value_type.as_deref(),
+                            &alias,
+                            &p.value,
+                            builder,
+                            rule_pattern_value_type.as_deref(),
                         )? {
                             where_parts.push(constraint);
                         }
@@ -6934,7 +7232,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                 }
 
                 // Schema-aware: reuse resolved type for FROM optimization
-                let typed_info = rule_pattern_value_type.as_ref()
+                let typed_info = rule_pattern_value_type
+                    .as_ref()
                     .and_then(|vt| value_type_to_table_info(vt));
 
                 // Temporal filtering
@@ -6999,24 +7298,33 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                             let ident_str = keyword_to_ident(kw);
                             let store_name = store_name_from_prefix(schema_prefix);
                             let cache = crate::cache::get_cache_for_store(store_name);
-                            cache.resolve_ident(&format!(":{}", ident_str))
+                            cache
+                                .resolve_ident(&format!(":{}", ident_str))
                                 .map(|eid| format!("{}", eid))
                         }
                         _ => None,
                     };
-                    PushdownConditions { added_true, attribute_entid }
+                    PushdownConditions {
+                        added_true,
+                        attribute_entid,
+                    }
                 };
 
                 // Use typed single-table FROM or fall back to UNION ALL
                 if let Some(info) = &typed_info {
                     pattern_joins.push(build_typed_datoms_from_fragment_with_pushdown(
-                        &alias, store_id_param, info, Some(&rule_pushdown),
-                        temporal.as_of.is_none()
-                            && temporal.since.is_none()
-                            && !temporal.history,
+                        &alias,
+                        store_id_param,
+                        info,
+                        Some(&rule_pushdown),
+                        temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history,
                     ));
                 } else {
-                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
+                    pattern_joins.push(build_datoms_from_fragment(
+                        &alias,
+                        store_id_param,
+                        temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history,
+                    ));
                 }
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {
@@ -7047,7 +7355,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
             }
             WhereClause::Pred(pred) => {
                 // Handle predicates in rule bodies
-                let pred_sql = build_predicate_clause_for_rule(pred, &body_var_to_alias, &body_var_to_type, builder)?;
+                let pred_sql = build_predicate_clause_for_rule(
+                    pred,
+                    &body_var_to_alias,
+                    &body_var_to_type,
+                    builder,
+                )?;
                 where_parts.push(pred_sql);
             }
             WhereClause::WhereFn(wf) => {
@@ -7061,7 +7374,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                         ":db.error/unsupported-rule-fn Unsupported function '{}' in rule body. \
                          Supported functions: *, +, -, /",
                         wf.operator.0
-                    ).into());
+                    )
+                    .into());
                 }
             }
             _ => {
@@ -7125,8 +7439,11 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
     }
 
     if from_parts.is_empty() {
-        return Err(":db.error/empty-rule-body Rule clause body has no data patterns. \
-                    Each rule clause must contain at least one pattern like [?e :attr ?v].".into());
+        return Err(
+            ":db.error/empty-rule-body Rule clause body has no data patterns. \
+                    Each rule clause must contain at least one pattern like [?e :attr ?v]."
+                .into(),
+        );
     }
 
     let sql = if where_parts.is_empty() {

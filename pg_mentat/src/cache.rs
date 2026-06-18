@@ -1,9 +1,9 @@
 use crate::functions::store_management::get_schema_for_store;
+use parking_lot::RwLock;
 use pgrx::spi::Spi;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use parking_lot::RwLock;
 
 thread_local! {
     /// When `true`, `SchemaCache::ensure_fresh` skips the remote
@@ -340,7 +340,10 @@ impl StoreCacheMap {
         }
 
         let db_schema = get_schema_for_store(store_name);
-        let cache = Box::leak(Box::new(SchemaCache::new(db_schema, store_name.to_string())));
+        let cache = Box::leak(Box::new(SchemaCache::new(
+            db_schema,
+            store_name.to_string(),
+        )));
         caches.insert(store_name.to_string(), cache);
         cache
     }

@@ -107,10 +107,7 @@ fn validate_query_fragment(sql: &str, label: &str) -> Result<(), MentatError> {
 
     if sql.contains("--") || sql.contains("/*") {
         return Err(MentatError::InvalidQuery {
-            message: format!(
-                "{} must not contain SQL comments (-- or /*).",
-                label
-            ),
+            message: format!("{} must not contain SQL comments (-- or /*).", label),
             suggestion: None,
         });
     }
@@ -412,9 +409,7 @@ pub fn drop_recursive(
 /// SELECT mentat_list_recursive('default');
 /// ```
 #[pg_extern]
-pub fn list_recursive(
-    store_name: &str,
-) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
+pub fn list_recursive(store_name: &str) -> Result<JsonB, Box<dyn std::error::Error + Send + Sync>> {
     validate_store_name(store_name)?;
 
     ensure_metadata_table()?;
@@ -506,24 +501,12 @@ mod tests {
 
     #[test]
     fn test_validate_query_fragment_semicolon() {
-        assert!(validate_query_fragment(
-            "SELECT 1; DROP TABLE datoms",
-            "Base query"
-        )
-        .is_err());
+        assert!(validate_query_fragment("SELECT 1; DROP TABLE datoms", "Base query").is_err());
     }
 
     #[test]
     fn test_validate_query_fragment_comments() {
-        assert!(validate_query_fragment(
-            "SELECT 1 -- comment",
-            "Base query"
-        )
-        .is_err());
-        assert!(validate_query_fragment(
-            "SELECT /* inline */ 1",
-            "Recursive query"
-        )
-        .is_err());
+        assert!(validate_query_fragment("SELECT 1 -- comment", "Base query").is_err());
+        assert!(validate_query_fragment("SELECT /* inline */ 1", "Recursive query").is_err());
     }
 }

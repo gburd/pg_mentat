@@ -18,15 +18,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_schema() {

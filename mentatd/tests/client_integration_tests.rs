@@ -295,8 +295,11 @@ mod tests {
 
     #[test]
     fn transit_transact_request_format() {
-        let req =
-            transit::transact_request("[[:db/add \"t\" :person/name \"Alice\"]]", "conn-1", "req-004");
+        let req = transit::transact_request(
+            "[[:db/add \"t\" :person/name \"Alice\"]]",
+            "conn-1",
+            "req-004",
+        );
         assert!(req.contains("\"~:transact\""));
         assert!(req.contains("\"~:tx-data\""));
         assert!(req.contains("\"~:connection-id\""));
@@ -321,8 +324,7 @@ mod tests {
 
     #[test]
     fn transit_with_request_format() {
-        let req =
-            transit::with_request("[[:db/add \"t\" :person/name \"Alice\"]]", "req-007");
+        let req = transit::with_request("[[:db/add \"t\" :person/name \"Alice\"]]", "req-007");
         assert!(req.contains("\"~:with\""));
         assert!(req.contains("\"~:tx-data\""));
     }
@@ -443,15 +445,9 @@ mod tests {
     fn datomic_api_completeness() {
         // Each of these operations must be supported by all three clients
         let operations = vec![
-            "health",
-            "connect",
-            "q",          // query
-            "transact",
-            "pull",
-            "datoms",
-            "with",       // speculative transaction
-            "basis-t",
-            "tx-range",
+            "health", "connect", "q", // query
+            "transact", "pull", "datoms", "with", // speculative transaction
+            "basis-t", "tx-range",
         ];
 
         for op in &operations {

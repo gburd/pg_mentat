@@ -31,7 +31,8 @@ mod tests {
                 [:db/add \"e1\" :fs/tags \"t2\"]
                 [:db/add \"e2\" :fs/tags \"t3\"]
             ]'::TEXT)",
-        ).expect("fs data");
+        )
+        .expect("fs data");
     }
 
     // ========================================================================
@@ -40,7 +41,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_relation_single_var() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name :where [?e :fs/name ?name]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -55,7 +57,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_relation_two_vars() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name ?val :where [?e :fs/name ?name] [?e :fs/val ?val]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -69,7 +72,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_relation_three_vars() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name ?val ?flag :where [?e :fs/name ?name] [?e :fs/val ?val] [?e :fs/flag ?flag]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -83,7 +87,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_relation_four_vars() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name ?val ?flag ?dbl :where [?e :fs/name ?name] [?e :fs/val ?val] [?e :fs/flag ?flag] [?e :fs/dbl ?dbl]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -97,7 +102,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_relation_empty() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name :where [?e :fs/name ?name] [?e :fs/val 999]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -111,7 +117,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_scalar_string() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name . :where [?e :fs/name ?name] [?e :fs/name \"Alice\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -121,7 +128,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_scalar_long() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?val . :where [?e :fs/name \"Bob\"] [?e :fs/val ?val]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -131,7 +139,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_scalar_boolean() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?f . :where [?e :fs/name \"Alice\"] [?e :fs/flag ?f]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -141,7 +150,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_scalar_double() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?d . :where [?e :fs/name \"Carol\"] [?e :fs/dbl ?d]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -151,7 +161,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_scalar_no_match() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name . :where [?e :fs/name ?name] [?e :fs/val 999]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -165,7 +176,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_collection_strings() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ...] :where [?e :fs/name ?name]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -176,7 +188,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_collection_longs() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :fs/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -187,7 +200,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_collection_empty() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ...] :where [?e :fs/name ?name] [?e :fs/val 999]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -197,7 +211,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_collection_with_filter() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ...] :where [?e :fs/name ?name] [?e :fs/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -212,7 +227,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_tuple_two_vars() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ?val] :where [?e :fs/name ?name] [?e :fs/name \"Alice\"] [?e :fs/val ?val]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -225,7 +241,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_tuple_three_vars() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ?val ?flag] :where [?e :fs/name ?name] [?e :fs/name \"Bob\"] [?e :fs/val ?val] [?e :fs/flag ?flag]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -239,7 +256,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_tuple_no_match() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?name ?val] :where [?e :fs/name ?name] [?e :fs/name \"Nobody\"] [?e :fs/val ?val]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -253,7 +271,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_entity_id_in_relation() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e ?name :where [?e :fs/name ?name]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -269,7 +288,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_entity_id_scalar() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :fs/name \"Alice\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -279,7 +299,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_entity_id_collection() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?e ...] :where [?e :fs/name _]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -294,7 +315,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_many_in_collection() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?t ...] :where [?e :fs/name \"Alice\"] [?e :fs/tags ?t]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -304,7 +326,8 @@ mod tests {
 
     #[pg_test]
     fn test_fs_many_in_relation() {
-        setup(); setup_fs_schema_and_data();
+        setup();
+        setup_fs_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name ?tag :where [?e :fs/name ?name] [?e :fs/tags ?tag]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");

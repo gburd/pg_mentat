@@ -42,7 +42,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_gt_long_basic() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v 5)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -54,7 +55,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_gt_long_zero() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v 0)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -66,7 +68,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_gt_long_negative() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v -2)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -82,7 +85,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_lt_long_basic() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(< ?v 5)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -94,7 +98,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_lt_none_match() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(< ?v -100)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -109,7 +114,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_gte_long() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(>= ?v 10)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -125,7 +131,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_lte_long() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(<= ?v 2)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -141,7 +148,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_ne_long() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(!= ?v 5)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -153,7 +161,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_ne_string() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [(!= ?n \"Zero\")]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -168,7 +177,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_range_between() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(>= ?v 2)] [(<= ?v 20)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -180,7 +190,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_combined_val_and_flag() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v 0)] [?e :pd/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -192,7 +203,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_combined_two_attrs() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [?e :pd/score ?s] [(> ?v 1)] [(> ?s 30)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -208,7 +220,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_gt_double() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/dbl ?d] [(> ?d 5.0)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -220,7 +233,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_lt_double() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/dbl ?d] [(< ?d 2.0)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -236,7 +250,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_all_match() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v -1000)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -250,7 +265,8 @@ mod tests {
 
     #[pg_test]
     fn test_pd_none_match() {
-        setup(); setup_pred_schema_and_data();
+        setup();
+        setup_pred_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :pd/name ?n] [?e :pd/val ?v] [(> ?v 1000)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");

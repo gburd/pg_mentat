@@ -313,11 +313,10 @@ mod tests {
         )
         .expect("define indexed attr");
 
-        let indexed = Spi::get_one::<bool>(
-            "SELECT indexed FROM mentat.schema WHERE ident = ':sot/idx'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let indexed =
+            Spi::get_one::<bool>("SELECT indexed FROM mentat.schema WHERE ident = ':sot/idx'")
+                .expect("query failed")
+                .expect("NULL");
         assert!(indexed);
     }
 
@@ -334,11 +333,10 @@ mod tests {
         )
         .expect("define fulltext attr");
 
-        let fulltext = Spi::get_one::<bool>(
-            "SELECT fulltext FROM mentat.schema WHERE ident = ':sot/ft'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let fulltext =
+            Spi::get_one::<bool>("SELECT fulltext FROM mentat.schema WHERE ident = ':sot/ft'")
+                .expect("query failed")
+                .expect("NULL");
         assert!(fulltext);
     }
 
@@ -371,11 +369,10 @@ mod tests {
         )
         .expect("5 attrs in one tx");
 
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':sot/m%'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':sot/m%'")
+                .expect("query failed")
+                .expect("NULL");
         assert_eq!(count, 5, "All 5 should be defined");
     }
 
@@ -432,7 +429,10 @@ mod tests {
         assert!(!schema.is_empty(), "Schema should have entries");
 
         // Our attribute appears as a top-level key.
-        assert!(schema.contains_key(":sot/sq1"), "Should find :sot/sq1 in schema");
+        assert!(
+            schema.contains_key(":sot/sq1"),
+            "Should find :sot/sq1 in schema"
+        );
     }
 
     // ========================================================================
@@ -451,10 +451,8 @@ mod tests {
         )
         .expect("define attr");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :sot/resname \"test\"]]'::TEXT)",
-        )
-        .expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sot/resname \"test\"]]'::TEXT)")
+            .expect("data");
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :sot/resname ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -478,11 +476,10 @@ mod tests {
         )
         .expect("define attr");
 
-        let entid = Spi::get_one::<i64>(
-            "SELECT entid FROM mentat.idents WHERE ident = ':sot/idtbl'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let entid =
+            Spi::get_one::<i64>("SELECT entid FROM mentat.idents WHERE ident = ':sot/idtbl'")
+                .expect("query failed")
+                .expect("NULL");
 
         assert!(entid > 0, "Should have positive entid");
     }
@@ -507,11 +504,10 @@ mod tests {
             .expect("sequential schema");
         }
 
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':sot/seq%'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':sot/seq%'")
+                .expect("query failed")
+                .expect("NULL");
         assert_eq!(count, 10);
 
         // Verify all are usable
@@ -541,11 +537,10 @@ mod tests {
         )
         .expect("define component attr");
 
-        let comp = Spi::get_one::<bool>(
-            "SELECT component FROM mentat.schema WHERE ident = ':sot/comp'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let comp =
+            Spi::get_one::<bool>("SELECT component FROM mentat.schema WHERE ident = ':sot/comp'")
+                .expect("query failed")
+                .expect("NULL");
         assert!(comp);
     }
 

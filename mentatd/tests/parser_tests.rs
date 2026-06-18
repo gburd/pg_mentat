@@ -42,8 +42,8 @@ fn test_parse_create_db() {
 
 #[test]
 fn test_parse_create_db_catalog_form() {
-    let req =
-        parse_request("{:op :datomic.catalog/create-db :args {:db-name \"testdb\"}}").expect("parse failed");
+    let req = parse_request("{:op :datomic.catalog/create-db :args {:db-name \"testdb\"}}")
+        .expect("parse failed");
     match req.op {
         Operation::CreateDatabase { db_name } => assert_eq!(db_name, "testdb"),
         _ => panic!("Expected CreateDatabase"),
@@ -94,10 +94,9 @@ fn test_parse_connect() {
 
 #[test]
 fn test_parse_db() {
-    let req = parse_request(
-        "{:op :db :args {:connection-id \"550e8400-e29b-41d4-a716-446655440000\"}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :db :args {:connection-id \"550e8400-e29b-41d4-a716-446655440000\"}}")
+            .expect("parse failed");
     match req.op {
         Operation::Db { connection_id } => {
             assert_eq!(
@@ -121,12 +120,17 @@ fn test_parse_db_invalid_uuid() {
 
 #[test]
 fn test_parse_query() {
-    let req = parse_request(
-        "{:op :q :args {:query [:find ?e :where [?e :db/ident _]]}}",
-    )
-    .expect("parse failed");
+    let req = parse_request("{:op :q :args {:query [:find ?e :where [?e :db/ident _]]}}")
+        .expect("parse failed");
     match req.op {
-        Operation::Query { query, args, timeout, limit, offset, db_id } => {
+        Operation::Query {
+            query,
+            args,
+            timeout,
+            limit,
+            offset,
+            db_id,
+        } => {
             assert!(query.contains(":find"));
             assert!(args.is_empty());
             assert!(timeout.is_none());
@@ -169,10 +173,9 @@ fn test_parse_query_with_limit_offset() {
 
 #[test]
 fn test_parse_query_with_timeout() {
-    let req = parse_request(
-        "{:op :q :args {:query [:find ?e :where [?e :db/ident _]] :timeout 5000}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :q :args {:query [:find ?e :where [?e :db/ident _]] :timeout 5000}}")
+            .expect("parse failed");
     match req.op {
         Operation::Query { timeout, .. } => {
             assert_eq!(timeout, Some(5000));
@@ -211,9 +214,8 @@ fn test_parse_transact() {
 
 #[test]
 fn test_parse_transact_missing_connection_id() {
-    let result = parse_request(
-        "{:op :transact :args {:tx-data [[:db/add \"e\" :db/ident :test]]}}",
-    );
+    let result =
+        parse_request("{:op :transact :args {:tx-data [[:db/add \"e\" :db/ident :test]]}}");
     assert!(result.is_err());
 }
 
@@ -229,10 +231,9 @@ fn test_parse_transact_missing_tx_data() {
 
 #[test]
 fn test_parse_pull() {
-    let req = parse_request(
-        "{:op :pull :args {:pattern [:person/name :person/age] :entity-id 10001}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :pull :args {:pattern [:person/name :person/age] :entity-id 10001}}")
+            .expect("parse failed");
     match req.op {
         Operation::Pull { pattern, entity_id } => {
             assert!(pattern.contains(":person/name"));
@@ -248,10 +249,9 @@ fn test_parse_pull() {
 
 #[test]
 fn test_parse_as_of() {
-    let req = parse_request(
-        "{:op :as-of :args {:query [:find ?e :where [?e :db/ident _]] :t 1000001}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :as-of :args {:query [:find ?e :where [?e :db/ident _]] :t 1000001}}")
+            .expect("parse failed");
     match req.op {
         Operation::AsOf { t, .. } => assert_eq!(t, 1000001),
         _ => panic!("Expected AsOf"),
@@ -260,10 +260,9 @@ fn test_parse_as_of() {
 
 #[test]
 fn test_parse_since() {
-    let req = parse_request(
-        "{:op :since :args {:query [:find ?e :where [?e :db/ident _]] :t 1000001}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :since :args {:query [:find ?e :where [?e :db/ident _]] :t 1000001}}")
+            .expect("parse failed");
     match req.op {
         Operation::Since { t, .. } => assert_eq!(t, 1000001),
         _ => panic!("Expected Since"),
@@ -272,10 +271,8 @@ fn test_parse_since() {
 
 #[test]
 fn test_parse_history() {
-    let req = parse_request(
-        "{:op :history :args {:query [:find ?e ?a ?v :where [?e ?a ?v]]}}",
-    )
-    .expect("parse failed");
+    let req = parse_request("{:op :history :args {:query [:find ?e ?a ?v :where [?e ?a ?v]]}}")
+        .expect("parse failed");
     assert!(matches!(req.op, Operation::History { .. }));
 }
 
@@ -285,10 +282,8 @@ fn test_parse_history() {
 
 #[test]
 fn test_parse_datoms_eavt() {
-    let req = parse_request(
-        "{:op :datoms :args {:index :eavt :components []}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :datoms :args {:index :eavt :components []}}").expect("parse failed");
     match req.op {
         Operation::Datoms { index, components } => {
             assert!(matches!(index, mentatd::protocol::DatomsIndex::EAVT));
@@ -300,10 +295,7 @@ fn test_parse_datoms_eavt() {
 
 #[test]
 fn test_parse_datoms_avet() {
-    let req = parse_request(
-        "{:op :datoms :args {:index :avet}}",
-    )
-    .expect("parse failed");
+    let req = parse_request("{:op :datoms :args {:index :avet}}").expect("parse failed");
     match req.op {
         Operation::Datoms { index, .. } => {
             assert!(matches!(index, mentatd::protocol::DatomsIndex::AVET));
@@ -318,10 +310,8 @@ fn test_parse_datoms_avet() {
 
 #[test]
 fn test_parse_tx_range() {
-    let req = parse_request(
-        "{:op :tx-range :args {:start 1000001 :end 1000010}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :tx-range :args {:start 1000001 :end 1000010}}").expect("parse failed");
     match req.op {
         Operation::TxRange { start, end } => {
             assert_eq!(start, Some(1000001));
@@ -349,10 +339,9 @@ fn test_parse_tx_range_no_bounds() {
 
 #[test]
 fn test_parse_with() {
-    let req = parse_request(
-        "{:op :with :args {:tx-data [[:db/add \"e\" :person/name \"Alice\"]]}}",
-    )
-    .expect("parse failed");
+    let req =
+        parse_request("{:op :with :args {:tx-data [[:db/add \"e\" :person/name \"Alice\"]]}}")
+            .expect("parse failed");
     match req.op {
         Operation::With { tx_data } => {
             assert!(tx_data.contains(":person/name"));
@@ -448,25 +437,21 @@ fn test_parse_filter_attr_equals() {
 
 #[test]
 fn test_parse_whitespace_tolerance() {
-    let req = parse_request(
-        "  {   :op   :list-dbs   }  ",
-    )
-    .expect("whitespace should be tolerated");
+    let req = parse_request("  {   :op   :list-dbs   }  ").expect("whitespace should be tolerated");
     assert!(matches!(req.op, Operation::ListDatabases));
 }
 
 #[test]
 fn test_parse_extra_fields_ignored() {
-    let req = parse_request(
-        "{:op :list-dbs :extra-field 42 :another \"test\"}",
-    )
-    .expect("extra fields should be ignored");
+    let req = parse_request("{:op :list-dbs :extra-field 42 :another \"test\"}")
+        .expect("extra fields should be ignored");
     assert!(matches!(req.op, Operation::ListDatabases));
 }
 
 #[test]
 fn test_parse_unicode_in_db_name() {
-    let req = parse_request("{:op :create-db :args {:db-name \"日本語db\"}}").expect("parse failed");
+    let req =
+        parse_request("{:op :create-db :args {:db-name \"日本語db\"}}").expect("parse failed");
     match req.op {
         Operation::CreateDatabase { db_name } => assert_eq!(db_name, "日本語db"),
         _ => panic!("Expected CreateDatabase"),

@@ -47,12 +47,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "");
     }
@@ -63,12 +68,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"   \"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "   ");
     }
@@ -79,12 +89,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"line1\\nline2\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].as_str().expect("s").contains("line1"));
     }
@@ -95,12 +110,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"col1\\tcol2\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].as_str().is_some());
     }
@@ -112,7 +132,9 @@ mod tests {
         // Backslash and quotes
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"has\\\\backslash\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         assert!(j["tempids"]["e"].as_i64().is_some());
     }
@@ -121,15 +143,23 @@ mod tests {
     fn test_vt_string_long_10k() {
         setup();
         setup_all_types_schema();
-        let long_str: String = (0..10000).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let long_str: String = (0..10000)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
         let r = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"{}\"]]'::TEXT)", long_str
-        )).expect("tx").expect("NULL");
+            "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"{}\"]]'::TEXT)",
+            long_str
+        ))
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s").len(), 10000);
     }
@@ -140,15 +170,22 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"first\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/str \"second\"]]'::TEXT)", eid
-        )).expect("update");
+            "SELECT mentat_transact('[[:db/add {} :vt/str \"second\"]]'::TEXT)",
+            eid
+        ))
+        .expect("update");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "second");
     }
@@ -159,15 +196,22 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/str \"gone\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/retract {} :vt/str \"gone\"]]'::TEXT)", eid
-        )).expect("retract");
+            "SELECT mentat_transact('[[:db/retract {} :vt/str \"gone\"]]'::TEXT)",
+            eid
+        ))
+        .expect("retract");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/str ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].is_null());
     }
@@ -185,7 +229,8 @@ mod tests {
                 [:db/add \"e\" :vt/strs \"d\"]
                 [:db/add \"e\" :vt/strs \"e\"]
             ]'::TEXT)",
-        ).expect("many add");
+        )
+        .expect("many add");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :vt/name \"holder\"] [?e :vt/strs ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -203,12 +248,16 @@ mod tests {
                 [:db/add \"e\" :vt/strs \"keep\"]
                 [:db/add \"e\" :vt/strs \"remove\"]
             ]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/retract {} :vt/strs \"remove\"]]'::TEXT)", eid
-        )).expect("retract one");
+            "SELECT mentat_transact('[[:db/retract {} :vt/strs \"remove\"]]'::TEXT)",
+            eid
+        ))
+        .expect("retract one");
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find [?v ...] :where [{} :vt/strs ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
@@ -226,14 +275,18 @@ mod tests {
     fn test_vt_long_zero() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng 0]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/lng 0]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), 0);
     }
@@ -242,14 +295,18 @@ mod tests {
     fn test_vt_long_one() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng 1]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/lng 1]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), 1);
     }
@@ -258,14 +315,18 @@ mod tests {
     fn test_vt_long_negative_one() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng -1]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/lng -1]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), -1);
     }
@@ -275,13 +336,19 @@ mod tests {
         setup();
         setup_all_types_schema();
         let r = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng {}]]'::TEXT)", i64::MAX
-        )).expect("tx").expect("NULL");
+            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng {}]]'::TEXT)",
+            i64::MAX
+        ))
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), i64::MAX);
     }
@@ -291,13 +358,19 @@ mod tests {
         setup();
         setup_all_types_schema();
         let r = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng {}]]'::TEXT)", i64::MIN
-        )).expect("tx").expect("NULL");
+            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng {}]]'::TEXT)",
+            i64::MIN
+        ))
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), i64::MIN);
     }
@@ -309,16 +382,24 @@ mod tests {
         for exp in 0..62 {
             let val: i64 = 1 << exp;
             let r = Spi::get_one::<String>(&format!(
-                "SELECT mentat_transact('[[:db/add \"p{}\" :vt/lng {}]]'::TEXT)", exp, val
-            )).expect("tx").expect("NULL");
+                "SELECT mentat_transact('[[:db/add \"p{}\" :vt/lng {}]]'::TEXT)",
+                exp, val
+            ))
+            .expect("tx")
+            .expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
             let eid = j["tempids"][&format!("p{}", exp)].as_i64().expect("eid");
             let q = Spi::get_one::<String>(&format!(
                 "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
             )).expect("q").expect("NULL");
             let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-            assert_eq!(v["result"].as_i64().expect("l"), val,
-                "Power of 2: 2^{} = {}", exp, val);
+            assert_eq!(
+                v["result"].as_i64().expect("l"),
+                val,
+                "Power of 2: 2^{} = {}",
+                exp,
+                val
+            );
         }
     }
 
@@ -326,17 +407,23 @@ mod tests {
     fn test_vt_long_update_replace() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng 10]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/lng 10]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/lng 20]]'::TEXT)", eid
-        )).expect("update");
+            "SELECT mentat_transact('[[:db/add {} :vt/lng 20]]'::TEXT)",
+            eid
+        ))
+        .expect("update");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("l"), 20);
     }
@@ -345,17 +432,23 @@ mod tests {
     fn test_vt_long_retract() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/lng 42]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/lng 42]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/retract {} :vt/lng 42]]'::TEXT)", eid
-        )).expect("retract");
+            "SELECT mentat_transact('[[:db/retract {} :vt/lng 42]]'::TEXT)",
+            eid
+        ))
+        .expect("retract");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/lng ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].is_null());
     }
@@ -369,8 +462,10 @@ mod tests {
             ops.push(format!("[:db/add \"e\" :vt/lngs {}]", i * 10));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("many add");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("many add");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :vt/name \"nums\"] [?e :vt/lngs ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -386,14 +481,18 @@ mod tests {
     fn test_vt_double_zero() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 0.0]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 0.0]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!((v["result"].as_f64().expect("d") - 0.0).abs() < 1e-10);
     }
@@ -404,12 +503,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 3.141592653589793]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!((v["result"].as_f64().expect("d") - std::f64::consts::PI).abs() < 1e-10);
     }
@@ -420,12 +524,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl -99.99]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!((v["result"].as_f64().expect("d") - (-99.99)).abs() < 0.01);
     }
@@ -436,12 +545,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 0.000000001]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].as_f64().expect("d") > 0.0);
         assert!(v["result"].as_f64().expect("d") < 0.00001);
@@ -453,12 +567,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 1.0e15]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!((v["result"].as_f64().expect("d") - 1.0e15).abs() < 1.0);
     }
@@ -467,17 +586,23 @@ mod tests {
     fn test_vt_double_update() {
         setup();
         setup_all_types_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 1.0]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :vt/dbl 1.0]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/dbl 2.0]]'::TEXT)", eid
-        )).expect("update");
+            "SELECT mentat_transact('[[:db/add {} :vt/dbl 2.0]]'::TEXT)",
+            eid
+        ))
+        .expect("update");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/dbl ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!((v["result"].as_f64().expect("d") - 2.0).abs() < 0.01);
     }
@@ -493,8 +618,10 @@ mod tests {
             ops.push(format!("[:db/add \"e\" :vt/dbls {:?}]", (i as f64) * 0.1));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("many add");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("many add");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :vt/name \"dbls\"] [?e :vt/dbls ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -512,7 +639,9 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/bool true]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
@@ -528,7 +657,9 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/bool false]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
@@ -544,7 +675,9 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/bool true]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
@@ -552,8 +685,10 @@ mod tests {
         for i in 0..10 {
             let val = if i % 2 == 0 { "false" } else { "true" };
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add {} :vt/bool {}]]'::TEXT)", eid, val
-            )).expect("toggle");
+                "SELECT mentat_transact('[[:db/add {} :vt/bool {}]]'::TEXT)",
+                eid, val
+            ))
+            .expect("toggle");
         }
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :vt/bool ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
@@ -570,12 +705,16 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/bool true]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/retract {} :vt/bool true]]'::TEXT)", eid
-        )).expect("retract");
+            "SELECT mentat_transact('[[:db/retract {} :vt/bool true]]'::TEXT)",
+            eid
+        ))
+        .expect("retract");
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :vt/bool ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
@@ -593,12 +732,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/kw :active]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].as_str().expect("kw").contains("active"));
     }
@@ -609,12 +753,17 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/kw :user.status/active]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let kw = v["result"].as_str().expect("kw");
         assert!(kw.contains("user.status") || kw.contains("active"));
@@ -626,15 +775,22 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/kw :pending]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/kw :approved]]'::TEXT)", eid
-        )).expect("update");
+            "SELECT mentat_transact('[[:db/add {} :vt/kw :approved]]'::TEXT)",
+            eid
+        ))
+        .expect("update");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :vt/kw ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert!(v["result"].as_str().expect("kw").contains("approved"));
     }
@@ -650,7 +806,8 @@ mod tests {
                 [:db/add \"e\" :vt/kws :tag-b]
                 [:db/add \"e\" :vt/kws :tag-c]
             ]'::TEXT)",
-        ).expect("many kw");
+        )
+        .expect("many kw");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :vt/name \"kwholder\"] [?e :vt/kws ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -672,13 +829,18 @@ mod tests {
                 [:db/add \"child\" :vt/name \"child\"]
                 [:db/add \"child\" :vt/ref \"parent\"]
             ]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let parent = j["tempids"]["parent"].as_i64().expect("parent");
         let child = j["tempids"]["child"].as_i64().expect("child");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT", child
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            child
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("ref"), parent);
     }
@@ -689,18 +851,25 @@ mod tests {
         setup_all_types_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :vt/name \"self\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         // Self-reference
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/ref {}]]'::TEXT)", eid, eid
-        )).expect("self-ref");
+            "SELECT mentat_transact('[[:db/add {} :vt/ref {}]]'::TEXT)",
+            eid, eid
+        ))
+        .expect("self-ref");
 
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("ref"), eid);
     }
@@ -716,17 +885,24 @@ mod tests {
                 [:db/add \"c\" :vt/name \"C\"]
                 [:db/add \"c\" :vt/ref \"a\"]
             ]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let b = j["tempids"]["b"].as_i64().expect("b");
         let c = j["tempids"]["c"].as_i64().expect("c");
         // Update ref from A to B
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :vt/ref {}]]'::TEXT)", c, b
-        )).expect("update ref");
+            "SELECT mentat_transact('[[:db/add {} :vt/ref {}]]'::TEXT)",
+            c, b
+        ))
+        .expect("update ref");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT", c
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?r . :where [{} :vt/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            c
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("ref"), b);
     }
@@ -742,8 +918,10 @@ mod tests {
             ops.push(format!("[:db/add \"hub\" :vt/refs \"s{}\"]", i));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("hub/spokes");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("hub/spokes");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?r ...] :where [?e :vt/name \"hub\"] [?e :vt/refs ?r]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -768,8 +946,10 @@ mod tests {
             "SELECT mentat_query('[:find ?v . :where [{} :vt/inst ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        assert!(v["result"].as_str().is_some() || v["result"].is_string(),
-            "Instant should be retrievable");
+        assert!(
+            v["result"].as_str().is_some() || v["result"].is_string(),
+            "Instant should be retrievable"
+        );
     }
 
     #[pg_test]
@@ -800,7 +980,10 @@ mod tests {
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let inst = v["result"].as_str().unwrap_or("");
-        assert!(inst.contains("2024-12-31") || inst.contains("2024"), "Should have updated instant");
+        assert!(
+            inst.contains("2024-12-31") || inst.contains("2024"),
+            "Should have updated instant"
+        );
     }
 
     // ========================================================================
@@ -821,8 +1004,10 @@ mod tests {
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let uuid = v["result"].as_str().unwrap_or("");
-        assert!(uuid.contains("550e8400") || uuid.contains("446655440000"),
-            "UUID should roundtrip");
+        assert!(
+            uuid.contains("550e8400") || uuid.contains("446655440000"),
+            "UUID should roundtrip"
+        );
     }
 
     #[pg_test]
@@ -853,8 +1038,10 @@ mod tests {
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let uuid = v["result"].as_str().unwrap_or("");
-        assert!(uuid.contains("a0eebc99") || uuid.contains("bb9bd380a11"),
-            "UUID should be updated");
+        assert!(
+            uuid.contains("a0eebc99") || uuid.contains("bb9bd380a11"),
+            "UUID should be updated"
+        );
     }
 
     // ========================================================================
@@ -877,7 +1064,8 @@ mod tests {
                  :vt/inst #inst \"2024-06-15T12:00:00Z\"
                  :vt/uuid #uuid \"550e8400-e29b-41d4-a716-446655440000\"}
             ]'::TEXT)",
-        ).expect("cross-type entity");
+        )
+        .expect("cross-type entity");
 
         // Query to verify each attribute type via datoms
         let count = Spi::get_one::<i64>(
@@ -886,8 +1074,14 @@ mod tests {
                        WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/name')
                        AND v_text = 'Cross-Type')
              AND added = true",
-        ).expect("q").expect("NULL");
-        assert!(count >= 7, "Cross-type entity should have at least 7 attributes, got {}", count);
+        )
+        .expect("q")
+        .expect("NULL");
+        assert!(
+            count >= 7,
+            "Cross-type entity should have at least 7 attributes, got {}",
+            count
+        );
     }
 
     #[pg_test]
@@ -904,7 +1098,9 @@ mod tests {
                 [:db/add \"e\" :vt/bool true]
                 [:db/add \"e\" :vt/kw :test]
             ]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
@@ -913,36 +1109,51 @@ mod tests {
         let str_tag = Spi::get_one::<i16>(&format!(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/str')
-             AND added = true LIMIT 1", eid
-        )).expect("q").expect("NULL");
+             AND added = true LIMIT 1",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(str_tag, 7, "String type tag should be 7");
 
         let long_tag = Spi::get_one::<i16>(&format!(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/lng')
-             AND added = true LIMIT 1", eid
-        )).expect("q").expect("NULL");
+             AND added = true LIMIT 1",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(long_tag, 2, "Long type tag should be 2");
 
         let dbl_tag = Spi::get_one::<i16>(&format!(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/dbl')
-             AND added = true LIMIT 1", eid
-        )).expect("q").expect("NULL");
+             AND added = true LIMIT 1",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(dbl_tag, 3, "Double type tag should be 3");
 
         let bool_tag = Spi::get_one::<i16>(&format!(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/bool')
-             AND added = true LIMIT 1", eid
-        )).expect("q").expect("NULL");
+             AND added = true LIMIT 1",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(bool_tag, 1, "Boolean type tag should be 1");
 
         let kw_tag = Spi::get_one::<i16>(&format!(
             "SELECT value_type_tag FROM mentat.datoms
              WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/kw')
-             AND added = true LIMIT 1", eid
-        )).expect("q").expect("NULL");
+             AND added = true LIMIT 1",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(kw_tag, 8, "Keyword type tag should be 8");
     }
 
@@ -959,13 +1170,17 @@ mod tests {
             ops.push(format!("[:db/add \"s{}\" :vt/str \"string-{}\"]", i, i));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("batch strings");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch strings");
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/str')
              AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 50);
     }
 
@@ -978,13 +1193,17 @@ mod tests {
             ops.push(format!("[:db/add \"l{}\" :vt/lng {}]", i, i * 100));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("batch longs");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch longs");
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/lng')
              AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 50);
     }
 
@@ -995,16 +1214,24 @@ mod tests {
         let mut ops = Vec::new();
         for i in 0..50 {
             // {:?} keeps the decimal point so 0 -> "0.0" (a valid EDN double).
-            ops.push(format!("[:db/add \"d{}\" :vt/dbl {:?}]", i, (i as f64) * 0.7));
+            ops.push(format!(
+                "[:db/add \"d{}\" :vt/dbl {:?}]",
+                i,
+                (i as f64) * 0.7
+            ));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("batch doubles");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch doubles");
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':vt/dbl')
              AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 50);
     }
 
@@ -1016,12 +1243,19 @@ mod tests {
         for i in 0..25 {
             ops.push(format!(
                 "{{:db/id \"m{}\" :vt/str \"name-{}\" :vt/lng {} :vt/dbl {:?} :vt/bool {}}}",
-                i, i, i, (i as f64) * 1.1, if i % 2 == 0 { "true" } else { "false" }
+                i,
+                i,
+                i,
+                (i as f64) * 1.1,
+                if i % 2 == 0 { "true" } else { "false" }
             ));
         }
         let r = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("batch mixed").expect("NULL");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch mixed")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let tempids = j["tempids"].as_object().expect("tempids");
         assert_eq!(tempids.len(), 25);

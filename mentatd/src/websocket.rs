@@ -35,9 +35,7 @@
 use crate::metrics;
 use crate::protocol::transit_parser::{detect_input_format, parse_transit_json, InputFormat};
 use crate::protocol::transit_serializer::serialize_transit_json;
-use crate::protocol::{
-    parser::parse_request, AnomalyCategory, Response, ResponseValue,
-};
+use crate::protocol::{parser::parse_request, AnomalyCategory, Response, ResponseValue};
 use crate::server::AppState;
 use crate::session::SessionStore;
 use axum::extract::ws::{Message, WebSocket};
@@ -73,10 +71,7 @@ pub fn create_ws_router(state: WsState) -> Router {
 ///
 /// This is the HTTP handler that upgrades an HTTP connection to a WebSocket.
 /// After upgrade, the connection is managed by `handle_ws_connection`.
-pub async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<WsState>,
-) -> impl IntoResponse {
+pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<WsState>) -> impl IntoResponse {
     info!("WebSocket upgrade request received");
     metrics::REQUEST_COUNT.inc();
 
@@ -146,13 +141,20 @@ async fn handle_ws_connection(mut socket: WebSocket, state: WsState) {
                 break;
             }
             Ok(Some(Err(e))) => {
-                error!("WebSocket receive error: session={}, error={}", session_id, e);
+                error!(
+                    "WebSocket receive error: session={}, error={}",
+                    session_id, e
+                );
                 break;
             }
             Ok(Some(Ok(msg))) => {
                 match msg {
                     Message::Text(text) => {
-                        debug!("WebSocket text message: session={}, len={}", session_id, text.len());
+                        debug!(
+                            "WebSocket text message: session={}, len={}",
+                            session_id,
+                            text.len()
+                        );
                         let response = process_ws_message(&text, &state).await;
                         if let Err(e) = socket.send(Message::Text(response.into())).await {
                             error!("WebSocket send error: session={}, error={}", session_id, e);
@@ -175,7 +177,10 @@ async fn handle_ws_connection(mut socket: WebSocket, state: WsState) {
                     Message::Ping(data) => {
                         debug!("WebSocket ping: session={}", session_id);
                         if let Err(e) = socket.send(Message::Pong(data)).await {
-                            error!("WebSocket pong send error: session={}, error={}", session_id, e);
+                            error!(
+                                "WebSocket pong send error: session={}, error={}",
+                                session_id, e
+                            );
                             break;
                         }
                     }
@@ -209,13 +214,12 @@ async fn process_ws_message(text: &str, state: &WsState) -> String {
 
     // Try Transit+JSON first, fall back to EDN
     let format = detect_input_format("application/transit+json");
-    let parse_result = if format == InputFormat::TransitJson
-        && (text.starts_with('[') || text.starts_with('{'))
-    {
-        parse_transit_json(text)
-    } else {
-        parse_request(text)
-    };
+    let parse_result =
+        if format == InputFormat::TransitJson && (text.starts_with('[') || text.starts_with('{')) {
+            parse_transit_json(text)
+        } else {
+            parse_request(text)
+        };
 
     let response = match parse_result {
         Ok(request) => {

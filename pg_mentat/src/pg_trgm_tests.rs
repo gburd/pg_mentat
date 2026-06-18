@@ -29,12 +29,9 @@ mod tests {
 
     fn capture_error(sql: &str) -> String {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._trgm_capture('{}')",
-            escaped
-        ))
-        .expect("capture")
-        .unwrap_or_default()
+        Spi::get_one::<String>(&format!("SELECT mentat._trgm_capture('{}')", escaped))
+            .expect("capture")
+            .unwrap_or_default()
     }
 
     fn has_pg_trgm() -> bool {
@@ -146,16 +143,12 @@ mod tests {
         }
         install_name_attr_with_data();
 
-        let n1 = Spi::get_one::<String>(
-            "SELECT mentat.create_trgm_index(':p/n')",
-        )
-        .expect("first call")
-        .expect("NULL");
-        let n2 = Spi::get_one::<String>(
-            "SELECT mentat.create_trgm_index(':p/n')",
-        )
-        .expect("second call")
-        .expect("NULL");
+        let n1 = Spi::get_one::<String>("SELECT mentat.create_trgm_index(':p/n')")
+            .expect("first call")
+            .expect("NULL");
+        let n2 = Spi::get_one::<String>("SELECT mentat.create_trgm_index(':p/n')")
+            .expect("second call")
+            .expect("NULL");
         assert_eq!(n1, n2, "deterministic index name");
         assert!(n1.starts_with("current_text_trgm_"), "name: {}", n1);
 
@@ -220,9 +213,7 @@ mod tests {
         if !has_pg_trgm() {
             return;
         }
-        let err = capture_error(
-            "SELECT mentat.create_trgm_index(':not/registered')",
-        );
+        let err = capture_error("SELECT mentat.create_trgm_index(':not/registered')");
         assert!(
             err.contains(":db.error/unknown-attribute"),
             "expected unknown-attribute error, got: {}",

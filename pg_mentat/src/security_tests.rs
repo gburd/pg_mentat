@@ -28,15 +28,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     /// Run `sql` in a PL/pgSQL subtransaction and return its SQLERRM (empty
@@ -56,11 +57,9 @@ mod tests {
              $$",
         )
         .expect("create error_msg helper");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._test_error_msg('{}')", escaped
-        ))
-        .expect("error_msg call")
-        .unwrap_or_default()
+        Spi::get_one::<String>(&format!("SELECT mentat._test_error_msg('{}')", escaped))
+            .expect("error_msg call")
+            .unwrap_or_default()
     }
 
     fn setup_test_schema() {
@@ -140,10 +139,8 @@ mod tests {
         setup();
         setup_test_schema();
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :sec/name \"safe\"]]'::TEXT)",
-        )
-        .expect("data failed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sec/name \"safe\"]]'::TEXT)")
+            .expect("data failed");
 
         // Attempt injection via query input
         let result = Spi::get_one::<String>(
@@ -208,9 +205,7 @@ mod tests {
         setup();
         // Extra trailing bracket: run in a subtransaction so a parse error
         // cannot poison the test's outer transaction. Accept either outcome.
-        let _ = error_message(
-            "SELECT mentat_transact('[[:db/add \"e\" :db/ident :test]]]'::TEXT)",
-        );
+        let _ = error_message("SELECT mentat_transact('[[:db/add \"e\" :db/ident :test]]]'::TEXT)");
     }
 
     #[pg_test]
@@ -218,10 +213,7 @@ mod tests {
         setup();
         // Deeply nested EDN that might cause stack overflow
         let deep = "[[[[[[[[[[[[[[[[[[[[\"deep\"]]]]]]]]]]]]]]]]]]]]";
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_transact('{}'::TEXT)",
-            deep
-        ));
+        let result = Spi::get_one::<String>(&format!("SELECT mentat_transact('{}'::TEXT)", deep));
         // Should handle without stack overflow
         drop(result);
     }
@@ -329,10 +321,8 @@ mod tests {
         setup_test_schema();
 
         // Max i64 that EDN can represent (may be parser limited)
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :sec/val 9223372036854775]]'::TEXT)",
-        )
-        .expect("large long failed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sec/val 9223372036854775]]'::TEXT)")
+            .expect("large long failed");
     }
 
     #[pg_test]
@@ -340,10 +330,8 @@ mod tests {
         setup();
         setup_test_schema();
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :sec/val -9223372036854775]]'::TEXT)",
-        )
-        .expect("negative long failed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sec/val -9223372036854775]]'::TEXT)")
+            .expect("negative long failed");
     }
 
     #[pg_test]
@@ -361,9 +349,7 @@ mod tests {
 
         // NaN should be rejected or handled. Run in a subtransaction so a
         // raised error cannot poison the test's outer transaction.
-        let _ = error_message(
-            "SELECT mentat_transact('[[:db/add \"e\" :sec/dbl ##NaN]]'::TEXT)",
-        );
+        let _ = error_message("SELECT mentat_transact('[[:db/add \"e\" :sec/dbl ##NaN]]'::TEXT)");
     }
 
     // ========================================================================
@@ -375,10 +361,8 @@ mod tests {
         setup();
         setup_test_schema();
 
-        Spi::run(
-            r#"SELECT mentat_transact('[[:db/add "e" :sec/name "test 🎉🚀💯"]]'::TEXT)"#,
-        )
-        .expect("emoji string failed");
+        Spi::run(r#"SELECT mentat_transact('[[:db/add "e" :sec/name "test 🎉🚀💯"]]'::TEXT)"#)
+            .expect("emoji string failed");
 
         let v = Spi::get_one::<String>(
             "SELECT v_text FROM mentat.datoms
@@ -397,10 +381,8 @@ mod tests {
         setup_test_schema();
 
         // Zero-width joiner and similar invisible chars
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :sec/name \"a\u{200D}b\"]]'::TEXT)",
-        )
-        .expect("zero-width char failed");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sec/name \"a\u{200D}b\"]]'::TEXT)")
+            .expect("zero-width char failed");
     }
 
     #[pg_test]
@@ -408,10 +390,8 @@ mod tests {
         setup();
         setup_test_schema();
 
-        Spi::run(
-            r#"SELECT mentat_transact('[[:db/add "e" :sec/name "مرحبا بالعالم"]]'::TEXT)"#,
-        )
-        .expect("RTL text failed");
+        Spi::run(r#"SELECT mentat_transact('[[:db/add "e" :sec/name "مرحبا بالعالم"]]'::TEXT)"#)
+            .expect("RTL text failed");
 
         let v = Spi::get_one::<String>(
             "SELECT v_text FROM mentat.datoms
@@ -498,11 +478,10 @@ mod tests {
         }
 
         // All 10 should be queryable
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':seq/%'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident LIKE ':seq/%'")
+                .expect("query failed")
+                .expect("NULL");
 
         assert_eq!(count, 10);
     }

@@ -203,7 +203,10 @@ async fn ws_send_recv(
         .expect("Stream ended")
         .expect("Read error");
 
-    response.into_text().expect("Expected text response").to_string()
+    response
+        .into_text()
+        .expect("Expected text response")
+        .to_string()
 }
 
 /// A simple :health operation should return a success result over WebSocket.
@@ -212,12 +215,7 @@ async fn test_ws_health_operation() {
     let server = TestServer::start().await;
     let (mut write, mut read) = ws_connect(&server).await;
 
-    let response = ws_send_recv(
-        &mut write,
-        &mut read,
-        r#"["^ ","~:op","~:health"]"#,
-    )
-    .await;
+    let response = ws_send_recv(&mut write, &mut read, r#"["^ ","~:op","~:health"]"#).await;
 
     assert!(
         response.contains("result") && response.contains("healthy"),
@@ -255,12 +253,7 @@ async fn test_ws_list_dbs_operation() {
     let server = TestServer::start().await;
     let (mut write, mut read) = ws_connect(&server).await;
 
-    let response = ws_send_recv(
-        &mut write,
-        &mut read,
-        r#"["^ ","~:op","~:list-dbs"]"#,
-    )
-    .await;
+    let response = ws_send_recv(&mut write, &mut read, r#"["^ ","~:op","~:list-dbs"]"#).await;
 
     assert_valid_ws_response(&response, "list-dbs");
 }
@@ -271,12 +264,7 @@ async fn test_ws_basis_t_operation() {
     let server = TestServer::start().await;
     let (mut write, mut read) = ws_connect(&server).await;
 
-    let response = ws_send_recv(
-        &mut write,
-        &mut read,
-        r#"["^ ","~:op","~:basis-t"]"#,
-    )
-    .await;
+    let response = ws_send_recv(&mut write, &mut read, r#"["^ ","~:op","~:basis-t"]"#).await;
 
     assert_valid_ws_response(&response, "basis-t");
 }
@@ -336,12 +324,7 @@ async fn test_ws_mixed_format_operations() {
     assert_valid_ws_response(&r2, "EDN health");
 
     // Transit+JSON again
-    let r3 = ws_send_recv(
-        &mut write,
-        &mut read,
-        r#"["^ ","~:op","~:list-dbs"]"#,
-    )
-    .await;
+    let r3 = ws_send_recv(&mut write, &mut read, r#"["^ ","~:op","~:list-dbs"]"#).await;
     assert_valid_ws_response(&r3, "Transit+JSON list-dbs");
 }
 
@@ -375,8 +358,7 @@ async fn test_ws_malformed_message_returns_error() {
     let server = TestServer::start().await;
     let (mut write, mut read) = ws_connect(&server).await;
 
-    let response =
-        ws_send_recv(&mut write, &mut read, "this is not valid json or edn {{{{").await;
+    let response = ws_send_recv(&mut write, &mut read, "this is not valid json or edn {{{{").await;
 
     assert!(
         response.contains("error") || response.contains("anomal"),
@@ -400,12 +382,7 @@ async fn test_ws_connection_survives_error() {
     );
 
     // Connection should still work
-    let ok_response = ws_send_recv(
-        &mut write,
-        &mut read,
-        r#"["^ ","~:op","~:health"]"#,
-    )
-    .await;
+    let ok_response = ws_send_recv(&mut write, &mut read, r#"["^ ","~:op","~:health"]"#).await;
     assert!(
         ok_response.contains("healthy"),
         "Connection should still work after error: {}",
@@ -493,10 +470,7 @@ async fn test_ws_multiple_request_ids() {
 
     let ids = ["req-001", "req-002", "req-003"];
     for id in &ids {
-        let request = format!(
-            r#"["^ ","~:op","~:health","~:request-id","{}"]"#,
-            id
-        );
+        let request = format!(r#"["^ ","~:op","~:health","~:request-id","{}"]"#, id);
         let response = ws_send_recv(&mut write, &mut read, &request).await;
         assert!(
             response.contains(id),
@@ -632,15 +606,9 @@ mod session_unit_tests {
         let store = SessionStore::new(Duration::from_secs(300));
         let session = store.create("db".to_string()).await;
 
-        store
-            .add_snapshot(&session.id, "s1".to_string(), 100)
-            .await;
-        store
-            .add_snapshot(&session.id, "s2".to_string(), 200)
-            .await;
-        store
-            .add_snapshot(&session.id, "s3".to_string(), 300)
-            .await;
+        store.add_snapshot(&session.id, "s1".to_string(), 100).await;
+        store.add_snapshot(&session.id, "s2".to_string(), 200).await;
+        store.add_snapshot(&session.id, "s3".to_string(), 300).await;
 
         let s = store.get(&session.id).await.unwrap();
         assert_eq!(s.get_snapshot("s1"), Some(100));

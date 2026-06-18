@@ -59,11 +59,9 @@ mod tests {
     fn pg_test_inf_create_vertex_view_string_attr() {
         setup();
         install_basic_schema();
-        let v = Spi::get_one::<String>(
-            "SELECT mentat.create_vertex_view(':person/name')",
-        )
-        .expect("create")
-        .expect("NULL");
+        let v = Spi::get_one::<String>("SELECT mentat.create_vertex_view(':person/name')")
+            .expect("create")
+            .expect("NULL");
         assert!(v.starts_with("mentat.v_"), "got: {}", v);
 
         // Verify the view is queryable.
@@ -74,11 +72,9 @@ mod tests {
     fn pg_test_inf_create_edge_view_ref_attr() {
         setup();
         install_basic_schema();
-        let v = Spi::get_one::<String>(
-            "SELECT mentat.create_edge_view(':person/employer')",
-        )
-        .expect("create")
-        .expect("NULL");
+        let v = Spi::get_one::<String>("SELECT mentat.create_edge_view(':person/employer')")
+            .expect("create")
+            .expect("NULL");
         assert!(v.starts_with("mentat.e_"));
     }
 
@@ -147,8 +143,10 @@ mod tests {
     #[pg_test]
     fn pg_test_inf_timescale_attach_without_extension() {
         setup();
-        let has =
-            Spi::get_one::<bool>("SELECT mentat.has_timescaledb()").ok().flatten().unwrap_or(false);
+        let has = Spi::get_one::<bool>("SELECT mentat.has_timescaledb()")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
         if has {
             return;
         }
@@ -178,15 +176,16 @@ mod tests {
     #[pg_test]
     fn pg_test_inf_partman_attach_rejects_plain_table() {
         setup();
-        let has =
-            Spi::get_one::<bool>("SELECT mentat.has_pg_partman()").ok().flatten().unwrap_or(false);
+        let has = Spi::get_one::<bool>("SELECT mentat.has_pg_partman()")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
         if !has {
             return;
         }
         let err = capture_error("SELECT mentat.partman_attach_transactions()");
         assert!(
-            err.contains(":db.error/manual-step")
-                && err.contains("not a partitioned table"),
+            err.contains(":db.error/manual-step") && err.contains("not a partitioned table"),
             "expected manual-step error, got: {}",
             err,
         );
@@ -195,14 +194,14 @@ mod tests {
     #[pg_test]
     fn pg_test_inf_partman_set_retention_without_attach() {
         setup();
-        let has =
-            Spi::get_one::<bool>("SELECT mentat.has_pg_partman()").ok().flatten().unwrap_or(false);
+        let has = Spi::get_one::<bool>("SELECT mentat.has_pg_partman()")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
         if !has {
             return;
         }
-        let err = capture_error(
-            "SELECT mentat.partman_set_transaction_retention('30 days')",
-        );
+        let err = capture_error("SELECT mentat.partman_set_transaction_retention('30 days')");
         // Either missing-config (transactions not registered) or another
         // pg_partman-side error; we just verify it surfaces something.
         assert!(
@@ -226,14 +225,14 @@ mod tests {
     #[pg_test]
     fn pg_test_inf_cron_schedule_without_extension() {
         setup();
-        let has =
-            Spi::get_one::<bool>("SELECT mentat.has_pg_cron()").ok().flatten().unwrap_or(false);
+        let has = Spi::get_one::<bool>("SELECT mentat.has_pg_cron()")
+            .ok()
+            .flatten()
+            .unwrap_or(false);
         if has {
             return;
         }
-        let err = capture_error(
-            "SELECT mentat.cron_schedule('test', '* * * * *', 'SELECT 1')",
-        );
+        let err = capture_error("SELECT mentat.cron_schedule('test', '* * * * *', 'SELECT 1')");
         assert!(
             err.contains(":db.error/missing-extension") && err.contains("pg_cron"),
             "expected missing-extension pg_cron error, got: {}",

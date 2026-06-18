@@ -55,7 +55,8 @@ fn excise_internal(
                 ":db.error/excision-denied Cannot excise schema entity {}. \
                  Schema entities (entid < 10000) are protected from excision.",
                 eid
-            ).into());
+            )
+            .into());
         }
 
         // Verify partition allows excision for this entity
@@ -77,12 +78,17 @@ fn excise_internal(
                  The partition containing this entity has allow_excision = false. \
                  Use: UPDATE mentat.partitions SET allow_excision = true WHERE ...",
                 eid
-            ).into());
+            )
+            .into());
         }
     }
 
     // Check for dangling references: other entities that reference the excised entities
-    let eid_list: String = entity_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+    let eid_list: String = entity_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
 
     let ref_count = Spi::get_one::<i64>(&format!(
         "SELECT COUNT(*) FROM mentat.datoms_ref_new \
@@ -117,9 +123,15 @@ fn excise_internal(
 
     // Perform the excision: DELETE from all 9 typed tables
     let tables = [
-        "datoms_ref_new", "datoms_boolean_new", "datoms_long_new",
-        "datoms_double_new", "datoms_instant_new", "datoms_text_new",
-        "datoms_keyword_new", "datoms_uuid_new", "datoms_bytes_new",
+        "datoms_ref_new",
+        "datoms_boolean_new",
+        "datoms_long_new",
+        "datoms_double_new",
+        "datoms_instant_new",
+        "datoms_text_new",
+        "datoms_keyword_new",
+        "datoms_uuid_new",
+        "datoms_bytes_new",
     ];
 
     let mut total_datoms_removed: i64 = 0;

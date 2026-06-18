@@ -17,6 +17,5 @@ pub mod hooks;
 
 pub use hooks::init_planner_hooks;
 pub use hooks::{
-    default_work_mem, max_result_rows, optimizer_hints_enabled,
-    query_timeout_ms, temp_file_limit,
+    default_work_mem, max_result_rows, optimizer_hints_enabled, query_timeout_ms, temp_file_limit,
 };

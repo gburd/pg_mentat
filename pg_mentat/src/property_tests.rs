@@ -37,12 +37,9 @@ mod tests {
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')",
-            escaped
-        ))
-        .expect("raises_error call")
-        .unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_prop_schema() {
@@ -165,11 +162,10 @@ mod tests {
     fn test_prop_long_roundtrip_zero() {
         setup();
         setup_prop_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/num 0]]'::TEXT)",
-        )
-        .expect("tx")
-        .expect("NULL");
+        let result =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :prop/num 0]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let r: serde_json::Value = serde_json::from_str(&result).expect("parse");
         let eid = r["tempids"]["e"].as_i64().expect("eid");
         let qr = Spi::get_one::<String>(&format!(
@@ -210,7 +206,15 @@ mod tests {
     fn test_prop_long_roundtrip_negative_range() {
         setup();
         setup_prop_schema();
-        for &val in &[-1i64, -42, -100, -1000, -1_000_000, -1_000_000_000, i64::MIN] {
+        for &val in &[
+            -1i64,
+            -42,
+            -100,
+            -1000,
+            -1_000_000,
+            -1_000_000_000,
+            i64::MIN,
+        ] {
             let label = format!("en{}", val.unsigned_abs());
             let result = Spi::get_one::<String>(&format!(
                 "SELECT mentat_transact('[[:db/add \"{}\" :prop/num {}]]'::TEXT)",
@@ -260,7 +264,8 @@ mod tests {
             let json: serde_json::Value = serde_json::from_str(&qr).expect("parse");
             let retrieved = json["result"].as_f64().expect("dbl");
             assert!(
-                (retrieved - val).abs() < 1e-6 || (val != 0.0 && ((retrieved - val) / val).abs() < 1e-6),
+                (retrieved - val).abs() < 1e-6
+                    || (val != 0.0 && ((retrieved - val) / val).abs() < 1e-6),
                 "Expected {} got {}",
                 val,
                 retrieved
@@ -332,16 +337,13 @@ mod tests {
             .expect("tx")
             .expect("NULL");
             let r: serde_json::Value = serde_json::from_str(&result).expect("parse");
-            let tx = r["tx"].as_i64().unwrap_or_else(|| r["db-after"].as_i64().unwrap_or(0));
+            let tx = r["tx"]
+                .as_i64()
+                .unwrap_or_else(|| r["db-after"].as_i64().unwrap_or(0));
 
             // If we can extract tx, verify monotonicity
             if tx > 0 && prev_tx > 0 {
-                assert!(
-                    tx > prev_tx,
-                    "tx {} should be > prev_tx {}",
-                    tx,
-                    prev_tx
-                );
+                assert!(tx > prev_tx, "tx {} should be > prev_tx {}", tx, prev_tx);
             }
             if tx > 0 {
                 prev_tx = tx;
@@ -358,11 +360,10 @@ mod tests {
         setup();
         setup_prop_schema();
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :prop/num 0]]'::TEXT)",
-        )
-        .expect("tx")
-        .expect("NULL");
+        let result =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :prop/num 0]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let r: serde_json::Value = serde_json::from_str(&result).expect("parse");
         let eid = r["tempids"]["e"].as_i64().expect("eid");
 
@@ -395,7 +396,10 @@ mod tests {
         ))
         .expect("q")
         .expect("NULL");
-        assert_eq!(count, 1, "Should have exactly 1 active datom for cardinality-one");
+        assert_eq!(
+            count, 1,
+            "Should have exactly 1 active datom for cardinality-one"
+        );
     }
 
     // ========================================================================
@@ -607,14 +611,14 @@ mod tests {
         setup();
         setup_prop_schema();
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e1\" :prop/code \"CODE-001\"]]'::TEXT)",
-        )
-        .expect("first insert");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :prop/code \"CODE-001\"]]'::TEXT)")
+            .expect("first insert");
 
         // Second entity with same unique-value code should fail
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :prop/code \"CODE-001\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e2\" :prop/code \"CODE-001\"]]'::TEXT)"
+            ),
             "Duplicate unique-value should be rejected"
         );
     }
@@ -663,11 +667,10 @@ mod tests {
         setup_prop_schema();
 
         // Count entities before
-        let before = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true",
-        )
-        .expect("q")
-        .expect("NULL");
+        let before =
+            Spi::get_one::<i64>("SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true")
+                .expect("q")
+                .expect("NULL");
 
         // Attempt a transaction with a valid op followed by invalid op
         assert!(
@@ -676,12 +679,14 @@ mod tests {
         );
 
         // Count after - should be same as before (rolled back)
-        let after = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true",
-        )
-        .expect("q")
-        .expect("NULL");
-        assert_eq!(before, after, "Failed transaction should roll back completely");
+        let after =
+            Spi::get_one::<i64>("SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE added = true")
+                .expect("q")
+                .expect("NULL");
+        assert_eq!(
+            before, after,
+            "Failed transaction should roll back completely"
+        );
     }
 
     // ========================================================================
@@ -919,11 +924,11 @@ mod tests {
         setup_prop_schema();
 
         let unicode_strings = vec![
-            ("u0", "Hello World"),           // ASCII
-            ("u1", "cafe\u{0301}"),           // Combining accent (NFD)
-            ("u2", "Tokyo"),                  // ASCII representation
-            ("u3", "Привет"),                  // Cyrillic
-            ("u4", "مرحبا"),                   // Arabic
+            ("u0", "Hello World"),  // ASCII
+            ("u1", "cafe\u{0301}"), // Combining accent (NFD)
+            ("u2", "Tokyo"),        // ASCII representation
+            ("u3", "Привет"),       // Cyrillic
+            ("u4", "مرحبا"),        // Arabic
         ];
 
         for (label, val) in &unicode_strings {
@@ -960,7 +965,9 @@ mod tests {
         setup();
         setup_prop_schema();
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/num \"not-a-number\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :prop/num \"not-a-number\"]]'::TEXT)"
+            ),
             "String to long attr should fail"
         );
     }
@@ -980,7 +987,9 @@ mod tests {
         setup();
         setup_prop_schema();
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/flag \"not-a-bool\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :prop/flag \"not-a-bool\"]]'::TEXT)"
+            ),
             "String to boolean attr should fail"
         );
     }
@@ -990,7 +999,9 @@ mod tests {
         setup();
         setup_prop_schema();
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e\" :prop/dbl \"not-a-double\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :prop/dbl \"not-a-double\"]]'::TEXT)"
+            ),
             "String to double attr should fail"
         );
     }
@@ -1044,10 +1055,7 @@ mod tests {
         assert_eq!(tempids.len(), n);
 
         // Verify all IDs are unique
-        let mut ids: Vec<i64> = tempids
-            .values()
-            .map(|v| v.as_i64().expect("eid"))
-            .collect();
+        let mut ids: Vec<i64> = tempids.values().map(|v| v.as_i64().expect("eid")).collect();
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), n, "All entity IDs should be unique");
@@ -1088,7 +1096,11 @@ mod tests {
         ))
         .expect("q")
         .expect("NULL");
-        assert!(before >= 7, "Should have at least 7 active facts, got {}", before);
+        assert!(
+            before >= 7,
+            "Should have at least 7 active facts, got {}",
+            before
+        );
 
         // Retract entire entity
         Spi::run(&format!(
@@ -1104,6 +1116,10 @@ mod tests {
         ))
         .expect("q")
         .expect("NULL");
-        assert!(retractions >= before, "Should have at least {} retraction datoms", before);
+        assert!(
+            retractions >= before,
+            "Should have at least {} retraction datoms",
+            before
+        );
     }
 }

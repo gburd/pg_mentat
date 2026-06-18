@@ -22,17 +22,18 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     /// Check if a SQL statement raises an error by executing it in a PL/pgSQL
     /// exception handler (which provides subtransaction isolation).
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     /// Run `sql` in a PL/pgSQL subtransaction and return its SQLERRM (empty
@@ -52,11 +53,9 @@ mod tests {
              $$",
         )
         .expect("create error_msg helper");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._test_error_msg('{}')", escaped
-        ))
-        .expect("error_msg call")
-        .unwrap_or_default()
+        Spi::get_one::<String>(&format!("SELECT mentat._test_error_msg('{}')", escaped))
+            .expect("error_msg call")
+            .unwrap_or_default()
     }
 
     // ========================================================================
@@ -75,9 +74,8 @@ mod tests {
         )
         .expect("schema");
 
-        let msg = error_message(
-            "SELECT mentat_transact('[[:db/add \"e\" :err/namee \"typo\"]]'::TEXT)",
-        );
+        let msg =
+            error_message("SELECT mentat_transact('[[:db/add \"e\" :err/namee \"typo\"]]'::TEXT)");
 
         assert!(
             msg.contains("attribute") || msg.contains("not found"),
@@ -89,7 +87,9 @@ mod tests {
     #[pg_test]
     fn test_error_completely_unknown_attribute() {
         setup();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :zzz/nonexistent \"val\"]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :zzz/nonexistent \"val\"]]'::TEXT)"
+        ));
     }
 
     // ========================================================================
@@ -108,7 +108,9 @@ mod tests {
         )
         .expect("schema");
 
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :err/count \"not-a-number\"]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :err/count \"not-a-number\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
@@ -123,7 +125,9 @@ mod tests {
         )
         .expect("schema");
 
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :err/label 42]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :err/label 42]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
@@ -138,7 +142,9 @@ mod tests {
         )
         .expect("schema");
 
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :err/flag \"yes\"]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :err/flag \"yes\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
@@ -154,7 +160,9 @@ mod tests {
         .expect("schema");
 
         // A float for a ref attribute should fail
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :err/link 3.14]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :err/link 3.14]]'::TEXT)"
+        ));
     }
 
     // ========================================================================
@@ -173,10 +181,12 @@ mod tests {
         )
         .expect("schema");
 
-        assert!(raises_error("SELECT mentat_transact('[
+        assert!(raises_error(
+            "SELECT mentat_transact('[
                 [:db/add \"e\" :err/single \"first\"]
                 [:db/add \"e\" :err/single \"second\"]
-            ]'::TEXT)"));
+            ]'::TEXT)"
+        ));
     }
 
     #[pg_test]
@@ -191,11 +201,13 @@ mod tests {
         )
         .expect("schema");
 
-        assert!(raises_error("SELECT mentat_transact('[
+        assert!(raises_error(
+            "SELECT mentat_transact('[
                 [:db/add \"e\" :err/single3 1]
                 [:db/add \"e\" :err/single3 2]
                 [:db/add \"e\" :err/single3 3]
-            ]'::TEXT)"));
+            ]'::TEXT)"
+        ));
     }
 
     // ========================================================================
@@ -205,7 +217,9 @@ mod tests {
     #[pg_test]
     fn test_error_tx_not_a_vector() {
         setup();
-        assert!(raises_error("SELECT mentat_transact('{:not \"a vector\"}'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('{:not \"a vector\"}'::TEXT)"
+        ));
     }
 
     #[pg_test]
@@ -217,13 +231,17 @@ mod tests {
     #[pg_test]
     fn test_error_tx_too_few_args_in_assertion() {
         setup();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_error_tx_unknown_operation() {
         setup();
-        assert!(raises_error("SELECT mentat_transact('[[:db/unknown \"e\" :db/ident :test]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/unknown \"e\" :db/ident :test]]'::TEXT)"
+        ));
     }
 
     // ========================================================================
@@ -233,25 +251,33 @@ mod tests {
     #[pg_test]
     fn test_error_query_no_find() {
         setup();
-        assert!(raises_error("SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"));
+        assert!(raises_error(
+            "SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_error_query_no_where() {
         setup();
-        assert!(raises_error("SELECT mentat_query('[:find ?e]'::TEXT, '{}'::jsonb)::TEXT"));
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?e]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_error_query_invalid_edn() {
         setup();
-        assert!(raises_error("SELECT mentat_query('not valid'::TEXT, '{}'::jsonb)::TEXT"));
+        assert!(raises_error(
+            "SELECT mentat_query('not valid'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_error_query_not_a_vector() {
         setup();
-        assert!(raises_error("SELECT mentat_query('{:find ?e :where [?e :db/ident _]}'::TEXT, '{}'::jsonb)::TEXT"));
+        assert!(raises_error(
+            "SELECT mentat_query('{:find ?e :where [?e :db/ident _]}'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     // ========================================================================
@@ -267,7 +293,9 @@ mod tests {
     #[pg_test]
     fn test_error_pull_not_a_vector() {
         setup();
-        assert!(raises_error("SELECT mentat_pull('{:key \"val\"}'::TEXT, 1)"));
+        assert!(raises_error(
+            "SELECT mentat_pull('{:key \"val\"}'::TEXT, 1)"
+        ));
     }
 
     // ========================================================================
@@ -287,12 +315,12 @@ mod tests {
         )
         .expect("schema");
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e1\" :err/code \"ABC123\"]]'::TEXT)",
-        )
-        .expect("first insert");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :err/code \"ABC123\"]]'::TEXT)")
+            .expect("first insert");
 
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e2\" :err/code \"ABC123\"]]'::TEXT)"));
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e2\" :err/code \"ABC123\"]]'::TEXT)"
+        ));
     }
 
     // ========================================================================
@@ -321,7 +349,8 @@ mod tests {
         let eid = r["tempids"]["e"].as_i64().expect("eid");
 
         assert!(raises_error(&format!(
-            "SELECT mentat_transact('[[:db.fn/cas {} :err/casv \"wrong\" \"new\"]]'::TEXT)", eid
+            "SELECT mentat_transact('[[:db.fn/cas {} :err/casv \"wrong\" \"new\"]]'::TEXT)",
+            eid
         )));
     }
 
@@ -345,10 +374,12 @@ mod tests {
         .expect("schema");
 
         // This transaction has a valid add followed by an invalid type mismatch
-        assert!(raises_error("SELECT mentat_transact('[
+        assert!(raises_error(
+            "SELECT mentat_transact('[
                 [:db/add \"e\" :err/aname \"valid\"]
                 [:db/add \"e\" :err/acount \"not-a-number\"]
-            ]'::TEXT)"));
+            ]'::TEXT)"
+        ));
 
         // The valid part should NOT have been committed (atomicity)
         let count = Spi::get_one::<i64>(
@@ -370,9 +401,7 @@ mod tests {
     fn test_empty_transaction_vector() {
         setup();
         // Empty vector should succeed (no-op transaction)
-        let _result = Spi::get_one::<String>(
-            "SELECT mentat_transact('[]'::TEXT)",
-        );
+        let _result = Spi::get_one::<String>("SELECT mentat_transact('[]'::TEXT)");
     }
 
     #[pg_test]

@@ -266,8 +266,7 @@ pub fn mentat_reset_stats() -> &'static str {
 /// SELECT * FROM mentat_index_health();
 /// ```
 #[pg_extern]
-pub fn mentat_index_health(
-) -> Result<
+pub fn mentat_index_health() -> Result<
     TableIterator<
         'static,
         (

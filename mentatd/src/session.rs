@@ -177,7 +177,10 @@ mod tests {
         let session = store.create("test-db".to_string()).await;
         let retrieved = store.get(&session.id).await;
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.as_ref().map(|s| &s.db_name), Some(&"test-db".to_string()));
+        assert_eq!(
+            retrieved.as_ref().map(|s| &s.db_name),
+            Some(&"test-db".to_string())
+        );
     }
 
     #[tokio::test]

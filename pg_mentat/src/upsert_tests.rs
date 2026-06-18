@@ -18,15 +18,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_upsert_schema() {
@@ -49,9 +50,11 @@ mod tests {
 
     #[pg_test]
     fn test_up_basic_upsert() {
-        setup(); setup_upsert_schema();
+        setup();
+        setup_upsert_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U1\" :up/name \"Alice\" :up/val 10}]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U1\" :up/val 20}]'::TEXT)").expect("upsert");
+        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U1\" :up/val 20}]'::TEXT)")
+            .expect("upsert");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :up/uid \"U1\"] [?e :up/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -61,9 +64,11 @@ mod tests {
 
     #[pg_test]
     fn test_up_upsert_preserves_unmentioned_attrs() {
-        setup(); setup_upsert_schema();
+        setup();
+        setup_upsert_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U2\" :up/name \"Bob\" :up/val 10 :up/flag true}]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U2\" :up/val 20}]'::TEXT)").expect("upsert");
+        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U2\" :up/val 20}]'::TEXT)")
+            .expect("upsert");
 
         // Name and flag should still be there
         let q = Spi::get_one::<String>(
@@ -78,20 +83,28 @@ mod tests {
 
     #[pg_test]
     fn test_up_upsert_entity_count_stable() {
-        setup(); setup_upsert_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U3\" :up/name \"Carol\"}]'::TEXT)").expect("create");
+        setup();
+        setup_upsert_schema();
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e\" :up/uid \"U3\" :up/name \"Carol\"}]'::TEXT)",
+        )
+        .expect("create");
 
         for i in 0..10 {
             Spi::run(&format!(
-                "SELECT mentat_transact('[{{:db/id \"u\" :up/uid \"U3\" :up/val {}}}]'::TEXT)", i
-            )).expect("upsert");
+                "SELECT mentat_transact('[{{:db/id \"u\" :up/uid \"U3\" :up/val {}}}]'::TEXT)",
+                i
+            ))
+            .expect("upsert");
         }
 
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':up/uid')
              AND v_text = 'U3' AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 1, "10 upserts should not create additional entities");
     }
 
@@ -101,16 +114,23 @@ mod tests {
 
     #[pg_test]
     fn test_up_two_upserts_same_tx() {
-        setup(); setup_upsert_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_upsert_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :up/uid \"MA\" :up/name \"Alice\"}
             {:db/id \"e2\" :up/uid \"MB\" :up/name \"Bob\"}
-        ]'::TEXT)").expect("create");
+        ]'::TEXT)",
+        )
+        .expect("create");
 
-        Spi::run("SELECT mentat_transact('[
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"u1\" :up/uid \"MA\" :up/val 100}
             {:db/id \"u2\" :up/uid \"MB\" :up/val 200}
-        ]'::TEXT)").expect("upsert both");
+        ]'::TEXT)",
+        )
+        .expect("upsert both");
 
         let qa = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :up/uid \"MA\"] [?e :up/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -131,8 +151,12 @@ mod tests {
 
     #[pg_test]
     fn test_up_upsert_adds_to_many() {
-        setup(); setup_upsert_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"UT1\" :up/name \"Tagged\"}]'::TEXT)").expect("create");
+        setup();
+        setup_upsert_schema();
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e\" :up/uid \"UT1\" :up/name \"Tagged\"}]'::TEXT)",
+        )
+        .expect("create");
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :up/uid \"UT1\"} [:db/add \"e\" :up/tags \"tag1\"] [:db/add \"e\" :up/tags \"tag2\"]]'::TEXT)").expect("upsert tags");
 
         let q = Spi::get_one::<String>(
@@ -148,8 +172,10 @@ mod tests {
 
     #[pg_test]
     fn test_up_unique_value_rejects_duplicate() {
-        setup(); setup_upsert_schema();
-        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :up/code \"C1\"]]'::TEXT)").expect("first");
+        setup();
+        setup_upsert_schema();
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :up/code \"C1\"]]'::TEXT)")
+            .expect("first");
         assert!(
             raises_error("SELECT mentat_transact('[[:db/add \"e2\" :up/code \"C1\"]]'::TEXT)"),
             "unique/value should reject duplicate"
@@ -158,9 +184,16 @@ mod tests {
 
     #[pg_test]
     fn test_up_unique_identity_upserts() {
-        setup(); setup_upsert_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :up/uid \"I1\" :up/name \"First\"}]'::TEXT)").expect("first");
-        Spi::run("SELECT mentat_transact('[{:db/id \"e2\" :up/uid \"I1\" :up/name \"Second\"}]'::TEXT)").expect("upsert");
+        setup();
+        setup_upsert_schema();
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e1\" :up/uid \"I1\" :up/name \"First\"}]'::TEXT)",
+        )
+        .expect("first");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e2\" :up/uid \"I1\" :up/name \"Second\"}]'::TEXT)",
+        )
+        .expect("upsert");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :up/uid \"I1\"] [?e :up/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -175,12 +208,16 @@ mod tests {
 
     #[pg_test]
     fn test_up_new_uid_creates_entity() {
-        setup(); setup_upsert_schema();
+        setup();
+        setup_upsert_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :up/uid \"NEW1\" :up/name \"New Entity\"}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-        assert!(j["tempids"]["e"].as_i64().is_some(), "New UID should create new entity");
+        assert!(
+            j["tempids"]["e"].as_i64().is_some(),
+            "New UID should create new entity"
+        );
     }
 
     // ========================================================================
@@ -189,7 +226,8 @@ mod tests {
 
     #[pg_test]
     fn test_up_batch_upsert_10() {
-        setup(); setup_upsert_schema();
+        setup();
+        setup_upsert_schema();
 
         // Create 10 entities
         let mut create_ops = Vec::new();
@@ -199,7 +237,11 @@ mod tests {
                 i = i
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", create_ops.join("\n"))).expect("create");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            create_ops.join("\n")
+        ))
+        .expect("create");
 
         // Upsert all 10
         let mut upsert_ops = Vec::new();
@@ -209,14 +251,20 @@ mod tests {
                 100 + i
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", upsert_ops.join("\n"))).expect("upsert");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            upsert_ops.join("\n")
+        ))
+        .expect("upsert");
 
         // Verify entity count
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':up/uid')
              AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 10, "Batch upsert should not create duplicates");
 
         // Spot check one value

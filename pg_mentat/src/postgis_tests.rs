@@ -199,14 +199,16 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        let n1 =
-            Spi::get_one::<String>("SELECT mentat.attach_geometry_attribute(':p/loc', 4326, 'POINT')")
-                .expect("attach 1")
-                .expect("NULL");
-        let n2 =
-            Spi::get_one::<String>("SELECT mentat.attach_geometry_attribute(':p/loc', 4326, 'POINT')")
-                .expect("attach 2")
-                .expect("NULL");
+        let n1 = Spi::get_one::<String>(
+            "SELECT mentat.attach_geometry_attribute(':p/loc', 4326, 'POINT')",
+        )
+        .expect("attach 1")
+        .expect("NULL");
+        let n2 = Spi::get_one::<String>(
+            "SELECT mentat.attach_geometry_attribute(':p/loc', 4326, 'POINT')",
+        )
+        .expect("attach 2")
+        .expect("NULL");
         assert_eq!(n1, n2);
         assert!(n1.starts_with("mentat.attr_"));
     }
@@ -226,8 +228,7 @@ mod tests {
         .expect("schema tx");
         Spi::run("SELECT mentat.attach_geometry_attribute(':p/loc', 4326, 'POINT')")
             .expect("attach");
-        Spi::run("SELECT mentat.set_geometry(99999, ':p/loc', 'POINT(1 2)', 4326)")
-            .expect("set");
+        Spi::run("SELECT mentat.set_geometry(99999, ':p/loc', 'POINT(1 2)', 4326)").expect("set");
         let dropped = Spi::get_one::<bool>("SELECT mentat.del_geometry(99999, ':p/loc')")
             .expect("del 1")
             .expect("NULL");
@@ -246,11 +247,9 @@ mod tests {
             return;
         }
         install_places_with_geometry();
-        let n = Spi::get_one::<String>(
-            "SELECT mentat.create_gist_geometry_index(':place/loc')",
-        )
-        .expect("create")
-        .expect("NULL");
+        let n = Spi::get_one::<String>("SELECT mentat.create_gist_geometry_index(':place/loc')")
+            .expect("create")
+            .expect("NULL");
         assert!(n.starts_with("attr_"));
         assert!(n.ends_with("_geom_gist"));
     }
@@ -296,9 +295,7 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        let err = capture_error(
-            "SELECT mentat.attach_geometry_attribute(':p/g', 4326, 'BANANA')",
-        );
+        let err = capture_error("SELECT mentat.attach_geometry_attribute(':p/g', 4326, 'BANANA')");
         assert!(
             err.contains(":db.error/fn-arg") && err.contains("BANANA"),
             "expected fn-arg geom_type error, got: {}",

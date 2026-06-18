@@ -189,13 +189,8 @@ pub fn diff(
 
     if from_tx >= to_tx {
         return Err(Box::new(crate::error::MentatError::InvalidQuery {
-            message: format!(
-                "from_tx ({}) must be less than to_tx ({})",
-                from_tx, to_tx
-            ),
-            suggestion: Some(
-                "Swap the transaction IDs so from_tx < to_tx.".to_string(),
-            ),
+            message: format!("from_tx ({}) must be less than to_tx ({})", from_tx, to_tx),
+            suggestion: Some("Swap the transaction IDs so from_tx < to_tx.".to_string()),
         }));
     }
 
@@ -290,9 +285,7 @@ pub fn log(
                 "start_tx ({}) must be less than or equal to end_tx ({})",
                 start_tx, end_tx
             ),
-            suggestion: Some(
-                "Swap the transaction IDs so start_tx <= end_tx.".to_string(),
-            ),
+            suggestion: Some("Swap the transaction IDs so start_tx <= end_tx.".to_string()),
         }));
     }
 
@@ -439,7 +432,10 @@ fn decode_text_value(type_tag: i16, v_text: &str) -> serde_json::Value {
     match type_tag {
         0 => {
             // ref -- integer entity id
-            v_text.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(v_text))
+            v_text
+                .parse::<i64>()
+                .map(|n| json!(n))
+                .unwrap_or(json!(v_text))
         }
         1 => {
             // boolean
@@ -451,11 +447,17 @@ fn decode_text_value(type_tag: i16, v_text: &str) -> serde_json::Value {
         }
         2 => {
             // long
-            v_text.parse::<i64>().map(|n| json!(n)).unwrap_or(json!(v_text))
+            v_text
+                .parse::<i64>()
+                .map(|n| json!(n))
+                .unwrap_or(json!(v_text))
         }
         3 => {
             // double
-            v_text.parse::<f64>().map(|n| json!(n)).unwrap_or(json!(v_text))
+            v_text
+                .parse::<f64>()
+                .map(|n| json!(n))
+                .unwrap_or(json!(v_text))
         }
         4 => {
             // instant (timestamp cast to text)

@@ -457,10 +457,7 @@ mod tests {
     #[test]
     fn test_serialize_vector_of_nils() {
         let response = Response::Success {
-            result: ResponseValue::Vector(vec![
-                ResponseValue::Nil,
-                ResponseValue::Nil,
-            ]),
+            result: ResponseValue::Vector(vec![ResponseValue::Nil, ResponseValue::Nil]),
         };
         let output = serialize_response(&response);
         assert_eq!(output, "{:result [nil nil]}");
@@ -513,9 +510,21 @@ mod tests {
             result: ResponseValue::Instant(micros),
         };
         let output = serialize_response(&response);
-        assert!(output.starts_with("{:result #inst \""), "Output: {}", output);
-        assert!(output.contains("2024-"), "Expected 2024 year in: {}", output);
-        assert!(output.ends_with("\"}"), "Expected closing quote: {}", output);
+        assert!(
+            output.starts_with("{:result #inst \""),
+            "Output: {}",
+            output
+        );
+        assert!(
+            output.contains("2024-"),
+            "Expected 2024 year in: {}",
+            output
+        );
+        assert!(
+            output.ends_with("\"}"),
+            "Expected closing quote: {}",
+            output
+        );
     }
 
     #[test]
@@ -566,8 +575,16 @@ mod tests {
             ]),
         };
         let output = serialize_response(&response);
-        assert!(output.contains(":db-before {:basis-t 100}"), "EDN: {}", output);
-        assert!(output.contains(":db-after {:basis-t 101}"), "EDN: {}", output);
+        assert!(
+            output.contains(":db-before {:basis-t 100}"),
+            "EDN: {}",
+            output
+        );
+        assert!(
+            output.contains(":db-after {:basis-t 101}"),
+            "EDN: {}",
+            output
+        );
         assert!(output.contains("#inst \""), "EDN missing #inst: {}", output);
         assert!(output.contains(":tempids {}"), "EDN: {}", output);
     }

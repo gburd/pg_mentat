@@ -32,60 +32,72 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_string() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Alice\" :pa/val 42}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[:pa/name]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Alice");
     }
 
     #[pg_test]
     fn test_pa_pull_long() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Test\" :pa/val 99}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/val]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[:pa/val]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 99);
     }
 
     #[pg_test]
     fn test_pa_pull_boolean() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Test\" :pa/flag true}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/flag]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[:pa/flag]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/flag"].as_bool().expect("b"), true);
     }
 
     #[pg_test]
     fn test_pa_pull_keyword() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Test\" :pa/kw :active}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/kw]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[:pa/kw]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert!(v[":pa/kw"].as_str().expect("s").contains("active"));
     }
@@ -96,15 +108,21 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_two_attrs() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Alice\" :pa/val 42}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Alice");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 42);
@@ -112,15 +130,19 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_three_attrs() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Bob\" :pa/val 10 :pa/flag false}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val :pa/flag]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val :pa/flag]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Bob");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 10);
@@ -129,15 +151,19 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_all_types() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Mix\" :pa/val 7 :pa/dbl 1.5 :pa/flag true :pa/kw :test}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val :pa/dbl :pa/flag :pa/kw]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val :pa/dbl :pa/flag :pa/kw]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Mix");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 7);
@@ -149,7 +175,8 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_many_tags() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         Spi::run(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Tagged\"} [:db/add \"e\" :pa/tags \"a\"] [:db/add \"e\" :pa/tags \"b\"] [:db/add \"e\" :pa/tags \"c\"]]'::TEXT)"
         ).expect("tx");
@@ -158,16 +185,17 @@ mod tests {
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let eid = j["result"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/tags]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[:pa/tags]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/tags"].as_array().expect("arr").len(), 3);
     }
 
     #[pg_test]
     fn test_pa_pull_many_with_single() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         Spi::run(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Both\" :pa/val 42} [:db/add \"e\" :pa/tags \"x\"] [:db/add \"e\" :pa/tags \"y\"]]'::TEXT)"
         ).expect("tx");
@@ -177,8 +205,11 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let eid = j["result"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val :pa/tags]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val :pa/tags]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Both");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 42);
@@ -191,15 +222,18 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_wildcard() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Wild\" :pa/val 42}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[*]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert!(v.is_object());
         // Should include name and val
@@ -208,15 +242,16 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_wildcard_multi_type() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Multi\" :pa/val 10 :pa/flag true :pa/kw :test}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[*]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+        let p = Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]', {})::TEXT", eid))
+            .expect("pull")
+            .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert!(v.is_object());
     }
@@ -227,30 +262,38 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_ref_basic() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"p\" :pa/name \"Parent\"} {:db/id \"c\" :pa/name \"Child\" :pa/ref \"p\"}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let child = j["tempids"]["c"].as_i64().expect("child");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/ref]', {})::TEXT", child
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/ref]', {})::TEXT",
+            child
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Child");
     }
 
     #[pg_test]
     fn test_pa_pull_nested_ref() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"p\" :pa/name \"Parent\"} {:db/id \"c\" :pa/name \"Child\" :pa/ref \"p\"}]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let child = j["tempids"]["c"].as_i64().expect("child");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name {{:pa/ref [:pa/name]}}]', {})::TEXT", child
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name {{:pa/ref [:pa/name]}}]', {})::TEXT",
+            child
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Child");
         // Nested ref should have parent name
@@ -263,15 +306,19 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_many_refs() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"hub\" :pa/name \"Hub\"} {:db/id \"s1\" :pa/name \"S1\"} {:db/id \"s2\" :pa/name \"S2\"} [:db/add \"hub\" :pa/refs \"s1\"] [:db/add \"hub\" :pa/refs \"s2\"]]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let hub = j["tempids"]["hub"].as_i64().expect("hub");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/refs]', {})::TEXT", hub
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/refs]', {})::TEXT",
+            hub
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Hub");
     }
@@ -282,15 +329,21 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_missing_attr() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Sparse\"}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Sparse");
         // val should be absent or null
@@ -298,16 +351,26 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_after_retract() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Test\" :pa/val 42}]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :pa/val 42]]'::TEXT)", eid)).expect("retract");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :pa/val 42]]'::TEXT)",
+            eid
+        ))
+        .expect("retract");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Test");
     }
@@ -318,7 +381,8 @@ mod tests {
 
     #[pg_test]
     fn test_pa_query_then_pull() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         Spi::run(
             "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Queryable\" :pa/val 42 :pa/flag true}]'::TEXT)"
         ).expect("tx");
@@ -328,8 +392,11 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let eid = j["result"].as_i64().expect("eid");
         let p = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:pa/name :pa/val :pa/flag]', {})::TEXT", eid
-        )).expect("pull").expect("NULL");
+            "SELECT mentat_pull('[:pa/name :pa/val :pa/flag]', {})::TEXT",
+            eid
+        ))
+        .expect("pull")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
         assert_eq!(v[":pa/name"].as_str().expect("s"), "Queryable");
         assert_eq!(v[":pa/val"].as_i64().expect("v"), 42);
@@ -337,18 +404,30 @@ mod tests {
 
     #[pg_test]
     fn test_pa_pull_10_entities() {
-        setup(); setup_pa_schema();
+        setup();
+        setup_pa_schema();
         let mut ops = Vec::new();
         for i in 0..10 {
-            ops.push(format!("{{:db/id \"e{i}\" :pa/name \"ent-{i}\" :pa/val {i}}}", i = i));
+            ops.push(format!(
+                "{{:db/id \"e{i}\" :pa/name \"ent-{i}\" :pa/val {i}}}",
+                i = i
+            ));
         }
-        let r = Spi::get_one::<String>(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx").expect("NULL");
+        let r = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         for i in 0..10 {
             let eid = j["tempids"][&format!("e{}", i)].as_i64().expect("eid");
             let p = Spi::get_one::<String>(&format!(
-                "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT", eid
-            )).expect("pull").expect("NULL");
+                "SELECT mentat_pull('[:pa/name :pa/val]', {})::TEXT",
+                eid
+            ))
+            .expect("pull")
+            .expect("NULL");
             let v: serde_json::Value = serde_json::from_str(&p).expect("parse");
             assert_eq!(v[":pa/name"].as_str().expect("s"), &format!("ent-{}", i));
             assert_eq!(v[":pa/val"].as_i64().expect("v"), i as i64);

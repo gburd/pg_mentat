@@ -185,7 +185,10 @@ impl TestClient {
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .map(String::from);
-        let body = response.bytes().await.expect("Failed to read response body");
+        let body = response
+            .bytes()
+            .await
+            .expect("Failed to read response body");
 
         TestRawResponse {
             status,

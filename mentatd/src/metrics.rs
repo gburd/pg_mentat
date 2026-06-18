@@ -266,8 +266,7 @@ mod tests {
     fn test_operation_duration_histogram_vec() {
         let registry = Registry::new();
         let hv = HistogramVec::new(
-            HistogramOpts::new("test_op_duration", "op duration")
-                .buckets(vec![0.01, 0.1, 1.0]),
+            HistogramOpts::new("test_op_duration", "op duration").buckets(vec![0.01, 0.1, 1.0]),
             &["operation"],
         )
         .expect("metric can be created");
@@ -295,11 +294,8 @@ mod tests {
     #[test]
     fn test_operation_counter_vec() {
         let registry = Registry::new();
-        let cv = IntCounterVec::new(
-            Opts::new("test_op_count", "op count"),
-            &["operation"],
-        )
-        .expect("metric can be created");
+        let cv = IntCounterVec::new(Opts::new("test_op_count", "op count"), &["operation"])
+            .expect("metric can be created");
         registry
             .register(Box::new(cv.clone()))
             .expect("collector can be registered");

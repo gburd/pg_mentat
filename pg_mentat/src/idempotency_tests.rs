@@ -30,30 +30,50 @@ mod tests {
 
     #[pg_test]
     fn test_id_string_add_same_value_10x() {
-        setup(); setup_idem_schema();
-        let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/name \"same\"]]'::TEXT)").expect("tx").expect("NULL");
+        setup();
+        setup_idem_schema();
+        let r = Spi::get_one::<String>(
+            "SELECT mentat_transact('[[:db/add \"e\" :id/name \"same\"]]'::TEXT)",
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..10 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/name \"same\"]]'::TEXT)", eid)).expect("idem");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/name \"same\"]]'::TEXT)",
+                eid
+            ))
+            .expect("idem");
         }
 
         let count = Spi::get_one::<i64>(&format!(
             "SELECT COUNT(*) FROM mentat.datoms WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':id/name') AND added = true", eid
         )).expect("q").expect("NULL");
-        assert_eq!(count, 1, "Should have exactly 1 active datom after idempotent adds");
+        assert_eq!(
+            count, 1,
+            "Should have exactly 1 active datom after idempotent adds"
+        );
     }
 
     #[pg_test]
     fn test_id_long_add_same_value_10x() {
-        setup(); setup_idem_schema();
-        let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/val 42]]'::TEXT)").expect("tx").expect("NULL");
+        setup();
+        setup_idem_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/val 42]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..10 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/val 42]]'::TEXT)", eid)).expect("idem");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/val 42]]'::TEXT)",
+                eid
+            ))
+            .expect("idem");
         }
 
         let count = Spi::get_one::<i64>(&format!(
@@ -64,13 +84,22 @@ mod tests {
 
     #[pg_test]
     fn test_id_bool_add_same_value_10x() {
-        setup(); setup_idem_schema();
-        let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/flag true]]'::TEXT)").expect("tx").expect("NULL");
+        setup();
+        setup_idem_schema();
+        let r = Spi::get_one::<String>(
+            "SELECT mentat_transact('[[:db/add \"e\" :id/flag true]]'::TEXT)",
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..10 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/flag true]]'::TEXT)", eid)).expect("idem");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/flag true]]'::TEXT)",
+                eid
+            ))
+            .expect("idem");
         }
 
         let count = Spi::get_one::<i64>(&format!(
@@ -81,13 +110,22 @@ mod tests {
 
     #[pg_test]
     fn test_id_double_add_same_value_10x() {
-        setup(); setup_idem_schema();
-        let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/dbl 3.14]]'::TEXT)").expect("tx").expect("NULL");
+        setup();
+        setup_idem_schema();
+        let r = Spi::get_one::<String>(
+            "SELECT mentat_transact('[[:db/add \"e\" :id/dbl 3.14]]'::TEXT)",
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..10 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/dbl 3.14]]'::TEXT)", eid)).expect("idem");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/dbl 3.14]]'::TEXT)",
+                eid
+            ))
+            .expect("idem");
         }
 
         let count = Spi::get_one::<i64>(&format!(
@@ -102,13 +140,18 @@ mod tests {
 
     #[pg_test]
     fn test_id_many_add_same_value_10x() {
-        setup(); setup_idem_schema();
+        setup();
+        setup_idem_schema();
         let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/name \"holder\"] [:db/add \"e\" :id/tags \"tag\"]]'::TEXT)").expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..10 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/tags \"tag\"]]'::TEXT)", eid)).expect("idem");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/tags \"tag\"]]'::TEXT)",
+                eid
+            ))
+            .expect("idem");
         }
 
         let count = Spi::get_one::<i64>(&format!(
@@ -123,7 +166,8 @@ mod tests {
 
     #[pg_test]
     fn test_id_upsert_same_data_10x() {
-        setup(); setup_idem_schema();
+        setup();
+        setup_idem_schema();
         for _ in 0..10 {
             Spi::run(
                 "SELECT mentat_transact('[{:db/id \"e\" :id/uid \"U1\" :id/name \"Same\" :id/val 42}]'::TEXT)",
@@ -142,13 +186,15 @@ mod tests {
 
     #[pg_test]
     fn test_id_query_returns_same_result_50x() {
-        setup(); setup_idem_schema();
+        setup();
+        setup_idem_schema();
         Spi::run(
             "SELECT mentat_transact('[
                 {:db/id \"e1\" :id/name \"Alice\" :id/val 10}
                 {:db/id \"e2\" :id/name \"Bob\" :id/val 20}
             ]'::TEXT)",
-        ).expect("data");
+        )
+        .expect("data");
 
         let mut results = Vec::new();
         for _ in 0..50 {
@@ -156,15 +202,23 @@ mod tests {
                 "SELECT mentat_query('[:find [?n ...] :where [?e :id/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
             ).expect("q").expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
-            let mut names: Vec<String> = j["result"].as_array().expect("arr")
-                .iter().map(|v| v.as_str().expect("s").to_string()).collect();
+            let mut names: Vec<String> = j["result"]
+                .as_array()
+                .expect("arr")
+                .iter()
+                .map(|v| v.as_str().expect("s").to_string())
+                .collect();
             names.sort();
             results.push(names);
         }
 
         // All 50 results should be identical
         for i in 1..50 {
-            assert_eq!(results[0], results[i], "Query {} returned different results", i);
+            assert_eq!(
+                results[0], results[i],
+                "Query {} returned different results",
+                i
+            );
         }
     }
 
@@ -191,13 +245,16 @@ mod tests {
 
     #[pg_test]
     fn test_id_tempids_consistent_within_tx() {
-        setup(); setup_idem_schema();
+        setup();
+        setup_idem_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[
                 [:db/add \"e\" :id/name \"Test\"]
                 [:db/add \"e\" :id/val 42]
             ]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let tempids = j["tempids"].as_object().expect("tempids");
         // "e" should appear only once in tempids
@@ -211,14 +268,26 @@ mod tests {
 
     #[pg_test]
     fn test_id_retract_readd_cycle_5x() {
-        setup(); setup_idem_schema();
-        let r = Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/val 42]]'::TEXT)").expect("tx").expect("NULL");
+        setup();
+        setup_idem_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :id/val 42]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
         for _ in 0..5 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :id/val 42]]'::TEXT)", eid)).expect("retract");
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/val 42]]'::TEXT)", eid)).expect("readd");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/retract {} :id/val 42]]'::TEXT)",
+                eid
+            ))
+            .expect("retract");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :id/val 42]]'::TEXT)",
+                eid
+            ))
+            .expect("readd");
         }
 
         // Should still have exactly 1 live datom. In the append-only model
@@ -231,8 +300,11 @@ mod tests {
         assert_eq!(count, 1);
 
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :id/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :id/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("v"), 42);
     }

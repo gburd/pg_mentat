@@ -32,12 +32,9 @@ mod tests {
 
     fn capture_error(sql: &str) -> String {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._fz_capture('{}')",
-            escaped
-        ))
-        .expect("capture")
-        .unwrap_or_default()
+        Spi::get_one::<String>(&format!("SELECT mentat._fz_capture('{}')", escaped))
+            .expect("capture")
+            .unwrap_or_default()
     }
 
     fn has_fuzzystrmatch() -> bool {
@@ -135,10 +132,16 @@ mod tests {
                 row[1].as_str().expect("hash").to_string(),
             );
         }
-        assert_eq!(by_name.get("Alice"), by_name.get("Alyce"),
-                   "Alice and Alyce should soundex-match");
-        assert_ne!(by_name.get("Alice"), by_name.get("Robert"),
-                   "Alice and Robert should not soundex-match");
+        assert_eq!(
+            by_name.get("Alice"),
+            by_name.get("Alyce"),
+            "Alice and Alyce should soundex-match"
+        );
+        assert_ne!(
+            by_name.get("Alice"),
+            by_name.get("Robert"),
+            "Alice and Robert should not soundex-match"
+        );
     }
 
     /// (metaphone ?s ?max) takes a max-length argument; output is the
@@ -166,7 +169,12 @@ mod tests {
         for row in results {
             let code = row[1].as_str().expect("metaphone string");
             assert!(!code.is_empty(), "non-empty metaphone for {:?}", row[0]);
-            assert!(code.len() <= 5, "<= 5 chars for {:?}, got {:?}", row[0], code);
+            assert!(
+                code.len() <= 5,
+                "<= 5 chars for {:?}, got {:?}",
+                row[0],
+                code
+            );
         }
     }
 

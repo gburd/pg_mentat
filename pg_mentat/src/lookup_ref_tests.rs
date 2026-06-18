@@ -18,15 +18,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_lr_schema() {
@@ -48,9 +49,13 @@ mod tests {
 
     #[pg_test]
     fn test_lr_add_via_identity_lookup() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :lr/email \"alice@test.com\"] [:db/add \"e\" :lr/name \"Alice\"]]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[[:db/add [:lr/email \"alice@test.com\"] :lr/val 42]]'::TEXT)").expect("lookup ref add");
+        Spi::run(
+            "SELECT mentat_transact('[[:db/add [:lr/email \"alice@test.com\"] :lr/val 42]]'::TEXT)",
+        )
+        .expect("lookup ref add");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :lr/email \"alice@test.com\"] [?e :lr/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -61,9 +66,11 @@ mod tests {
 
     #[pg_test]
     fn test_lr_add_via_value_lookup() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :lr/code \"C001\"] [:db/add \"e\" :lr/name \"CodeEntity\"]]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[[:db/add [:lr/code \"C001\"] :lr/val 99]]'::TEXT)").expect("lookup ref add");
+        Spi::run("SELECT mentat_transact('[[:db/add [:lr/code \"C001\"] :lr/val 99]]'::TEXT)")
+            .expect("lookup ref add");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :lr/code \"C001\"] [?e :lr/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -78,7 +85,8 @@ mod tests {
 
     #[pg_test]
     fn test_lr_retract_via_lookup() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :lr/email \"retract@test.com\" :lr/name \"Gone\" :lr/val 10}]'::TEXT)").expect("create");
         Spi::run("SELECT mentat_transact('[[:db/retract [:lr/email \"retract@test.com\"] :lr/val 10]]'::TEXT)").expect("retract via lookup");
 
@@ -95,7 +103,8 @@ mod tests {
 
     #[pg_test]
     fn test_lr_nonexistent_entity_fails() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         assert!(
             raises_error("SELECT mentat_transact('[[:db/add [:lr/email \"nobody@test.com\"] :lr/val 1]]'::TEXT)"),
             "Lookup ref for nonexistent entity should fail"
@@ -104,10 +113,14 @@ mod tests {
 
     #[pg_test]
     fn test_lr_non_unique_attr_fails() {
-        setup(); setup_lr_schema();
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :lr/name \"Test\"]]'::TEXT)").expect("create");
+        setup();
+        setup_lr_schema();
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :lr/name \"Test\"]]'::TEXT)")
+            .expect("create");
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add [:lr/name \"Test\"] :lr/val 1]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add [:lr/name \"Test\"] :lr/val 1]]'::TEXT)"
+            ),
             "Lookup ref on non-unique attr should fail"
         );
     }
@@ -118,16 +131,23 @@ mod tests {
 
     #[pg_test]
     fn test_lr_multiple_lookups_same_tx() {
-        setup(); setup_lr_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_lr_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :lr/email \"a@test.com\" :lr/name \"A\"}
             {:db/id \"e2\" :lr/email \"b@test.com\" :lr/name \"B\"}
-        ]'::TEXT)").expect("create");
+        ]'::TEXT)",
+        )
+        .expect("create");
 
-        Spi::run("SELECT mentat_transact('[
+        Spi::run(
+            "SELECT mentat_transact('[
             [:db/add [:lr/email \"a@test.com\"] :lr/val 100]
             [:db/add [:lr/email \"b@test.com\"] :lr/val 200]
-        ]'::TEXT)").expect("multi lookup");
+        ]'::TEXT)",
+        )
+        .expect("multi lookup");
 
         let qa = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :lr/email \"a@test.com\"] [?e :lr/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -148,7 +168,8 @@ mod tests {
 
     #[pg_test]
     fn test_lr_update_via_lookup() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :lr/email \"update@test.com\" :lr/val 10}]'::TEXT)").expect("create");
         Spi::run("SELECT mentat_transact('[[:db/add [:lr/email \"update@test.com\"] :lr/val 20]]'::TEXT)").expect("update");
 
@@ -165,12 +186,16 @@ mod tests {
 
     #[pg_test]
     fn test_lr_add_many_via_lookup() {
-        setup(); setup_lr_schema();
+        setup();
+        setup_lr_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :lr/email \"tags@test.com\" :lr/name \"Tagged\"}]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[
+        Spi::run(
+            "SELECT mentat_transact('[
             [:db/add [:lr/email \"tags@test.com\"] :lr/tags \"t1\"]
             [:db/add [:lr/email \"tags@test.com\"] :lr/tags \"t2\"]
-        ]'::TEXT)").expect("add tags via lookup");
+        ]'::TEXT)",
+        )
+        .expect("add tags via lookup");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?t ...] :where [?e :lr/email \"tags@test.com\"] [?e :lr/tags ?t]]'::TEXT, '{}'::jsonb)::TEXT",

@@ -20,10 +20,7 @@ fn extension_available(ext_name: &str) -> bool {
         "SELECT 1 FROM pg_extension WHERE extname = '{}'",
         ext_name.replace('\'', "''")
     );
-    Spi::get_one::<i64>(&query)
-        .ok()
-        .flatten()
-        .is_some()
+    Spi::get_one::<i64>(&query).ok().flatten().is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -57,51 +54,15 @@ fn store_id_subquery(schema: &str) -> String {
 /// start with " AND ..." if non-empty).
 fn all_datoms_union_sql(store_id_expr: &str, extra_where: &str) -> String {
     let legs = [
-        (
-            "mentat.datoms_ref_new",
-            0,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_boolean_new",
-            1,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_long_new",
-            2,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_double_new",
-            3,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_instant_new",
-            4,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_text_new",
-            7,
-            "v",
-        ),
-        (
-            "mentat.datoms_keyword_new",
-            8,
-            "v",
-        ),
-        (
-            "mentat.datoms_uuid_new",
-            10,
-            "v::text",
-        ),
-        (
-            "mentat.datoms_bytes_new",
-            11,
-            "encode(v, 'hex')",
-        ),
+        ("mentat.datoms_ref_new", 0, "v::text"),
+        ("mentat.datoms_boolean_new", 1, "v::text"),
+        ("mentat.datoms_long_new", 2, "v::text"),
+        ("mentat.datoms_double_new", 3, "v::text"),
+        ("mentat.datoms_instant_new", 4, "v::text"),
+        ("mentat.datoms_text_new", 7, "v"),
+        ("mentat.datoms_keyword_new", 8, "v"),
+        ("mentat.datoms_uuid_new", 10, "v::text"),
+        ("mentat.datoms_bytes_new", 11, "encode(v, 'hex')"),
     ];
 
     legs.iter()
@@ -291,11 +252,23 @@ fn type_specific_views_sql(schema: &str) -> String {
         ("text_values", "mentat.datoms_text_new", "d.v AS value"),
         ("numeric_values", "mentat.datoms_long_new", "d.v AS value"),
         ("double_values", "mentat.datoms_double_new", "d.v AS value"),
-        ("boolean_values", "mentat.datoms_boolean_new", "d.v AS value"),
+        (
+            "boolean_values",
+            "mentat.datoms_boolean_new",
+            "d.v AS value",
+        ),
         ("references", "mentat.datoms_ref_new", "d.v AS value"),
-        ("instant_values", "mentat.datoms_instant_new", "d.v AS value"),
+        (
+            "instant_values",
+            "mentat.datoms_instant_new",
+            "d.v AS value",
+        ),
         ("uuid_values", "mentat.datoms_uuid_new", "d.v AS value"),
-        ("keyword_values", "mentat.datoms_keyword_new", "d.v AS value"),
+        (
+            "keyword_values",
+            "mentat.datoms_keyword_new",
+            "d.v AS value",
+        ),
         ("bytes_values", "mentat.datoms_bytes_new", "d.v AS value"),
     ];
 
@@ -527,19 +500,42 @@ fn entity_history_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
 
     let legs = [
-        ("mentat.datoms_ref_new", "ref",
-         format!(
+        (
+            "mentat.datoms_ref_new",
+            "ref",
+            format!(
              "COALESCE((SELECT ri.ident FROM {schema}.idents ri WHERE ri.entid = d.v), d.v::TEXT)",
              schema = schema
-         )),
-        ("mentat.datoms_boolean_new", "boolean", "d.v::TEXT".to_string()),
+         ),
+        ),
+        (
+            "mentat.datoms_boolean_new",
+            "boolean",
+            "d.v::TEXT".to_string(),
+        ),
         ("mentat.datoms_long_new", "long", "d.v::TEXT".to_string()),
-        ("mentat.datoms_double_new", "double", "d.v::TEXT".to_string()),
-        ("mentat.datoms_instant_new", "instant", "d.v::TEXT".to_string()),
+        (
+            "mentat.datoms_double_new",
+            "double",
+            "d.v::TEXT".to_string(),
+        ),
+        (
+            "mentat.datoms_instant_new",
+            "instant",
+            "d.v::TEXT".to_string(),
+        ),
         ("mentat.datoms_text_new", "string", "d.v".to_string()),
-        ("mentat.datoms_keyword_new", "keyword", "':' || d.v".to_string()),
+        (
+            "mentat.datoms_keyword_new",
+            "keyword",
+            "':' || d.v".to_string(),
+        ),
         ("mentat.datoms_uuid_new", "uuid", "d.v::TEXT".to_string()),
-        ("mentat.datoms_bytes_new", "bytes", "encode(d.v, 'hex')".to_string()),
+        (
+            "mentat.datoms_bytes_new",
+            "bytes",
+            "encode(d.v, 'hex')".to_string(),
+        ),
     ];
 
     let union = legs
@@ -589,19 +585,42 @@ fn recent_changes_view_sql(schema: &str) -> String {
     let sid = store_id_subquery(schema);
 
     let legs = [
-        ("mentat.datoms_ref_new", "ref",
-         format!(
+        (
+            "mentat.datoms_ref_new",
+            "ref",
+            format!(
              "COALESCE((SELECT ri.ident FROM {schema}.idents ri WHERE ri.entid = d.v), d.v::TEXT)",
              schema = schema
-         )),
-        ("mentat.datoms_boolean_new", "boolean", "d.v::TEXT".to_string()),
+         ),
+        ),
+        (
+            "mentat.datoms_boolean_new",
+            "boolean",
+            "d.v::TEXT".to_string(),
+        ),
         ("mentat.datoms_long_new", "long", "d.v::TEXT".to_string()),
-        ("mentat.datoms_double_new", "double", "d.v::TEXT".to_string()),
-        ("mentat.datoms_instant_new", "instant", "d.v::TEXT".to_string()),
+        (
+            "mentat.datoms_double_new",
+            "double",
+            "d.v::TEXT".to_string(),
+        ),
+        (
+            "mentat.datoms_instant_new",
+            "instant",
+            "d.v::TEXT".to_string(),
+        ),
         ("mentat.datoms_text_new", "string", "d.v".to_string()),
-        ("mentat.datoms_keyword_new", "keyword", "':' || d.v".to_string()),
+        (
+            "mentat.datoms_keyword_new",
+            "keyword",
+            "':' || d.v".to_string(),
+        ),
         ("mentat.datoms_uuid_new", "uuid", "d.v::TEXT".to_string()),
-        ("mentat.datoms_bytes_new", "bytes", "encode(d.v, 'hex')".to_string()),
+        (
+            "mentat.datoms_bytes_new",
+            "bytes",
+            "encode(d.v, 'hex')".to_string(),
+        ),
     ];
 
     let union = legs

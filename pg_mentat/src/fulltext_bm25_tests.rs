@@ -34,12 +34,16 @@ mod tests {
 
     #[pg_test]
     fn test_fts_basic_search() {
-        setup(); setup_fts_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_fts_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"The quick brown fox jumps over the lazy dog\"}
             {:db/id \"e2\" :fts/title \"A slow tortoise walks carefully\"}
             {:db/id \"e3\" :fts/title \"Quick foxes are clever animals\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?x ?val :where [(fulltext $ :fts/title \"fox\") [[?x ?val]]]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -52,10 +56,14 @@ mod tests {
 
     #[pg_test]
     fn test_fts_no_match() {
-        setup(); setup_fts_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_fts_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"The quick brown fox\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?x ?val :where [(fulltext $ :fts/title \"elephant\") [[?x ?val]]]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -74,7 +82,8 @@ mod tests {
 
     #[pg_test]
     fn test_fts_relevance_ordering() {
-        setup(); setup_fts_schema();
+        setup();
+        setup_fts_schema();
         // Document 1: "database" appears multiple times (high relevance)
         // Document 2: "database" appears once in longer text (lower relevance)
         Spi::run("SELECT mentat_transact('[
@@ -90,7 +99,8 @@ mod tests {
         assert!(results.len() >= 2, "Should find both documents");
 
         // Extract scores - higher density document should score higher
-        let scores: Vec<f64> = results.iter()
+        let scores: Vec<f64> = results
+            .iter()
             .map(|r| r[2].as_f64().expect("score"))
             .collect();
         // At least verify scores are non-negative (ts_rank_cd returns >= 0)
@@ -101,10 +111,14 @@ mod tests {
 
     #[pg_test]
     fn test_fts_score_bound_variable() {
-        setup(); setup_fts_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_fts_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"PostgreSQL full text search engine\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         // Binding the score variable should work
         let q = Spi::get_one::<String>(
@@ -123,7 +137,8 @@ mod tests {
 
     #[pg_test]
     fn test_fts_different_attrs() {
-        setup(); setup_fts_schema();
+        setup();
+        setup_fts_schema();
         Spi::run("SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"Machine learning\" :fts/body \"Deep neural networks for classification\"}
             {:db/id \"e2\" :fts/title \"Neural networks\" :fts/body \"Machine learning algorithms for prediction\"}
@@ -154,12 +169,16 @@ mod tests {
 
     #[pg_test]
     fn test_fts_english_stemming() {
-        setup(); setup_fts_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_fts_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"The runners are running in the race\"}
             {:db/id \"e2\" :fts/title \"She runs quickly to the finish line\"}
             {:db/id \"e3\" :fts/title \"The swimming pool is closed\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         // "run" matches "runners/running" and "runs" via English (Snowball)
         // stemming. Note: the Snowball stemmer does NOT reduce the irregular
@@ -170,7 +189,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let results = v["result"].as_array().expect("arr");
         // Should match the "runners/running" and "runs" documents
-        assert!(results.len() >= 2, "English stemming should match inflected forms of 'run'");
+        assert!(
+            results.len() >= 2,
+            "English stemming should match inflected forms of 'run'"
+        );
     }
 
     // ========================================================================
@@ -179,11 +201,15 @@ mod tests {
 
     #[pg_test]
     fn test_fts_combined_with_regular_attrs() {
-        setup(); setup_fts_schema();
-        Spi::run("SELECT mentat_transact('[
+        setup();
+        setup_fts_schema();
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"e1\" :fts/title \"Rust programming language\" :fts/plain \"systems\"}
             {:db/id \"e2\" :fts/title \"Python programming language\" :fts/plain \"scripting\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         // Search fulltext, then join with regular attr
         let q = Spi::get_one::<String>(
@@ -191,7 +217,11 @@ mod tests {
         ).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let results = v["results"].as_array().expect("arr");
-        assert_eq!(results.len(), 2, "Both documents match 'programming' and have :fts/plain");
+        assert_eq!(
+            results.len(),
+            2,
+            "Both documents match 'programming' and have :fts/plain"
+        );
     }
 
     // ========================================================================
@@ -221,13 +251,19 @@ mod tests {
             "SELECT mentat_query('[:find ?val . :where [(fulltext $ :ftsu/title \"databases\") [[?x ?val]]]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let v_old: serde_json::Value = serde_json::from_str(&q_old).expect("parse");
-        assert!(v_old["result"].is_null(), "Old fulltext value should not match after upsert");
+        assert!(
+            v_old["result"].is_null(),
+            "Old fulltext value should not match after upsert"
+        );
 
         // Search for new term should find it
         let q_new = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?val . :where [(fulltext $ :ftsu/title \"networking\") [[?x ?val]]]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let v_new: serde_json::Value = serde_json::from_str(&q_new).expect("parse");
-        assert_eq!(v_new["result"].as_str().expect("title"), "updated document about networking");
+        assert_eq!(
+            v_new["result"].as_str().expect("title"),
+            "updated document about networking"
+        );
     }
 }

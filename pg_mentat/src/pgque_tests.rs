@@ -104,11 +104,10 @@ mod tests {
         .expect("data tx");
 
         // Pull the latest tx number.
-        let tx: i64 = Spi::get_one::<i64>(
-            "SELECT MAX(tx) FROM mentat.transactions WHERE tx >= 1000000",
-        )
-        .expect("max tx")
-        .expect("NULL");
+        let tx: i64 =
+            Spi::get_one::<i64>("SELECT MAX(tx) FROM mentat.transactions WHERE tx >= 1000000")
+                .expect("max tx")
+                .expect("NULL");
         let payload = Spi::get_one::<String>(&format!(
             "SELECT mentat._pgque_build_tx_payload({})::TEXT",
             tx
@@ -118,7 +117,10 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&payload).expect("parse");
         assert_eq!(j["tx"].as_i64(), Some(tx));
         assert!(j["tx_instant"].is_string());
-        assert!(j["datom_count"].as_i64().unwrap_or(0) >= 1, "datom_count > 0");
+        assert!(
+            j["datom_count"].as_i64().unwrap_or(0) >= 1,
+            "datom_count > 0"
+        );
         assert!(j["datoms"].is_array(), "datoms is array");
         let datoms = j["datoms"].as_array().expect("array");
         // Every datom has the expected envelope keys.
@@ -146,16 +148,12 @@ mod tests {
             return;
         }
 
-        let q1 = Spi::get_one::<String>(
-            "SELECT mentat.pgque_emit_tx('mentat_events_test')",
-        )
-        .expect("emit 1")
-        .expect("NULL");
-        let q2 = Spi::get_one::<String>(
-            "SELECT mentat.pgque_emit_tx('mentat_events_test')",
-        )
-        .expect("emit 2")
-        .expect("NULL");
+        let q1 = Spi::get_one::<String>("SELECT mentat.pgque_emit_tx('mentat_events_test')")
+            .expect("emit 1")
+            .expect("NULL");
+        let q2 = Spi::get_one::<String>("SELECT mentat.pgque_emit_tx('mentat_events_test')")
+            .expect("emit 2")
+            .expect("NULL");
         assert_eq!(q1, q2, "idempotent");
 
         // Three transactions.
@@ -165,15 +163,12 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :pq/n \"A\"}]'::TEXT)")
-            .expect("tx 2");
-        Spi::run("SELECT mentat_transact('[{:db/id \"b\" :pq/n \"B\"}]'::TEXT)")
-            .expect("tx 3");
+        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :pq/n \"A\"}]'::TEXT)").expect("tx 2");
+        Spi::run("SELECT mentat_transact('[{:db/id \"b\" :pq/n \"B\"}]'::TEXT)").expect("tx 3");
 
         // Force a tick so events become consumer-visible. This is a
         // PgQue API call (no pg_mentat wrapper).
-        Spi::run("SELECT pgque.force_next_tick('mentat_events_test')")
-            .expect("force_tick");
+        Spi::run("SELECT pgque.force_next_tick('mentat_events_test')").expect("force_tick");
 
         // Inspect the queue's current event table directly. The exact
         // table name (event_<qid>_<rotation>) varies; query through the
@@ -223,16 +218,12 @@ mod tests {
         assert!(j["datoms"].is_array());
 
         // Disable round trip.
-        let dropped1 = Spi::get_one::<bool>(
-            "SELECT mentat.pgque_disable_tx('mentat_events_test')",
-        )
-        .expect("disable 1")
-        .expect("NULL");
-        let dropped2 = Spi::get_one::<bool>(
-            "SELECT mentat.pgque_disable_tx('mentat_events_test')",
-        )
-        .expect("disable 2")
-        .expect("NULL");
+        let dropped1 = Spi::get_one::<bool>("SELECT mentat.pgque_disable_tx('mentat_events_test')")
+            .expect("disable 1")
+            .expect("NULL");
+        let dropped2 = Spi::get_one::<bool>("SELECT mentat.pgque_disable_tx('mentat_events_test')")
+            .expect("disable 2")
+            .expect("NULL");
         assert!(dropped1, "first disable should report existed=true");
         assert!(!dropped2, "second disable should report existed=false");
     }

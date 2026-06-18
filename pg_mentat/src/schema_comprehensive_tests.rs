@@ -18,15 +18,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     // ========================================================================
@@ -37,7 +38,8 @@ mod tests {
     fn test_sc_define_string_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/s1 :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("define");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sc/s1 \"hello\"]]'::TEXT)").expect("use");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sc/s1 \"hello\"]]'::TEXT)")
+            .expect("use");
     }
 
     #[pg_test]
@@ -105,15 +107,22 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/co :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :sc/co \"first\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :sc/co \"second\"]]'::TEXT)", eid
-        )).expect("replace");
+            "SELECT mentat_transact('[[:db/add {} :sc/co \"second\"]]'::TEXT)",
+            eid
+        ))
+        .expect("replace");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :sc/co ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :sc/co ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "second");
     }
@@ -146,14 +155,18 @@ mod tests {
             {:db/id \"b\" :db/ident :sc/uval :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
         ]'::TEXT)").expect("schema");
 
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :sc/uid \"U1\" :sc/uval 10}]'::TEXT)").expect("first");
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :sc/uid \"U1\" :sc/uval 20}]'::TEXT)").expect("upsert");
+        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :sc/uid \"U1\" :sc/uval 10}]'::TEXT)")
+            .expect("first");
+        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :sc/uid \"U1\" :sc/uval 20}]'::TEXT)")
+            .expect("upsert");
 
         let count = Spi::get_one::<i64>(
             "SELECT COUNT(DISTINCT e) FROM mentat.datoms
              WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':sc/uid')
              AND v_text = 'U1' AND added = true",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         assert_eq!(count, 1);
     }
 
@@ -162,9 +175,12 @@ mod tests {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/uv :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/unique :db.unique/value}]'::TEXT)").expect("schema");
 
-        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sc/uv \"unique-val\"]]'::TEXT)").expect("first");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sc/uv \"unique-val\"]]'::TEXT)")
+            .expect("first");
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e2\" :sc/uv \"unique-val\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e2\" :sc/uv \"unique-val\"]]'::TEXT)"
+            ),
             "Duplicate unique value should be rejected"
         );
     }
@@ -204,8 +220,10 @@ mod tests {
             ));
         }
         Spi::run(&format!(
-            "SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n")
-        )).expect("bulk schema");
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("bulk schema");
 
         // Verify all 20 are usable
         for i in 0..20 {
@@ -236,8 +254,14 @@ mod tests {
             .expect("schema query")
             .expect("NULL");
         assert!(result.contains("db/ident"), "Should contain :db/ident");
-        assert!(result.contains("db/valueType"), "Should contain :db/valueType");
-        assert!(result.contains("db/cardinality"), "Should contain :db/cardinality");
+        assert!(
+            result.contains("db/valueType"),
+            "Should contain :db/valueType"
+        );
+        assert!(
+            result.contains("db/cardinality"),
+            "Should contain :db/cardinality"
+        );
     }
 
     #[pg_test]
@@ -248,7 +272,10 @@ mod tests {
         let result = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
             .expect("schema query")
             .expect("NULL");
-        assert!(result.contains("sc/introspect"), "Schema should contain user-defined attribute");
+        assert!(
+            result.contains("sc/introspect"),
+            "Schema should contain user-defined attribute"
+        );
     }
 
     // ========================================================================
@@ -263,12 +290,14 @@ mod tests {
         // error would otherwise abort the test transaction), then assert no
         // such attribute exists in mentat.schema.
         let _ = raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad1 :db/cardinality :db.cardinality/one}]'::TEXT)");
-        let installed = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad1'",
-        )
-        .expect("count")
-        .expect("NULL");
-        assert_eq!(installed, 0, "Schema attribute without valueType must not be installed");
+        let installed =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad1'")
+                .expect("count")
+                .expect("NULL");
+        assert_eq!(
+            installed, 0,
+            "Schema attribute without valueType must not be installed"
+        );
     }
 
     #[pg_test]
@@ -278,12 +307,14 @@ mod tests {
         // be installed. Attempt it inside the error-catching helper, then
         // assert no such attribute exists in mentat.schema.
         let _ = raises_error("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sc/bad2 :db/valueType :db.type/string}]'::TEXT)");
-        let installed = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad2'",
-        )
-        .expect("count")
-        .expect("NULL");
-        assert_eq!(installed, 0, "Schema attribute without cardinality must not be installed");
+        let installed =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.schema WHERE ident = ':sc/bad2'")
+                .expect("count")
+                .expect("NULL");
+        assert_eq!(
+            installed, 0,
+            "Schema attribute without cardinality must not be installed"
+        );
     }
 
     #[pg_test]
@@ -372,7 +403,8 @@ mod tests {
     #[pg_test]
     fn test_sc_all_properties() {
         setup();
-        Spi::run("SELECT mentat_transact('[{
+        Spi::run(
+            "SELECT mentat_transact('[{
             :db/id \"a\"
             :db/ident :sc/all-props
             :db/valueType :db.type/string
@@ -381,9 +413,12 @@ mod tests {
             :db/index true
             :db/doc \"Attribute with all properties\"
             :db/noHistory true
-        }]'::TEXT)").expect("all properties");
+        }]'::TEXT)",
+        )
+        .expect("all properties");
 
         // Should be usable
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sc/all-props \"test\"]]'::TEXT)").expect("use");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sc/all-props \"test\"]]'::TEXT)")
+            .expect("use");
     }
 }

@@ -63,7 +63,8 @@ mod tests {
             Spi::run(&format!(
                 "SELECT mentat_transact('[{}]'::TEXT)",
                 ops.join("\n")
-            )).unwrap_or_else(|e| panic!("populate batch at offset {}: {}", offset, e));
+            ))
+            .unwrap_or_else(|e| panic!("populate batch at offset {}: {}", offset, e));
             offset = end;
         }
         start.elapsed().as_secs_f64() * 1000.0
@@ -72,18 +73,28 @@ mod tests {
     /// Run a Datalog query and return (result_count, elapsed_ms).
     fn timed_query(query: &str) -> (usize, f64) {
         let start = std::time::Instant::now();
-        let result = Spi::get_one::<String>(
-            &format!("SELECT mentat_query('{}', '{{}}'::JSONB)::TEXT", query)
-        ).expect("query").expect("NULL");
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query('{}', '{{}}'::JSONB)::TEXT",
+            query
+        ))
+        .expect("query")
+        .expect("NULL");
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
 
         let parsed: serde_json::Value = serde_json::from_str(&result).expect("parse result");
         // mentat_query returns {"columns": [...], "results": [[...], ...]} for relation queries
         // or {"result": ...} for scalar/tuple/collection queries
-        let count = parsed["results"].as_array()
+        let count = parsed["results"]
+            .as_array()
             .map(|a| a.len())
             .or_else(|| parsed["result"].as_array().map(|a| a.len()))
-            .or_else(|| if parsed["result"].is_null() { Some(0) } else { Some(1) })
+            .or_else(|| {
+                if parsed["result"].is_null() {
+                    Some(0)
+                } else {
+                    Some(1)
+                }
+            })
             .unwrap_or(0);
         (count, elapsed)
     }
@@ -112,9 +123,7 @@ mod tests {
         populate_entities(100, 100);
 
         // Query a string attribute -- should use single-table optimization
-        let (count, _elapsed) = timed_query(
-            "[:find ?e ?name :where [?e :bench/name ?name]]"
-        );
+        let (count, _elapsed) = timed_query("[:find ?e ?name :where [?e :bench/name ?name]]");
         assert_eq!(count, 100, "Expected 100 entities with :bench/name");
     }
 
@@ -124,9 +133,7 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(100, 100);
 
-        let (count, _elapsed) = timed_query(
-            "[:find ?e ?age :where [?e :bench/age ?age]]"
-        );
+        let (count, _elapsed) = timed_query("[:find ?e ?age :where [?e :bench/age ?age]]");
         assert_eq!(count, 100, "Expected 100 entities with :bench/age");
     }
 
@@ -136,9 +143,7 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(100, 100);
 
-        let (count, _elapsed) = timed_query(
-            "[:find ?e ?active :where [?e :bench/active ?active]]"
-        );
+        let (count, _elapsed) = timed_query("[:find ?e ?active :where [?e :bench/active ?active]]");
         assert_eq!(count, 100, "Expected 100 entities with :bench/active");
     }
 
@@ -148,9 +153,7 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(100, 100);
 
-        let (count, _elapsed) = timed_query(
-            "[:find ?e ?score :where [?e :bench/score ?score]]"
-        );
+        let (count, _elapsed) = timed_query("[:find ?e ?score :where [?e :bench/score ?score]]");
         assert_eq!(count, 100, "Expected 100 entities with :bench/score");
     }
 
@@ -160,9 +163,7 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(100, 100);
 
-        let (count, _elapsed) = timed_query(
-            "[:find ?e ?cat :where [?e :bench/cat ?cat]]"
-        );
+        let (count, _elapsed) = timed_query("[:find ?e ?cat :where [?e :bench/cat ?cat]]");
         assert_eq!(count, 100, "Expected 100 entities with :bench/cat");
     }
 
@@ -173,9 +174,8 @@ mod tests {
         populate_entities(100, 100);
 
         // Multi-pattern join: string + long attributes
-        let (count, _elapsed) = timed_query(
-            "[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]"
-        );
+        let (count, _elapsed) =
+            timed_query("[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]");
         assert_eq!(count, 100, "Expected 100 joined results");
     }
 
@@ -187,10 +187,14 @@ mod tests {
 
         // Predicate filter with typed attribute
         let (count, _elapsed) = timed_query(
-            "[:find ?name :where [?e :bench/name ?name] [?e :bench/age ?age] [(> ?age 50)]]"
+            "[:find ?name :where [?e :bench/name ?name] [?e :bench/age ?age] [(> ?age 50)]]",
         );
         // Ages are 20 + (i % 60), so ages > 50 means (i % 60) > 30, which is ~half
-        assert!(count > 0 && count < 100, "Expected filtered results, got {}", count);
+        assert!(
+            count > 0 && count < 100,
+            "Expected filtered results, got {}",
+            count
+        );
     }
 
     // ========================================================================
@@ -231,11 +235,11 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(1000, 200);
 
-        let median = median_query_time(
-            "[:find ?e ?name :where [?e :bench/name ?name]]",
-            3,
+        let median = median_query_time("[:find ?e ?name :where [?e :bench/name ?name]]", 3);
+        pgrx::notice!(
+            "BENCHMARK: 1K full scan string attr (median): {:.1}ms",
+            median
         );
-        pgrx::notice!("BENCHMARK: 1K full scan string attr (median): {:.1}ms", median);
     }
 
     #[pg_test]
@@ -283,10 +287,7 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(1000, 200);
 
-        let median = median_query_time(
-            "[:find (count ?e) :where [?e :bench/name _]]",
-            3,
-        );
+        let median = median_query_time("[:find (count ?e) :where [?e :bench/name _]]", 3);
         pgrx::notice!("BENCHMARK: 1K aggregate count (median): {:.1}ms", median);
     }
 
@@ -327,12 +328,11 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(10_000, 500);
 
-        let (count, elapsed) = timed_query(
-            "[:find ?e ?name :where [?e :bench/name ?name]]"
-        );
+        let (count, elapsed) = timed_query("[:find ?e ?name :where [?e :bench/name ?name]]");
         pgrx::notice!(
             "BENCHMARK: 10K full scan string attr: {:.1}ms ({} rows)",
-            elapsed, count
+            elapsed,
+            count
         );
         assert_eq!(count, 10_000);
     }
@@ -343,12 +343,12 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(10_000, 500);
 
-        let (count, elapsed) = timed_query(
-            "[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]"
-        );
+        let (count, elapsed) =
+            timed_query("[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]");
         pgrx::notice!(
             "BENCHMARK: 10K two-pattern join: {:.1}ms ({} rows)",
-            elapsed, count
+            elapsed,
+            count
         );
         assert_eq!(count, 10_000);
     }
@@ -360,11 +360,12 @@ mod tests {
         populate_entities(10_000, 500);
 
         let (count, elapsed) = timed_query(
-            "[:find ?name :where [?e :bench/name ?name] [?e :bench/age ?age] [(> ?age 50)]]"
+            "[:find ?name :where [?e :bench/name ?name] [?e :bench/age ?age] [(> ?age 50)]]",
         );
         pgrx::notice!(
             "BENCHMARK: 10K predicate filter: {:.1}ms ({} rows)",
-            elapsed, count
+            elapsed,
+            count
         );
         assert!(count > 0);
     }
@@ -375,12 +376,11 @@ mod tests {
         setup_benchmark_schema();
         populate_entities(10_000, 500);
 
-        let (count, elapsed) = timed_query(
-            "[:find (count ?e) :where [?e :bench/name _]]"
-        );
+        let (count, elapsed) = timed_query("[:find (count ?e) :where [?e :bench/name _]]");
         pgrx::notice!(
             "BENCHMARK: 10K aggregate count: {:.1}ms ({} result rows)",
-            elapsed, count
+            elapsed,
+            count
         );
     }
 
@@ -403,16 +403,24 @@ mod tests {
         timed_query("[:find ?name ?age :where [?e :bench/name ?name] [?e :bench/age ?age]]");
 
         // Check stats (mentat_backend_stats returns per-backend query metrics)
-        let stats_json = Spi::get_one::<pgrx::JsonB>(
-            "SELECT mentat_backend_stats()"
-        ).expect("stats").expect("NULL");
+        let stats_json = Spi::get_one::<pgrx::JsonB>("SELECT mentat_backend_stats()")
+            .expect("stats")
+            .expect("NULL");
 
         let stats = &stats_json.0;
         let total_queries = stats["total_queries"].as_u64().unwrap_or(0);
-        assert!(total_queries >= 3, "Expected at least 3 queries tracked, got {}", total_queries);
+        assert!(
+            total_queries >= 3,
+            "Expected at least 3 queries tracked, got {}",
+            total_queries
+        );
 
         let schema_aware_hits = stats["schema_aware_hits"].as_u64().unwrap_or(0);
-        assert!(schema_aware_hits > 0, "Expected schema-aware hits > 0, got {}", schema_aware_hits);
+        assert!(
+            schema_aware_hits > 0,
+            "Expected schema-aware hits > 0, got {}",
+            schema_aware_hits
+        );
 
         pgrx::notice!(
             "MONITORING: total_queries={}, schema_aware_hits={}, union_all_fallbacks={}, avg_ms={:.1}",

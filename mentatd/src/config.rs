@@ -126,7 +126,7 @@ fn default_timeout() -> u64 {
 }
 
 fn default_pool_size() -> usize {
-    100  // Increased from 10 to 100 for better concurrency (Phase 0 optimization)
+    100 // Increased from 10 to 100 for better concurrency (Phase 0 optimization)
 }
 
 fn default_max_lifetime() -> u64 {

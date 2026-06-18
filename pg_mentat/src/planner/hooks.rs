@@ -162,7 +162,8 @@ fn get_index_info() -> Result<
         (
             "idx_datoms_vaet".to_string(),
             "Value-first".to_string(),
-            "Reverse ref lookups (e.g., find all entities referring to a specific entity)".to_string(),
+            "Reverse ref lookups (e.g., find all entities referring to a specific entity)"
+                .to_string(),
         ),
     ];
 
@@ -253,7 +254,10 @@ pub fn max_result_rows() -> i32 {
 }
 
 /// Read the current value of `mentat.max_recursion_depth`.
-#[expect(dead_code, reason = "GUC reader; may be used by future rule invocation paths")]
+#[expect(
+    dead_code,
+    reason = "GUC reader; may be used by future rule invocation paths"
+)]
 pub fn max_recursion_depth() -> i32 {
     MAX_RECURSION_DEPTH.get()
 }

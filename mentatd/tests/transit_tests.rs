@@ -32,7 +32,10 @@ mod transit_json_tests {
         let response = Response::Success {
             result: ResponseValue::Nil,
         };
-        assert_eq!(serialize_transit_json(&response), r#"["^ ","~:result",null]"#);
+        assert_eq!(
+            serialize_transit_json(&response),
+            r#"["^ ","~:result",null]"#
+        );
     }
 
     /// Transit+JSON booleans are JSON booleans.
@@ -41,7 +44,10 @@ mod transit_json_tests {
         let response = Response::Success {
             result: ResponseValue::Boolean(true),
         };
-        assert_eq!(serialize_transit_json(&response), r#"["^ ","~:result",true]"#);
+        assert_eq!(
+            serialize_transit_json(&response),
+            r#"["^ ","~:result",true]"#
+        );
     }
 
     #[test]
@@ -319,10 +325,7 @@ mod transit_json_tests {
     #[test]
     fn test_list() {
         let response = Response::Success {
-            result: ResponseValue::List(vec![
-                ResponseValue::Integer(1),
-                ResponseValue::Integer(2),
-            ]),
+            result: ResponseValue::List(vec![ResponseValue::Integer(1), ResponseValue::Integer(2)]),
         };
         let json = serialize_transit_json(&response);
         assert_eq!(json, r#"["^ ","~:result",["~#list",[1,2]]]"#);
@@ -389,10 +392,7 @@ mod transit_json_tests {
             ]),
         };
         let json = serialize_transit_json(&response);
-        assert_eq!(
-            json,
-            r#"["^ ","~:result",[[10001,"Alice"],[10002,"Bob"]]]"#
-        );
+        assert_eq!(json, r#"["^ ","~:result",[[10001,"Alice"],[10002,"Bob"]]]"#);
     }
 
     /// Map containing vectors (typical datoms response).
@@ -781,9 +781,7 @@ mod transit_msgpack_tests {
             result: ResponseValue::Uuid("550e8400-e29b-41d4-a716-446655440000".to_string()),
         };
         let bytes = serialize_transit_msgpack(&response);
-        assert!(bytes
-            .windows(3)
-            .any(|w| w == b"~u5"));
+        assert!(bytes.windows(3).any(|w| w == b"~u5"));
     }
 
     /// Instants appear with ~m prefix in msgpack.
@@ -800,10 +798,7 @@ mod transit_msgpack_tests {
     #[test]
     fn test_list_tagged() {
         let response = Response::Success {
-            result: ResponseValue::List(vec![
-                ResponseValue::Integer(1),
-                ResponseValue::Integer(2),
-            ]),
+            result: ResponseValue::List(vec![ResponseValue::Integer(1), ResponseValue::Integer(2)]),
         };
         let bytes = serialize_transit_msgpack(&response);
         assert!(bytes.windows(6).any(|w| w == b"~#list"));
@@ -869,9 +864,7 @@ mod content_type_tests {
     fn test_accept_multiple_with_edn() {
         // EDN is not a transit encoding, so the best transit one wins
         assert_eq!(
-            parse_accept_encoding(
-                "application/edn;q=1.0, application/transit+json;q=0.9"
-            ),
+            parse_accept_encoding("application/edn;q=1.0, application/transit+json;q=0.9"),
             Some(TransitEncoding::Json)
         );
     }

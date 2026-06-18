@@ -29,15 +29,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_graph_schema() {
@@ -91,8 +92,7 @@ mod tests {
         .expect("data failed")
         .expect("NULL");
 
-        let tx_report: serde_json::Value =
-            serde_json::from_str(&result).expect("parse tx report");
+        let tx_report: serde_json::Value = serde_json::from_str(&result).expect("parse tx report");
         let alice = tx_report["tempids"]["alice"].as_i64().expect("alice eid");
         let bob = tx_report["tempids"]["bob"].as_i64().expect("bob eid");
         let carol = tx_report["tempids"]["carol"].as_i64().expect("carol eid");
@@ -189,12 +189,10 @@ mod tests {
         setup_graph_schema();
         let (alice, _, _) = setup_graph_data();
 
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[*]'::TEXT, {})::TEXT",
-            alice
-        ))
-        .expect("pull failed")
-        .expect("NULL");
+        let result =
+            Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]'::TEXT, {})::TEXT", alice))
+                .expect("pull failed")
+                .expect("NULL");
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
 
@@ -437,11 +435,10 @@ mod tests {
         setup_graph_schema();
         setup_graph_data();
 
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_pull('[:p/name]'::TEXT, 999999999)::TEXT",
-        )
-        .expect("pull nonexistent should not error")
-        .expect("NULL");
+        let result =
+            Spi::get_one::<String>("SELECT mentat_pull('[:p/name]'::TEXT, 999999999)::TEXT")
+                .expect("pull nonexistent should not error")
+                .expect("NULL");
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
         // Should return empty map or null for missing attributes
@@ -467,12 +464,10 @@ mod tests {
         setup_graph_schema();
         let (alice, _, _) = setup_graph_data();
 
-        let result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[]'::TEXT, {})::TEXT",
-            alice
-        ))
-        .expect("empty pattern should work")
-        .expect("NULL");
+        let result =
+            Spi::get_one::<String>(&format!("SELECT mentat_pull('[]'::TEXT, {})::TEXT", alice))
+                .expect("empty pattern should work")
+                .expect("NULL");
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
         assert!(json.is_object());

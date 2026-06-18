@@ -112,11 +112,7 @@ fn trigger_function_sql(
 ) -> String {
     // Escape single quotes in the query for embedding in PL/pgSQL
     let escaped_query = query.replace('\'', "''");
-    let func_name = format!(
-        "{}.mentat_sub_{}",
-        schema,
-        subscription_name
-    );
+    let func_name = format!("{}.mentat_sub_{}", schema, subscription_name);
 
     // The session variable key stores the last known hash for this subscription.
     // We use a custom GUC-like approach with current_setting / set_config.
@@ -164,11 +160,7 @@ $$;
 /// Generate the SQL for the trigger that fires the subscription function.
 fn trigger_sql(schema: &str, subscription_name: &str) -> String {
     let trigger_name = format!("mentat_sub_trg_{}", subscription_name);
-    let func_name = format!(
-        "{}.mentat_sub_{}",
-        schema,
-        subscription_name
-    );
+    let func_name = format!("{}.mentat_sub_{}", schema, subscription_name);
 
     format!(
         r"
@@ -186,11 +178,7 @@ CREATE OR REPLACE TRIGGER {trigger_name}
 /// Generate SQL to drop the trigger and function for a subscription.
 fn drop_trigger_sql(schema: &str, subscription_name: &str) -> String {
     let trigger_name = format!("mentat_sub_trg_{}", subscription_name);
-    let func_name = format!(
-        "{}.mentat_sub_{}",
-        schema,
-        subscription_name
-    );
+    let func_name = format!("{}.mentat_sub_{}", schema, subscription_name);
 
     format!(
         r"

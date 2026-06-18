@@ -79,7 +79,7 @@ enum TypedValue {
     Double(f64),
     Text(String),
     Keyword(String),
-    Instant(i64),      // microseconds since epoch
+    Instant(i64), // microseconds since epoch
     Uuid(uuid::Uuid),
     Bytes(Vec<u8>),
 }
@@ -199,7 +199,8 @@ fn value_type_name(value: &edn::Value) -> &'static str {
 fn get_available_attributes_hint() -> String {
     let available = error::get_available_attributes();
     if available.is_empty() {
-        "No schema attributes found. Did you forget to define schema with mentat_transact?".to_string()
+        "No schema attributes found. Did you forget to define schema with mentat_transact?"
+            .to_string()
     } else if available.len() > 20 {
         let shown: Vec<&str> = available.iter().take(20).map(|s| s.as_str()).collect();
         format!("Available attributes (first 20): {}", shown.join(", "))
@@ -367,9 +368,7 @@ fn execute_speculative_transaction(
     // Execute via a PL/pgSQL helper function that runs the transaction,
     // captures the result, then raises an exception to trigger rollback.
     // The EXCEPTION handler catches our marker and returns the result.
-    let get_sql = format!(
-        "SELECT mentat._speculative_exec('{escaped_schema}', '{escaped_edn}')"
-    );
+    let get_sql = format!("SELECT mentat._speculative_exec('{escaped_schema}', '{escaped_edn}')");
 
     // Create the helper function if it doesn't exist yet
     Spi::run(&format!(
@@ -501,11 +500,7 @@ fn execute_retract_entity_recursive(
     let mut component_targets: Vec<i64> = Vec::new();
 
     Spi::connect(|client| {
-        let rows = client.select(
-            &retract_query,
-            None,
-            &[DatumWithOid::from(e)],
-        )?;
+        let rows = client.select(&retract_query, None, &[DatumWithOid::from(e)])?;
 
         for row in rows {
             let a: i64 = row.get(1)?.ok_or("Missing attribute")?;
@@ -604,7 +599,8 @@ fn execute_cas_fn(
                      CAS requires at most one existing value",
                     current_values.len()
                 ),
-            }.into());
+            }
+            .into());
         }
     }
 
@@ -649,7 +645,8 @@ fn execute_cas_fn(
             attr: attr_name,
             expected: format!("{:?}", old_edn),
             actual: current_desc,
-        }.into());
+        }
+        .into());
     }
 
     // CAS matched -- retract old value (if not nil) and assert new value
@@ -822,13 +819,16 @@ fn execute_transaction_inner(
     // Validate it's a vector
     let entities = match value {
         edn::Value::Vector(ref vec) => vec,
-        _ => return Err(MentatError::InvalidTransaction {
-            message: format!(
-                "Transaction must be a vector of entities, got {}. \
+        _ => {
+            return Err(MentatError::InvalidTransaction {
+                message: format!(
+                    "Transaction must be a vector of entities, got {}. \
                  Expected EDN like: [[:db/add \"tempid\" :attr \"value\"]]",
-                value_type_name(&value)
-            ),
-        }.into()),
+                    value_type_name(&value)
+                ),
+            }
+            .into())
+        }
     };
 
     // Allocate transaction ID with advisory lock protection
@@ -897,7 +897,8 @@ fn execute_transaction_inner(
     let mut schema_builders: BTreeMap<i64, SchemaBuilder> = BTreeMap::new();
     // Track entity IDs allocated for map entities (by index) so Pass 2 reuses
     // the same IDs instead of calling nextval again.
-    let mut map_entity_ids: std::collections::HashMap<usize, i64> = std::collections::HashMap::new();
+    let mut map_entity_ids: std::collections::HashMap<usize, i64> =
+        std::collections::HashMap::new();
 
     // --- Pass 1: Scan for schema definitions ---
     // Only process :db/ident, :db/valueType, :db/cardinality, etc. assertions.
@@ -927,14 +928,15 @@ fn execute_transaction_inner(
             edn::Value::Map(ref map) => {
                 // Resolve entity for stable tempid allocation.
                 // Store the allocated ID so Pass 2 reuses it.
-                let e = if let Some(id_val) =
-                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::namespaced("db", "id")))
-                {
+                let e = if let Some(id_val) = map.get(&edn::Value::Keyword(
+                    edn::symbols::Keyword::namespaced("db", "id"),
+                )) {
                     resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else {
-                    let id = Spi::get_one::<i64>(
-                        &format!("SELECT nextval('{}.partition_user_seq')", qs),
-                    )
+                    let id = Spi::get_one::<i64>(&format!(
+                        "SELECT nextval('{}.partition_user_seq')",
+                        qs
+                    ))
                     .ok()
                     .flatten()
                     .ok_or_else(|| MentatError::AllocationFailed {
@@ -1007,7 +1009,8 @@ fn execute_transaction_inner(
                                      got {}. Format: [:db.fn/retractEntity entity-id]",
                                     entity_vec.len() - 1
                                 ),
-                            }.into());
+                            }
+                            .into());
                         }
                         let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
                         execute_retract_entity_fn(e, &qs, &mut pending_datoms)?;
@@ -1021,14 +1024,19 @@ fn execute_transaction_inner(
                                      Format: [:db.fn/cas e a old-val new-val]",
                                     entity_vec.len() - 1
                                 ),
-                            }.into());
+                            }
+                            .into());
                         }
                         let e = resolve_entity_place(&entity_vec[1], &mut tempid_map, &qs)?;
                         let a = resolve_attribute(&entity_vec[2])?;
                         execute_cas_fn(
-                            e, a,
-                            &entity_vec[3], &entity_vec[4],
-                            &qs, &mut tempid_map, &mut pending_datoms,
+                            e,
+                            a,
+                            &entity_vec[3],
+                            &entity_vec[4],
+                            &qs,
+                            &mut tempid_map,
+                            &mut pending_datoms,
                         )?;
                     }
                 }
@@ -1065,31 +1073,24 @@ fn execute_transaction_inner(
                 };
                 let added = matches!(op, OpType::Add);
 
-                pending_datoms.push(PendingDatom {
-                    e,
-                    a,
-                    v,
-                    added,
-                });
+                pending_datoms.push(PendingDatom { e, a, v, added });
             }
             edn::Value::Map(ref map) => {
                 // Reuse entity ID from Pass 1 if one was pre-allocated,
                 // otherwise allocate a new one (for non-schema map entities).
-                let e = if let Some(id_val) =
-                    map.get(&edn::Value::Keyword(edn::symbols::Keyword::namespaced("db", "id")))
-                {
+                let e = if let Some(id_val) = map.get(&edn::Value::Keyword(
+                    edn::symbols::Keyword::namespaced("db", "id"),
+                )) {
                     resolve_entity_place(id_val, &mut tempid_map, &qs)?
                 } else if let Some(&pre_allocated) = map_entity_ids.get(&entity_idx) {
                     pre_allocated
                 } else {
-                    Spi::get_one::<i64>(
-                        &format!("SELECT nextval('{}.partition_user_seq')", qs),
-                    )
-                    .ok()
-                    .flatten()
-                    .ok_or_else(|| MentatError::AllocationFailed {
-                        partition: "db.part/user".to_string(),
-                    })?
+                    Spi::get_one::<i64>(&format!("SELECT nextval('{}.partition_user_seq')", qs))
+                        .ok()
+                        .flatten()
+                        .ok_or_else(|| MentatError::AllocationFailed {
+                            partition: "db.part/user".to_string(),
+                        })?
                 };
 
                 for (attr_key, attr_value) in map {
@@ -1421,7 +1422,8 @@ fn insert_datoms(
     // Collect all rows that need to be written to the type-specific tables.
     // Deferred to a single batch INSERT per type at the end of the loop,
     // reducing ~463 per-datom INSERTs to at most 9 (one per type table).
-    let mut rows_to_insert: Vec<(i64, i64, TypedValue, i64, bool)> = Vec::with_capacity(datom_count);
+    let mut rows_to_insert: Vec<(i64, i64, TypedValue, i64, bool)> =
+        Vec::with_capacity(datom_count);
     let mut fulltext_values: Vec<String> = Vec::new();
 
     for datom in pending_datoms {
@@ -1464,9 +1466,7 @@ fn insert_datoms(
                             prune_projection_ea(datom.e, datom.a, &datom.v, schema)?;
                         }
                         "many" => {
-                            if is_duplicate_cardinality_many(
-                                datom.e, datom.a, &datom.v, schema,
-                            )? {
+                            if is_duplicate_cardinality_many(datom.e, datom.a, &datom.v, schema)? {
                                 continue;
                             }
                             // For cardinality-many noHistory, prune only stale
@@ -1479,7 +1479,8 @@ fn insert_datoms(
                             return Err(MentatError::InvalidCardinality {
                                 cardinality: attr_info.cardinality.clone(),
                                 attr_entid: datom.a,
-                            }.into());
+                            }
+                            .into());
                         }
                     }
                     // Queue only the new assertion; no retraction trail.
@@ -1493,12 +1494,8 @@ fn insert_datoms(
                 }
                 match attr_info.cardinality.as_str() {
                     "one" => {
-                        match retract_existing_cardinality_one(
-                            datom.e,
-                            datom.a,
-                            &datom.v,
-                            schema,
-                        )? {
+                        match retract_existing_cardinality_one(datom.e, datom.a, &datom.v, schema)?
+                        {
                             CardinalityOneResult::Skip => continue, // idempotent
                             CardinalityOneResult::Insert => { /* no retraction needed */ }
                             CardinalityOneResult::Replace(old_v) => {
@@ -1508,12 +1505,7 @@ fn insert_datoms(
                         }
                     }
                     "many" => {
-                        if is_duplicate_cardinality_many(
-                            datom.e,
-                            datom.a,
-                            &datom.v,
-                            schema,
-                        )? {
+                        if is_duplicate_cardinality_many(datom.e, datom.a, &datom.v, schema)? {
                             continue;
                         }
                     }
@@ -1521,7 +1513,8 @@ fn insert_datoms(
                         return Err(MentatError::InvalidCardinality {
                             cardinality: attr_info.cardinality.clone(),
                             attr_entid: datom.a,
-                        }.into());
+                        }
+                        .into());
                     }
                 }
             }
@@ -1666,8 +1659,7 @@ fn install_schema_attributes(
         // we install the ident mapping and move on. For a genuine attribute
         // definition we fail loud on a missing piece rather than silently
         // skipping it.
-        let is_attribute_definition =
-            builder.value_type.is_some() || builder.cardinality.is_some();
+        let is_attribute_definition = builder.value_type.is_some() || builder.cardinality.is_some();
 
         let ident = match &builder.ident {
             Some(i) => i.clone(),
@@ -1826,14 +1818,15 @@ fn resolve_entity_place(
             if let Some(&existing) = tempid_map.get::<str>(s.as_ref()) {
                 Ok(existing)
             } else {
-                let entid = Spi::get_one::<i64>(
-                    &format!("SELECT nextval('{}.partition_user_seq')", schema),
-                )
+                let entid = Spi::get_one::<i64>(&format!(
+                    "SELECT nextval('{}.partition_user_seq')",
+                    schema
+                ))
                 .ok()
                 .flatten()
                 .ok_or_else(|| MentatError::AllocationFailed {
-                        partition: "db.part/user".to_string(),
-                    })?;
+                    partition: "db.part/user".to_string(),
+                })?;
                 tempid_map.insert(s.to_string(), entid);
                 Ok(entid)
             }
@@ -1865,10 +1858,16 @@ fn resolve_entity_place(
             // Example: [:person/email "alice@example.com"]
             match &vec[0] {
                 edn::Value::Keyword(_) => {}
-                other => return Err(MentatError::InvalidEntityPlace {
-                    got_type: value_type_name(other).to_string(),
-                    got_value: format!("Lookup ref first element must be a keyword attribute, got {}", other),
-                }.into()),
+                other => {
+                    return Err(MentatError::InvalidEntityPlace {
+                        got_type: value_type_name(other).to_string(),
+                        got_value: format!(
+                            "Lookup ref first element must be a keyword attribute, got {}",
+                            other
+                        ),
+                    }
+                    .into())
+                }
             }
 
             let a = resolve_attribute(&vec[0])?;
@@ -1877,36 +1876,42 @@ fn resolve_entity_place(
             let attr_ident_display = crate::cache::get_cache()
                 .get_ident(a)
                 .unwrap_or_else(|| format!("entid:{}", a));
-            let attr_info = lookup_attribute_info(a)
-                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            let attr_info = lookup_attribute_info(a).ok_or_else(
+                || -> Box<dyn std::error::Error + Send + Sync> {
                     error::attribute_not_found(&attr_ident_display).into()
-                })?;
+                },
+            )?;
             if attr_info.unique_constraint.is_none() {
                 return Err(MentatError::LookupRefRequiresUnique {
                     attr: attr_ident_display,
-                }.into());
+                }
+                .into());
             }
 
             let typed_val = encode_value(&vec[1])?;
 
             // Query for entity with this unique attribute value using typed columns
-            let eid = check_unique_typed_value(a, &typed_val, schema)?
-                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            let eid = check_unique_typed_value(a, &typed_val, schema)?.ok_or_else(
+                || -> Box<dyn std::error::Error + Send + Sync> {
                     let attr_ident_display = crate::cache::get_cache()
                         .get_ident(a)
                         .unwrap_or_else(|| format!("entid:{}", a));
                     MentatError::LookupRefNotFound {
                         attr: attr_ident_display,
-                        message: "Ensure an entity with this attribute value has been transacted.".to_string(),
-                    }.into()
-                })?;
+                        message: "Ensure an entity with this attribute value has been transacted."
+                            .to_string(),
+                    }
+                    .into()
+                },
+            )?;
 
             Ok(eid)
         }
         other => Err(MentatError::InvalidEntityPlace {
             got_type: value_type_name(other).to_string(),
             got_value: other.to_string(),
-        }.into()),
+        }
+        .into()),
     }
 }
 
@@ -1926,7 +1931,8 @@ fn resolve_attribute(value: &edn::Value) -> Result<i64, Box<dyn std::error::Erro
         other => Err(MentatError::InvalidAttribute {
             got_type: value_type_name(other).to_string(),
             got_value: other.to_string(),
-        }.into()),
+        }
+        .into()),
     }
 }
 
@@ -1960,9 +1966,7 @@ fn encode_value(
             let micros = dt.timestamp_micros();
             Ok(TypedValue::Instant(micros))
         }
-        edn::Value::Uuid(u) => {
-            Ok(TypedValue::Uuid(*u))
-        }
+        edn::Value::Uuid(u) => Ok(TypedValue::Uuid(*u)),
         edn::Value::Bytes(b) => {
             // edn::Value::Bytes wraps bytes::Bytes; TypedValue::Bytes is Vec<u8>.
             Ok(TypedValue::Bytes(b.to_vec()))
@@ -1981,7 +1985,8 @@ fn encode_value(
         other => Err(MentatError::UnsupportedValueType {
             got_type: value_type_name(other).to_string(),
             got_value: other.to_string(),
-        }.into()),
+        }
+        .into()),
     }
 }
 
@@ -2027,13 +2032,14 @@ fn validate_datom_constraints(
     all_pending: &[PendingDatom],
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let attr_info = lookup_attribute_info(datom.a)
-        .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+    let attr_info = lookup_attribute_info(datom.a).ok_or_else(
+        || -> Box<dyn std::error::Error + Send + Sync> {
             let ident_name = crate::cache::get_cache()
                 .get_ident(datom.a)
                 .unwrap_or_else(|| format!("entid:{}", datom.a));
             error::attribute_not_found(&ident_name).into()
-        })?;
+        },
+    )?;
 
     // 1. Type validation
     let expected_type_tag = value_type_to_tag(&attr_info.value_type);
@@ -2049,7 +2055,8 @@ fn validate_datom_constraints(
             got: got_type_name.to_string(),
             expected_tag: expected_type_tag,
             got_tag: got_type_tag,
-        }.into());
+        }
+        .into());
     }
 
     // 2. Cardinality validation
@@ -2069,7 +2076,8 @@ fn validate_datom_constraints(
                     attr: ident_name,
                     entity: datom.e,
                     count: count_in_tx,
-                }.into());
+                }
+                .into());
             }
 
             // Note: existing values for cardinality-one attributes are handled by
@@ -2084,7 +2092,8 @@ fn validate_datom_constraints(
             return Err(MentatError::InvalidCardinality {
                 cardinality: attr_info.cardinality.clone(),
                 attr_entid: datom.a,
-            }.into());
+            }
+            .into());
         }
     }
 
@@ -2110,7 +2119,8 @@ fn validate_datom_constraints(
                 unique_type: unique_type.clone(),
                 existing_eid: datom.e,
                 new_eid: datom.e,
-            }.into());
+            }
+            .into());
         }
 
         // Check existing datoms in database (use advisory lock to prevent races)
@@ -2138,7 +2148,8 @@ fn validate_datom_constraints(
                     unique_type: unique_type.clone(),
                     existing_eid: existing_e,
                     new_eid: datom.e,
-                }.into());
+                }
+                .into());
             }
             // existing_e == datom.e: the entity already has this value for this
             // unique attribute. This is fine -- it's either an upsert (identity)
@@ -2291,53 +2302,101 @@ fn is_duplicate_cardinality_many(
         TypedValue::Ref(id) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_ref \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(*id)]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(*id),
+            ],
+        ),
         TypedValue::Boolean(b) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_boolean \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(*b)]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(*b),
+            ],
+        ),
         TypedValue::Long(n) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_long \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(*n)]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(*n),
+            ],
+        ),
         TypedValue::Double(f) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_double \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(*f)]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(*f),
+            ],
+        ),
         TypedValue::Text(s) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_text \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(s.as_str()),
+            ],
+        ),
         TypedValue::Keyword(s) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_keyword \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(s.as_str())]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(s.as_str()),
+            ],
+        ),
         TypedValue::Instant(micros) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_instant \
              WHERE store_id = $1 AND e = $2 AND a = $3 \
              AND v = to_timestamp($4::DOUBLE PRECISION / 1000000.0))",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(*micros)]),
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(*micros),
+            ],
+        ),
         TypedValue::Uuid(u) => {
             let uuid_str = u.to_string();
             Spi::get_one_with_args::<bool>(
                 "SELECT EXISTS(SELECT 1 FROM mentat.current_uuid \
                  WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4::UUID)",
-                &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-                  DatumWithOid::from(attr_id), DatumWithOid::from(uuid_str.as_str())])
+                &[
+                    DatumWithOid::from(store_id),
+                    DatumWithOid::from(entity_id),
+                    DatumWithOid::from(attr_id),
+                    DatumWithOid::from(uuid_str.as_str()),
+                ],
+            )
         }
         TypedValue::Bytes(b) => Spi::get_one_with_args::<bool>(
             "SELECT EXISTS(SELECT 1 FROM mentat.current_bytes \
              WHERE store_id = $1 AND e = $2 AND a = $3 AND v = $4)",
-            &[DatumWithOid::from(store_id), DatumWithOid::from(entity_id),
-              DatumWithOid::from(attr_id), DatumWithOid::from(b.clone())]),
-    }.ok().flatten().unwrap_or(false);
+            &[
+                DatumWithOid::from(store_id),
+                DatumWithOid::from(entity_id),
+                DatumWithOid::from(attr_id),
+                DatumWithOid::from(b.clone()),
+            ],
+        ),
+    }
+    .ok()
+    .flatten()
+    .unwrap_or(false);
 
     Ok(exists)
 }
@@ -2381,15 +2440,42 @@ fn compute_typed_value_hash(v: &TypedValue) -> u64 {
 
     let mut hasher = DefaultHasher::new();
     match v {
-        TypedValue::Ref(i) => { 0i16.hash(&mut hasher); i.hash(&mut hasher); }
-        TypedValue::Boolean(b) => { 1i16.hash(&mut hasher); b.hash(&mut hasher); }
-        TypedValue::Long(i) => { 2i16.hash(&mut hasher); i.hash(&mut hasher); }
-        TypedValue::Double(f) => { 3i16.hash(&mut hasher); f.to_bits().hash(&mut hasher); }
-        TypedValue::Text(s) => { 7i16.hash(&mut hasher); s.hash(&mut hasher); }
-        TypedValue::Keyword(s) => { 8i16.hash(&mut hasher); s.hash(&mut hasher); }
-        TypedValue::Instant(i) => { 4i16.hash(&mut hasher); i.hash(&mut hasher); }
-        TypedValue::Uuid(u) => { 10i16.hash(&mut hasher); u.as_bytes().hash(&mut hasher); }
-        TypedValue::Bytes(b) => { 11i16.hash(&mut hasher); b.hash(&mut hasher); }
+        TypedValue::Ref(i) => {
+            0i16.hash(&mut hasher);
+            i.hash(&mut hasher);
+        }
+        TypedValue::Boolean(b) => {
+            1i16.hash(&mut hasher);
+            b.hash(&mut hasher);
+        }
+        TypedValue::Long(i) => {
+            2i16.hash(&mut hasher);
+            i.hash(&mut hasher);
+        }
+        TypedValue::Double(f) => {
+            3i16.hash(&mut hasher);
+            f.to_bits().hash(&mut hasher);
+        }
+        TypedValue::Text(s) => {
+            7i16.hash(&mut hasher);
+            s.hash(&mut hasher);
+        }
+        TypedValue::Keyword(s) => {
+            8i16.hash(&mut hasher);
+            s.hash(&mut hasher);
+        }
+        TypedValue::Instant(i) => {
+            4i16.hash(&mut hasher);
+            i.hash(&mut hasher);
+        }
+        TypedValue::Uuid(u) => {
+            10i16.hash(&mut hasher);
+            u.as_bytes().hash(&mut hasher);
+        }
+        TypedValue::Bytes(b) => {
+            11i16.hash(&mut hasher);
+            b.hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -2480,7 +2566,8 @@ fn get_store_id_from_schema(schema: &str) -> Result<i64, Box<dyn std::error::Err
         return Err(MentatError::InvalidStoreName {
             store_name: schema.to_string(),
             reason: "Schema must be 'mentat' or 'mentat_*'".to_string(),
-        }.into());
+        }
+        .into());
     };
 
     let store_id: Option<i64> = Spi::get_one_with_args(
@@ -2491,7 +2578,8 @@ fn get_store_id_from_schema(schema: &str) -> Result<i64, Box<dyn std::error::Err
     store_id.ok_or_else(|| {
         MentatError::StoreNotFound {
             store_name: store_name.to_string(),
-        }.into()
+        }
+        .into()
     })
 }
 
@@ -2544,32 +2632,41 @@ fn batch_insert_datoms(
     let store_id = get_store_id_from_schema(schema)?;
 
     // Per-type accumulators: each entry is one row in the VALUES clause.
-    let mut ref_vals:     Vec<String> = Vec::new();
-    let mut bool_vals:    Vec<String> = Vec::new();
-    let mut long_vals:    Vec<String> = Vec::new();
-    let mut double_vals:  Vec<String> = Vec::new();
+    let mut ref_vals: Vec<String> = Vec::new();
+    let mut bool_vals: Vec<String> = Vec::new();
+    let mut long_vals: Vec<String> = Vec::new();
+    let mut double_vals: Vec<String> = Vec::new();
     let mut instant_vals: Vec<String> = Vec::new();
-    let mut text_vals:    Vec<String> = Vec::new();
-    let mut kw_vals:      Vec<String> = Vec::new();
-    let mut uuid_vals:    Vec<String> = Vec::new();
-    let mut bytes_vals:   Vec<String> = Vec::new();
+    let mut text_vals: Vec<String> = Vec::new();
+    let mut kw_vals: Vec<String> = Vec::new();
+    let mut uuid_vals: Vec<String> = Vec::new();
+    let mut bytes_vals: Vec<String> = Vec::new();
 
     for (e, a, v, tx, added) in rows {
         let added_sql = if *added { "true" } else { "false" };
         match v {
             TypedValue::Ref(ref_id) => {
-                ref_vals.push(format!("({},{},{},{},{},{})",
-                    store_id, e, a, ref_id, tx, added_sql));
+                ref_vals.push(format!(
+                    "({},{},{},{},{},{})",
+                    store_id, e, a, ref_id, tx, added_sql
+                ));
             }
             TypedValue::Boolean(b) => {
-                bool_vals.push(format!("({},{},{},{},{},{})",
-                    store_id, e, a,
+                bool_vals.push(format!(
+                    "({},{},{},{},{},{})",
+                    store_id,
+                    e,
+                    a,
                     if *b { "true" } else { "false" },
-                    tx, added_sql));
+                    tx,
+                    added_sql
+                ));
             }
             TypedValue::Long(n) => {
-                long_vals.push(format!("({},{},{},{},{},{})",
-                    store_id, e, a, n, tx, added_sql));
+                long_vals.push(format!(
+                    "({},{},{},{},{},{})",
+                    store_id, e, a, n, tx, added_sql
+                ));
             }
             TypedValue::Double(f) => {
                 // Use ::double precision cast to prevent PostgreSQL from
@@ -2585,57 +2682,84 @@ fn batch_insert_datoms(
                 } else {
                     format!("{:e}::double precision", f)
                 };
-                double_vals.push(format!("({},{},{},{},{},{})",
-                    store_id, e, a, v_sql, tx, added_sql));
+                double_vals.push(format!(
+                    "({},{},{},{},{},{})",
+                    store_id, e, a, v_sql, tx, added_sql
+                ));
             }
             TypedValue::Instant(micros) => {
                 // to_timestamp converts Unix microseconds → TIMESTAMPTZ.
                 instant_vals.push(format!(
                     "({},{},{},to_timestamp({}::double precision/1000000.0),{},{})",
-                    store_id, e, a, micros, tx, added_sql));
+                    store_id, e, a, micros, tx, added_sql
+                ));
             }
             TypedValue::Text(s) => {
-                text_vals.push(format!("({},{},{},'{}',{},{})",
-                    store_id, e, a, sql_escape_str(s), tx, added_sql));
+                text_vals.push(format!(
+                    "({},{},{},'{}',{},{})",
+                    store_id,
+                    e,
+                    a,
+                    sql_escape_str(s),
+                    tx,
+                    added_sql
+                ));
             }
             TypedValue::Keyword(s) => {
-                kw_vals.push(format!("({},{},{},'{}',{},{})",
-                    store_id, e, a, sql_escape_str(s), tx, added_sql));
+                kw_vals.push(format!(
+                    "({},{},{},'{}',{},{})",
+                    store_id,
+                    e,
+                    a,
+                    sql_escape_str(s),
+                    tx,
+                    added_sql
+                ));
             }
             TypedValue::Uuid(u) => {
-                uuid_vals.push(format!("({},{},{},'{}',{},{})",
-                    store_id, e, a, u, tx, added_sql));
+                uuid_vals.push(format!(
+                    "({},{},{},'{}',{},{})",
+                    store_id, e, a, u, tx, added_sql
+                ));
             }
             TypedValue::Bytes(b) => {
                 bytes_vals.push(format!(
                     "({},{},{},decode('{}','hex'),{},{})",
-                    store_id, e, a, hex::encode(b), tx, added_sql));
+                    store_id,
+                    e,
+                    a,
+                    hex::encode(b),
+                    tx,
+                    added_sql
+                ));
             }
         }
     }
 
     // Helper closure: flush one type group as a single INSERT.
-    let flush = |table: &str, vals: Vec<String>| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if vals.is_empty() {
-            return Ok(());
-        }
-        Spi::run(&format!(
-            "INSERT INTO mentat.{} (store_id,e,a,v,tx,added) VALUES {} \
+    let flush =
+        |table: &str, vals: Vec<String>| -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+            if vals.is_empty() {
+                return Ok(());
+            }
+            Spi::run(&format!(
+                "INSERT INTO mentat.{} (store_id,e,a,v,tx,added) VALUES {} \
              ON CONFLICT (store_id,e,a,v,tx) DO UPDATE SET added = EXCLUDED.added",
-            table, vals.join(",")
-        ))?;
-        Ok(())
-    };
+                table,
+                vals.join(",")
+            ))?;
+            Ok(())
+        };
 
-    flush("datoms_ref_new",     ref_vals)?;
+    flush("datoms_ref_new", ref_vals)?;
     flush("datoms_boolean_new", bool_vals)?;
-    flush("datoms_long_new",    long_vals)?;
-    flush("datoms_double_new",  double_vals)?;
+    flush("datoms_long_new", long_vals)?;
+    flush("datoms_double_new", double_vals)?;
     flush("datoms_instant_new", instant_vals)?;
-    flush("datoms_text_new",    text_vals)?;
+    flush("datoms_text_new", text_vals)?;
     flush("datoms_keyword_new", kw_vals)?;
-    flush("datoms_uuid_new",    uuid_vals)?;
-    flush("datoms_bytes_new",   bytes_vals)?;
+    flush("datoms_uuid_new", uuid_vals)?;
+    flush("datoms_bytes_new", bytes_vals)?;
 
     Ok(())
 }
@@ -2646,7 +2770,13 @@ fn batch_insert_datoms(
 fn typed_value_sql_literal(v: &TypedValue) -> String {
     match v {
         TypedValue::Ref(id) => id.to_string(),
-        TypedValue::Boolean(b) => if *b { "true".to_string() } else { "false".to_string() },
+        TypedValue::Boolean(b) => {
+            if *b {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        }
         TypedValue::Long(n) => n.to_string(),
         TypedValue::Double(f) => {
             if f.is_nan() {
@@ -2830,18 +2960,18 @@ fn maintain_current_projection(
             // pending delete of the same key (retract-then-reassert in one tx
             // ends with the value live).
             deletes.get_mut(table).map(|m| m.remove(&key));
-            upserts.entry(table).or_default().insert(
-                key,
-                format!("({},{},{},{},{})", store_id, e, a, v_sql, tx),
-            );
+            upserts
+                .entry(table)
+                .or_default()
+                .insert(key, format!("({},{},{},{},{})", store_id, e, a, v_sql, tx));
         } else {
             // Retraction. Drop any pending upsert of the same key (assert-then-
             // retract in one tx ends with the value gone), and queue a delete.
             upserts.get_mut(table).map(|m| m.remove(&key));
-            deletes.entry(table).or_default().insert(
-                key,
-                format!("({},{},{},{})", store_id, e, a, v_sql),
-            );
+            deletes
+                .entry(table)
+                .or_default()
+                .insert(key, format!("({},{},{},{})", store_id, e, a, v_sql));
         }
     }
 
@@ -2854,7 +2984,11 @@ fn maintain_current_projection(
             continue;
         }
         let rows_sql: Vec<&String> = tuples.values().collect();
-        let joined = rows_sql.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
+        let joined = rows_sql
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         Spi::run(&format!(
             "DELETE FROM mentat.{} WHERE (store_id,e,a,v) IN (VALUES {})",
             table, joined
@@ -2865,7 +2999,11 @@ fn maintain_current_projection(
             continue;
         }
         let rows_sql: Vec<&String> = vals.values().collect();
-        let joined = rows_sql.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(",");
+        let joined = rows_sql
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
         Spi::run(&format!(
             "INSERT INTO mentat.{} (store_id,e,a,v,tx) VALUES {} \
              ON CONFLICT (store_id,e,a,v) DO UPDATE SET tx = EXCLUDED.tx",
@@ -2980,7 +3118,8 @@ fn read_typed_value_from_row(
             // We need Unix epoch microseconds, so we'll read it differently.
             // Option: read the column as a String and parse, or use the internal representation.
             // pgrx::datum::TimestampWithTimeZone can be converted to i64 (microseconds from PG epoch)
-            let v: pgrx::datum::TimestampWithTimeZone = row.get(offset + 7)?.ok_or("Missing v_instant")?;
+            let v: pgrx::datum::TimestampWithTimeZone =
+                row.get(offset + 7)?.ok_or("Missing v_instant")?;
             // PG epoch is 2000-01-01 00:00:00 UTC, Unix epoch is 1970-01-01
             // Difference: 946684800 seconds = 946684800_000_000 microseconds
             let pg_epoch_offset_micros: i64 = 946_684_800_000_000;

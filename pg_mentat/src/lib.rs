@@ -233,7 +233,6 @@ extension_sql_file!(
     requires = ["bootstrap_schema", "narrow_storage"],
 );
 
-
 // Datom helper functions: convenience PL/pgSQL wrappers for common query patterns
 extension_sql!(
     r"
@@ -701,162 +700,162 @@ pub fn ensure_extension_loaded() {
 }
 
 #[cfg(any(test, feature = "pg_test"))]
-mod cache_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod concurrency_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod typed_value_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod transact_unit_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod query_edge_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod pull_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod temporal_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod security_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod error_regression_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod schema_operation_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod entity_tests;
+mod aggregate_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod batch_operation_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod property_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod value_type_exhaustive_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod query_comprehensive_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod transaction_comprehensive_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod schema_comprehensive_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod cardinality_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod upsert_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod retraction_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod tempid_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod lookup_ref_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod predicate_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod aggregate_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod find_spec_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod input_parameter_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod history_tests;
+mod bootstrap_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod boundary_value_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod cross_entity_tests;
+mod cache_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod stress_scale_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod idempotency_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod multi_transaction_workflow_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod schema_evolution_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod parameterized_value_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod query_pattern_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod transaction_report_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod data_integrity_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod schema_introspection_tests;
+mod cardinality_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod cas_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod pull_api_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod regression_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod bootstrap_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod namespace_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod mixed_operation_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod edge_case_query_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod comprehensive_retract_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod comprehensive_upsert_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod generated_value_tests;
+mod concurrency_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod query_predicate_exhaustive_tests;
+mod cross_entity_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod ref_graph_tests;
+pub mod current_projection_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod transaction_lifecycle_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod find_spec_exhaustive_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod schema_attribute_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod entity_lifecycle_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod query_join_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod error_handling_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod performance_benchmark_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod speculative_transaction_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod transaction_safety_tests;
+mod data_integrity_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod datalog_feature_tests;
 #[cfg(any(test, feature = "pg_test"))]
+mod edge_case_query_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod entity_lifecycle_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod entity_tests;
+pub mod error;
+#[cfg(any(test, feature = "pg_test"))]
+mod error_handling_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod error_regression_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod find_spec_exhaustive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod find_spec_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod fulltext_bm25_tests;
-#[cfg(any(test, feature = "pg_test"))]
-pub mod or_not_tests;
-#[cfg(any(test, feature = "pg_test"))]
-pub mod or_rule_tests;
+pub mod functions;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod fuzzy_match_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod fuzzystrmatch_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod pg_trgm_tests;
+mod generated_value_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod rum_tests;
+mod ground_collection_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod pgvector_tests;
+mod history_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod pgque_tests;
-#[cfg(any(test, feature = "pg_test"))]
-pub mod pg_infer_tests;
-#[cfg(any(test, feature = "pg_test"))]
-pub mod postgis_tests;
+mod idempotency_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod infra_extensions_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod operational_accessors_tests;
+mod input_parameter_tests;
 #[cfg(any(test, feature = "pg_test"))]
-pub mod current_projection_tests;
+mod lookup_ref_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod mixed_operation_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod multi_transaction_workflow_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod namespace_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod no_history_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod ground_collection_tests;
-pub mod error;
-pub mod functions;
+pub mod operational_accessors_tests;
 mod operators;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod or_not_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod or_rule_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod parameterized_value_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod performance_benchmark_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pg_infer_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pg_trgm_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pgque_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod pgvector_tests;
 mod planner;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod postgis_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod predicate_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod property_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod pull_api_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod pull_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_edge_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_join_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_pattern_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod query_predicate_exhaustive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod ref_graph_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod regression_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod retraction_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod rum_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_attribute_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_evolution_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_introspection_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod schema_operation_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod security_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod speculative_transaction_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod stress_scale_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod tempid_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod temporal_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transact_unit_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_comprehensive_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_lifecycle_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_report_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod transaction_safety_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod typed_value_tests;
 mod types;
+#[cfg(any(test, feature = "pg_test"))]
+mod upsert_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod value_type_exhaustive_tests;
 
 // Export Edn at root for internal use
 pub use types::edn::Edn;
@@ -1168,8 +1167,8 @@ pub mod pg_test {
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
-    use pgrx::prelude::*;
     use pgrx::datum::DatumWithOid;
+    use pgrx::prelude::*;
 
     // ============================================================================
     // Test Helper Functions
@@ -1189,7 +1188,7 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
+             $$",
         )?;
         Spi::run(
             "CREATE OR REPLACE FUNCTION mentat._test_get_error(stmt TEXT) RETURNS TEXT
@@ -1200,7 +1199,7 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN SQLERRM;
              END;
-             $$"
+             $$",
         )?;
         Ok(())
     }
@@ -1208,18 +1207,18 @@ mod tests {
     /// Check if a SQL statement raises an error (uses PL/pgSQL exception handling).
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     /// Run a SQL statement and return the error message, or panic if no error.
     /// Uses PL/pgSQL to catch the error in a subtransaction.
     fn get_error_message(sql: &str) -> String {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._test_get_error('{}')", escaped
-        )).expect("get_error call").unwrap_or_else(|| panic!("Expected error from SQL: {sql}"))
+        Spi::get_one::<String>(&format!("SELECT mentat._test_get_error('{}')", escaped))
+            .expect("get_error call")
+            .unwrap_or_else(|| panic!("Expected error from SQL: {sql}"))
     }
 
     /// Bootstrap the core Mentat schema (delegates to the extension's bootstrap_schema()).
@@ -1294,9 +1293,10 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_map() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT ('{:name \"Alice\" :age 30}'::mentat.edn)::text")
-            .expect("Failed to execute query")
-            .expect("Query returned NULL");
+        let result =
+            Spi::get_one::<String>("SELECT ('{:name \"Alice\" :age 30}'::mentat.edn)::text")
+                .expect("Failed to execute query")
+                .expect("Query returned NULL");
         assert!(result.contains("Alice"));
     }
 
@@ -2317,7 +2317,10 @@ mod tests {
             .iter()
             .map(|r| r.as_array().unwrap()[0].as_str().unwrap())
             .collect();
-        assert!(names.contains(&"Alice"), "Should contain Alice (via and-branch)");
+        assert!(
+            names.contains(&"Alice"),
+            "Should contain Alice (via and-branch)"
+        );
         assert!(
             names.contains(&"Charlie"),
             "Should contain Charlie (via simple branch)"
@@ -2444,10 +2447,7 @@ mod tests {
             1,
             "Only the matching branch should produce results"
         );
-        assert_eq!(
-            results[0].as_array().unwrap()[0].as_str().unwrap(),
-            "Alice"
-        );
+        assert_eq!(results[0].as_array().unwrap()[0].as_str().unwrap(), "Alice");
     }
 
     /// Test that string predicates with quotes are properly escaped (SQL injection prevention).
@@ -2836,10 +2836,12 @@ mod tests {
              :person/email "alice@example.com"}
         ]"#;
 
-        let tx_result =
-            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
-                .expect("Data transaction failed")
-                .expect("Transaction returned NULL");
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
 
         let tx_json: serde_json::Value =
             serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
@@ -2973,10 +2975,12 @@ mod tests {
              :person/friend "alice"}
         ]"#;
 
-        let tx_result =
-            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
-                .expect("Data transaction failed")
-                .expect("Transaction returned NULL");
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
 
         let tx_json: serde_json::Value =
             serde_json::from_str(&tx_result).expect("Failed to parse transaction result");
@@ -3104,11 +3108,10 @@ mod tests {
         // Test: mentat_entity decodes a ref to a non-ident target as a
         // lookup-ref object {":db/id": <entid>} (its longstanding behavior;
         // refs to entities that DO have a :db/ident render as the keyword).
-        let entity_result = Spi::get_one::<String>(
-            &format!("SELECT mentat_entity({})::TEXT", source_eid),
-        )
-        .expect("Entity query failed")
-        .expect("Entity returned NULL");
+        let entity_result =
+            Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", source_eid))
+                .expect("Entity query failed")
+                .expect("Entity returned NULL");
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
@@ -3164,10 +3167,12 @@ mod tests {
              :person/age 25}
         ]"#;
 
-        let tx_result =
-            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
-                .expect("Data transaction failed")
-                .expect("Transaction returned NULL");
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
 
         let tx_json: serde_json::Value =
             serde_json::from_str(&tx_result).expect("Failed to parse tx result");
@@ -3241,10 +3246,12 @@ mod tests {
              :person/age 25}
         ]"#;
 
-        let tx_result =
-            Spi::get_one_with_args::<String>("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
-                .expect("Data transaction failed")
-                .expect("Transaction returned NULL");
+        let tx_result = Spi::get_one_with_args::<String>(
+            "SELECT mentat_transact($1)",
+            &[DatumWithOid::from(data_tx)],
+        )
+        .expect("Data transaction failed")
+        .expect("Transaction returned NULL");
 
         let tx_json: serde_json::Value =
             serde_json::from_str(&tx_result).expect("Failed to parse tx result");
@@ -3283,7 +3290,10 @@ mod tests {
             .as_i64()
             .expect("Age should be integer");
 
-        assert_eq!(age, 31, "Map-form lookup ref should have updated Alice's age to 31");
+        assert_eq!(
+            age, 31,
+            "Map-form lookup ref should have updated Alice's age to 31"
+        );
     }
 
     #[pg_test]
@@ -3314,23 +3324,27 @@ mod tests {
         // Create Alice
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(r#"[
+            &[DatumWithOid::from(
+                r#"[
                 {:db/id "alice"
                  :person/name "Alice"
                  :person/email "alice@example.com"}
-            ]"#)],
+            ]"#,
+            )],
         )
         .expect("Alice transaction failed");
 
         // Create Bob with :person/friend pointing to Alice via lookup ref
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(r#"[
+            &[DatumWithOid::from(
+                r#"[
                 {:db/id "bob"
                  :person/name "Bob"
                  :person/email "bob@example.com"
                  :person/friend [:person/email "alice@example.com"]}
-            ]"#)],
+            ]"#,
+            )],
         )
         .expect("Bob transaction with lookup ref as ref value failed");
 
@@ -3382,11 +3396,13 @@ mod tests {
         // Create a product
         Spi::run_with_args(
             "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(r#"[
+            &[DatumWithOid::from(
+                r#"[
                 {:db/id "widget"
                  :product/sku "WIDGET-001"
                  :product/name "Widget"}
-            ]"#)],
+            ]"#,
+            )],
         )
         .expect("Product transaction failed");
 
@@ -3515,11 +3531,8 @@ mod tests {
              :person/age 30}
         ]"#;
 
-        Spi::run_with_args(
-            "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(data_tx)],
-        )
-        .expect("Data transaction failed");
+        Spi::run_with_args("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+            .expect("Data transaction failed");
 
         // Use lookup ref as :in binding for entity position
         // Query: find the name of the person with email "alice@example.com"
@@ -3580,11 +3593,8 @@ mod tests {
              :person/friend "alice"}
         ]"#;
 
-        Spi::run_with_args(
-            "SELECT mentat_transact($1)",
-            &[DatumWithOid::from(data_tx)],
-        )
-        .expect("Data transaction failed");
+        Spi::run_with_args("SELECT mentat_transact($1)", &[DatumWithOid::from(data_tx)])
+            .expect("Data transaction failed");
 
         // Use lookup ref in value position: find who has Alice as a friend
         // The :in variable ?alice binds to a value-position (ref type) via lookup ref
@@ -4785,28 +4795,28 @@ mod tests {
             "History should show 3 datoms: original assert, CAS retract, CAS assert"
         );
 
-        let alice_added = results
-            .iter()
-            .any(|r| {
-                let row = r.as_array().unwrap();
-                row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(true)
-            });
-        let alice_retracted = results
-            .iter()
-            .any(|r| {
-                let row = r.as_array().unwrap();
-                row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(false)
-            });
-        let alicia_added = results
-            .iter()
-            .any(|r| {
-                let row = r.as_array().unwrap();
-                row[0].as_str() == Some("Alicia") && row[1].as_bool() == Some(true)
-            });
+        let alice_added = results.iter().any(|r| {
+            let row = r.as_array().unwrap();
+            row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(true)
+        });
+        let alice_retracted = results.iter().any(|r| {
+            let row = r.as_array().unwrap();
+            row[0].as_str() == Some("Alice") && row[1].as_bool() == Some(false)
+        });
+        let alicia_added = results.iter().any(|r| {
+            let row = r.as_array().unwrap();
+            row[0].as_str() == Some("Alicia") && row[1].as_bool() == Some(true)
+        });
 
         assert!(alice_added, "History should show Alice was asserted");
-        assert!(alice_retracted, "History should show Alice was retracted by CAS");
-        assert!(alicia_added, "History should show Alicia was asserted by CAS");
+        assert!(
+            alice_retracted,
+            "History should show Alice was retracted by CAS"
+        );
+        assert!(
+            alicia_added,
+            "History should show Alicia was asserted by CAS"
+        );
     }
 
     // ============================================================================
@@ -4854,8 +4864,14 @@ mod tests {
             .expect("Stats returned NULL");
         let stats: serde_json::Value =
             serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
-        assert_eq!(stats["size"], 1, "Cache should have 1 entry after first query");
-        assert_eq!(stats["total_hits"], 0, "No hits yet (first execution was a miss)");
+        assert_eq!(
+            stats["size"], 1,
+            "Cache should have 1 entry after first query"
+        );
+        assert_eq!(
+            stats["total_hits"], 0,
+            "No hits yet (first execution was a miss)"
+        );
     }
 
     #[pg_test]
@@ -4886,8 +4902,14 @@ mod tests {
             .expect("Stats returned NULL");
         let stats: serde_json::Value =
             serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
-        assert_eq!(stats["size"], 1, "Same query pattern should produce 1 cache entry");
-        assert_eq!(stats["total_hits"], 2, "Should have 2 cache hits (queries 2 and 3)");
+        assert_eq!(
+            stats["size"], 1,
+            "Same query pattern should produce 1 cache entry"
+        );
+        assert_eq!(
+            stats["total_hits"], 2,
+            "Should have 2 cache hits (queries 2 and 3)"
+        );
     }
 
     #[pg_test]
@@ -4922,7 +4944,10 @@ mod tests {
             .expect("Stats returned NULL");
         let stats: serde_json::Value =
             serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
-        assert_eq!(stats["size"], 2, "Different queries should produce separate cache entries");
+        assert_eq!(
+            stats["size"], 2,
+            "Different queries should produce separate cache entries"
+        );
     }
 
     #[pg_test]
@@ -4945,7 +4970,10 @@ mod tests {
             .expect("Stats returned NULL");
         let stats: serde_json::Value =
             serde_json::from_str(&stats_str).expect("Failed to parse stats JSON");
-        assert!(stats["size"].as_u64().expect("size should be int") > 0, "Cache should be non-empty");
+        assert!(
+            stats["size"].as_u64().expect("size should be int") > 0,
+            "Cache should be non-empty"
+        );
 
         // Clear and verify
         Spi::get_one::<String>("SELECT mentat_stmt_cache_clear()::TEXT")
@@ -4989,7 +5017,10 @@ mod tests {
             serde_json::from_str(&result2_str).expect("Failed to parse result 2");
 
         // Results should be identical
-        assert_eq!(result1, result2, "Cached query should produce identical results");
+        assert_eq!(
+            result1, result2,
+            "Cached query should produce identical results"
+        );
         assert_eq!(
             result1["result"].as_str().expect("Expected string result"),
             ":db/ident",
@@ -5058,9 +5089,7 @@ mod tests {
 
         let query_json: serde_json::Value =
             serde_json::from_str(&query_result).expect("Failed to parse query result");
-        let results = query_json["results"]
-            .as_array()
-            .expect("Expected array");
+        let results = query_json["results"].as_array().expect("Expected array");
 
         assert_eq!(results.len(), 1, "Should find one value > 3.0");
         let val = results[0][1].as_f64().expect("Value should be double");
@@ -5079,12 +5108,16 @@ mod tests {
         let pull_val = pull_json[":measurement/value"]
             .as_f64()
             .expect("Pull should return double");
-        assert!((pull_val - 3.14159).abs() < 0.00001, "Pull double value should match");
+        assert!(
+            (pull_val - 3.14159).abs() < 0.00001,
+            "Pull double value should match"
+        );
 
         // Test entity API returns correct format
-        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", m1_eid))
-            .expect("Entity failed")
-            .expect("Entity returned NULL");
+        let entity_result =
+            Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", m1_eid))
+                .expect("Entity failed")
+                .expect("Entity returned NULL");
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
@@ -5157,19 +5190,24 @@ mod tests {
 
         let query_json: serde_json::Value =
             serde_json::from_str(&query_result).expect("Failed to parse query result");
-        let results = query_json["results"]
-            .as_array()
-            .expect("Expected array");
+        let results = query_json["results"].as_array().expect("Expected array");
 
         assert_eq!(results.len(), 3, "Should find all three timestamps");
         // Each instant comes back as an ISO-8601 string; in UTC the three
         // values are 2024-01-15 (x2) and 1970-01-01.
         let mut rendered: Vec<String> = results
             .iter()
-            .map(|r| r[1].as_str().expect("Timestamp should be string").to_string())
+            .map(|r| {
+                r[1].as_str()
+                    .expect("Timestamp should be string")
+                    .to_string()
+            })
             .collect();
         rendered.sort();
-        assert!(rendered[0].contains("1970-01-01"), "earliest should be 1970-01-01, got {rendered:?}");
+        assert!(
+            rendered[0].contains("1970-01-01"),
+            "earliest should be 1970-01-01, got {rendered:?}"
+        );
         assert!(rendered[1].contains("2024-01-15"), "got {rendered:?}");
         assert!(rendered[2].contains("2024-01-15"), "got {rendered:?}");
 
@@ -5188,19 +5226,26 @@ mod tests {
         let pull_ts = pull_json[":event/timestamp"]
             .as_i64()
             .expect("Pull should return instant as microsecond integer");
-        assert_eq!(pull_ts, 1_705_314_600_000_000, "Pull instant micros should match");
+        assert_eq!(
+            pull_ts, 1_705_314_600_000_000,
+            "Pull instant micros should match"
+        );
 
         // Test entity API: same microsecond-integer representation as pull.
-        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", e1_eid))
-            .expect("Entity failed")
-            .expect("Entity returned NULL");
+        let entity_result =
+            Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", e1_eid))
+                .expect("Entity failed")
+                .expect("Entity returned NULL");
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
         let entity_ts = entity_json[":event/timestamp"]
             .as_i64()
             .expect("Entity should return instant as microsecond integer");
-        assert_eq!(entity_ts, 1_705_314_600_000_000, "Entity instant micros should match");
+        assert_eq!(
+            entity_ts, 1_705_314_600_000_000,
+            "Entity instant micros should match"
+        );
     }
 
     #[pg_test]
@@ -5261,9 +5306,7 @@ mod tests {
 
         let query_json: serde_json::Value =
             serde_json::from_str(&query_result).expect("Failed to parse query result");
-        let results = query_json["results"]
-            .as_array()
-            .expect("Expected array");
+        let results = query_json["results"].as_array().expect("Expected array");
 
         assert_eq!(results.len(), 2, "Should find both UUIDs");
         let uuid_val = results[0][1].as_str().expect("UUID should be string");
@@ -5288,9 +5331,10 @@ mod tests {
         assert_eq!(pull_uuid, test_uuid, "Pull UUID should match");
 
         // Test entity API returns correct format
-        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", s1_eid))
-            .expect("Entity failed")
-            .expect("Entity returned NULL");
+        let entity_result =
+            Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", s1_eid))
+                .expect("Entity failed")
+                .expect("Entity returned NULL");
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
@@ -5367,9 +5411,7 @@ mod tests {
 
         let query_json: serde_json::Value =
             serde_json::from_str(&query_result).expect("Failed to parse query result");
-        let results = query_json["results"]
-            .as_array()
-            .expect("Expected array");
+        let results = query_json["results"].as_array().expect("Expected array");
 
         assert_eq!(results.len(), 2, "Should find both byte arrays");
         let bytes_val = results[0][1].as_str().expect("Bytes should be hex string");
@@ -5394,9 +5436,10 @@ mod tests {
         assert_eq!(pull_bytes, hello_hex, "Pull bytes should match");
 
         // Test entity API returns correct format (hex string)
-        let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", f1_eid))
-            .expect("Entity failed")
-            .expect("Entity returned NULL");
+        let entity_result =
+            Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", f1_eid))
+                .expect("Entity failed")
+                .expect("Entity returned NULL");
 
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
@@ -5418,9 +5461,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
         crate::cache::get_cache().invalidate();
 
-        let err = get_error_message(
-            "SELECT mentat_transact('42'::TEXT)"
-        );
+        let err = get_error_message("SELECT mentat_transact('42'::TEXT)");
         assert!(
             err.contains(":db.error/invalid-transaction"),
             "Error should contain error code, got: {err}"
@@ -5438,7 +5479,7 @@ mod tests {
         crate::cache::get_cache().invalidate();
 
         let err = get_error_message(
-            "SELECT mentat_transact('[[:db/add \"t\" :nonexistent/attr \"val\"]]'::TEXT)"
+            "SELECT mentat_transact('[[:db/add \"t\" :nonexistent/attr \"val\"]]'::TEXT)",
         );
         assert!(
             err.contains(":db.error/attribute-not-found"),
@@ -5459,7 +5500,7 @@ mod tests {
 
         // :person/age is :db.type/long, so passing a string should fail
         let err = get_error_message(
-            "SELECT mentat_transact('[[:db/add \"p\" :person/age \"not-a-number\"]]'::TEXT)"
+            "SELECT mentat_transact('[[:db/add \"p\" :person/age \"not-a-number\"]]'::TEXT)",
         );
         assert!(
             err.contains(":db.error/wrong-type-for-attribute"),
@@ -5481,9 +5522,7 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
         crate::cache::get_cache().invalidate();
 
-        let err = get_error_message(
-            "SELECT mentat_pull(':person/name'::TEXT, 1)"
-        );
+        let err = get_error_message("SELECT mentat_pull(':person/name'::TEXT, 1)");
         assert!(
             err.contains(":db.error/invalid-pull-pattern"),
             "Error should contain pull pattern error code, got: {err}"
@@ -5504,7 +5543,7 @@ mod tests {
             "SELECT mentat_query(
                 '[:find (median ?x) :where [?x :db/ident _]]'::TEXT,
                 '{}'::jsonb
-            )::TEXT"
+            )::TEXT",
         );
         assert!(
             err.contains(":db.error/unsupported-aggregate"),
@@ -5522,11 +5561,10 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
         crate::cache::get_cache().invalidate();
 
-        let err = get_error_message(
-            "SELECT mentat.batch('[[:bogus 123]]'::TEXT)::TEXT"
-        );
+        let err = get_error_message("SELECT mentat.batch('[[:bogus 123]]'::TEXT)::TEXT");
         assert!(
-            err.contains(":db.error/unknown-batch-op") || err.contains(":db.error/invalid-batch-op"),
+            err.contains(":db.error/unknown-batch-op")
+                || err.contains(":db.error/invalid-batch-op"),
             "Error should contain batch operation error code, got: {err}"
         );
         assert!(
@@ -5585,19 +5623,31 @@ mod tests {
 
         // Should have exactly 2 results: Bob(35) and Dave(100)
         assert_eq!(
-            results.len(), 2,
+            results.len(),
+            2,
             "Expected 2 people with age > 30, got {}: {:?}",
-            results.len(), results
+            results.len(),
+            results
         );
 
         // Verify the names
-        let names: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"Bob"), "Bob (age 35) should be in results: {:?}", names);
-        assert!(names.contains(&"Dave"), "Dave (age 100) should be in results: {:?}", names);
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert!(
+            names.contains(&"Bob"),
+            "Bob (age 35) should be in results: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Dave"),
+            "Dave (age 100) should be in results: {:?}",
+            names
+        );
         // Critical: Eve (age 2) must NOT be in results
-        assert!(!names.contains(&"Eve"), "Eve (age 2) should NOT be in results: {:?}", names);
+        assert!(
+            !names.contains(&"Eve"),
+            "Eve (age 2) should NOT be in results: {:?}",
+            names
+        );
     }
 
     /// Regression test: numeric less-than comparison.
@@ -5642,16 +5692,24 @@ mod tests {
         let results = json["results"].as_array().expect("Expected array");
 
         assert_eq!(
-            results.len(), 2,
+            results.len(),
+            2,
             "Expected 2 people with age < 10, got {}: {:?}",
-            results.len(), results
+            results.len(),
+            results
         );
 
-        let names: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"Alice"), "Alice (age 5) should be in results: {:?}", names);
-        assert!(names.contains(&"Dave"), "Dave (age 2) should be in results: {:?}", names);
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert!(
+            names.contains(&"Alice"),
+            "Alice (age 5) should be in results: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Dave"),
+            "Dave (age 2) should be in results: {:?}",
+            names
+        );
     }
 
     /// Regression test: text range queries use lexicographic ordering.
@@ -5696,17 +5754,25 @@ mod tests {
         let results = json["results"].as_array().expect("Expected array");
 
         assert_eq!(
-            results.len(), 2,
+            results.len(),
+            2,
             "Expected 2 names > 'Bob', got {}: {:?}",
-            results.len(), results
+            results.len(),
+            results
         );
 
-        let names: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"Carol"), "Carol should be > Bob: {:?}", names);
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert!(
+            names.contains(&"Carol"),
+            "Carol should be > Bob: {:?}",
+            names
+        );
         assert!(names.contains(&"Zara"), "Zara should be > Bob: {:?}", names);
-        assert!(!names.contains(&"Alice"), "Alice should NOT be > Bob: {:?}", names);
+        assert!(
+            !names.contains(&"Alice"),
+            "Alice should NOT be > Bob: {:?}",
+            names
+        );
     }
 
     /// Regression test: numeric ordering with order-by.
@@ -5755,11 +5821,10 @@ mod tests {
         assert_eq!(results.len(), 4, "Expected 4 results");
 
         // Verify ordering: ages should be 2, 3, 10, 100
-        let ages: Vec<i64> = results.iter()
-            .map(|r| r[1].as_i64().unwrap())
-            .collect();
+        let ages: Vec<i64> = results.iter().map(|r| r[1].as_i64().unwrap()).collect();
         assert_eq!(
-            ages, vec![2, 3, 10, 100],
+            ages,
+            vec![2, 3, 10, 100],
             "Ages should be in ascending numeric order, got: {:?}",
             ages
         );
@@ -5810,17 +5875,29 @@ mod tests {
         let results = json["results"].as_array().expect("Expected array");
 
         assert_eq!(
-            results.len(), 3,
+            results.len(),
+            3,
             "Expected 3 people with 10 < age < 40, got {}: {:?}",
-            results.len(), results
+            results.len(),
+            results
         );
 
-        let names: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"Bob"), "Bob (15) should be in 10..40: {:?}", names);
-        assert!(names.contains(&"Carol"), "Carol (25) should be in 10..40: {:?}", names);
-        assert!(names.contains(&"Dave"), "Dave (35) should be in 10..40: {:?}", names);
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
+        assert!(
+            names.contains(&"Bob"),
+            "Bob (15) should be in 10..40: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Carol"),
+            "Carol (25) should be in 10..40: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"Dave"),
+            "Dave (35) should be in 10..40: {:?}",
+            names
+        );
     }
 
     /// Regression test: UUID values maintain consistent ordering.
@@ -5880,19 +5957,16 @@ mod tests {
         assert_eq!(results.len(), 3, "Should find all 3 items");
 
         // Verify consistent ordering: 11111111 < 55555555 < aaaaaaaa
-        let names: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
         assert_eq!(
-            names, vec!["Second", "First", "Third"],
+            names,
+            vec!["Second", "First", "Third"],
             "UUIDs should sort in consistent lexicographic order: 1111 < 5555 < aaaa, got: {:?}",
             names
         );
 
         // Also verify the UUID values round-trip correctly
-        let uuids: Vec<&str> = results.iter()
-            .map(|r| r[1].as_str().unwrap())
-            .collect();
+        let uuids: Vec<&str> = results.iter().map(|r| r[1].as_str().unwrap()).collect();
         assert!(
             uuids[0].starts_with("11111111"),
             "First UUID should be 11111111..., got: {}",
@@ -5974,19 +6048,16 @@ mod tests {
         assert_eq!(results.len(), 4, "Should find all 4 events");
 
         // Verify chronological ordering
-        let labels: Vec<&str> = results.iter()
-            .map(|r| r[0].as_str().unwrap())
-            .collect();
+        let labels: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
         assert_eq!(
-            labels, vec!["Ancient", "Early", "Middle", "Recent"],
+            labels,
+            vec!["Ancient", "Early", "Middle", "Recent"],
             "Events should be in chronological order, got: {:?}",
             labels
         );
 
         // Verify timestamps contain expected date fragments
-        let timestamps: Vec<&str> = results.iter()
-            .map(|r| r[1].as_str().unwrap())
-            .collect();
+        let timestamps: Vec<&str> = results.iter().map(|r| r[1].as_str().unwrap()).collect();
         assert!(
             timestamps[0].contains("1999"),
             "First timestamp should be 1999, got: {}",
@@ -6011,15 +6082,18 @@ mod tests {
         )
         .expect("Query failed");
 
-        let desc_json: serde_json::Value = serde_json::from_str(&desc_result.expect("Query returned NULL"))
-            .expect("Failed to parse JSON");
+        let desc_json: serde_json::Value =
+            serde_json::from_str(&desc_result.expect("Query returned NULL"))
+                .expect("Failed to parse JSON");
         let desc_results = desc_json["results"].as_array().expect("Expected array");
 
-        let desc_labels: Vec<&str> = desc_results.iter()
+        let desc_labels: Vec<&str> = desc_results
+            .iter()
             .map(|r| r[0].as_str().unwrap())
             .collect();
         assert_eq!(
-            desc_labels, vec!["Recent", "Middle", "Early", "Ancient"],
+            desc_labels,
+            vec!["Recent", "Middle", "Early", "Ancient"],
             "Descending order should be reverse chronological, got: {:?}",
             desc_labels
         );
@@ -6071,15 +6145,27 @@ mod tests {
         .expect("Query failed")
         .expect("Query returned NULL");
 
-        let json: serde_json::Value = serde_json::from_str(&result)
-            .expect("Failed to parse JSON");
+        let json: serde_json::Value = serde_json::from_str(&result).expect("Failed to parse JSON");
         let results = json["results"].as_array().expect("Expected array");
 
         // With correct numeric ordering: ages 2 and 5 are < 10
-        assert_eq!(results.len(), 2, "Expected 2 results for age < 10, got {}", results.len());
-        assert_eq!(results[0][0].as_str().unwrap(), "Alice", "First should be Alice (age 2)");
+        assert_eq!(
+            results.len(),
+            2,
+            "Expected 2 results for age < 10, got {}",
+            results.len()
+        );
+        assert_eq!(
+            results[0][0].as_str().unwrap(),
+            "Alice",
+            "First should be Alice (age 2)"
+        );
         assert_eq!(results[0][1].as_i64().unwrap(), 2);
-        assert_eq!(results[1][0].as_str().unwrap(), "Diana", "Second should be Diana (age 5)");
+        assert_eq!(
+            results[1][0].as_str().unwrap(),
+            "Diana",
+            "Second should be Diana (age 5)"
+        );
         assert_eq!(results[1][1].as_i64().unwrap(), 5);
 
         // Query: ascending order by age should be 2, 5, 10, 100
@@ -6096,11 +6182,15 @@ mod tests {
         .expect("Query failed")
         .expect("Query returned NULL");
 
-        let json: serde_json::Value = serde_json::from_str(&result)
-            .expect("Failed to parse JSON");
+        let json: serde_json::Value = serde_json::from_str(&result).expect("Failed to parse JSON");
         let results = json["results"].as_array().expect("Expected array");
         let ages: Vec<i64> = results.iter().map(|r| r[1].as_i64().unwrap()).collect();
-        assert_eq!(ages, vec![2, 5, 10, 100], "Ages should be in correct numeric order, got {:?}", ages);
+        assert_eq!(
+            ages,
+            vec![2, 5, 10, 100],
+            "Ages should be in correct numeric order, got {:?}",
+            ages
+        );
     }
 
     #[pg_test]
@@ -6144,12 +6234,12 @@ mod tests {
         .expect("Query failed")
         .expect("Query returned NULL");
 
-        let json: serde_json::Value = serde_json::from_str(&result)
-            .expect("Failed to parse JSON");
+        let json: serde_json::Value = serde_json::from_str(&result).expect("Failed to parse JSON");
         let results = json["results"].as_array().expect("Expected array");
         let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
         assert_eq!(
-            names, vec!["Nine", "Ten", "Eleven"],
+            names,
+            vec!["Nine", "Ten", "Eleven"],
             "Between 5 and 50 should return Nine(9), Ten(10), Eleven(11), got: {:?}",
             names
         );
@@ -6188,12 +6278,12 @@ mod tests {
         .expect("Query failed")
         .expect("Query returned NULL");
 
-        let json: serde_json::Value = serde_json::from_str(&result)
-            .expect("Failed to parse JSON");
+        let json: serde_json::Value = serde_json::from_str(&result).expect("Failed to parse JSON");
         let results = json["results"].as_array().expect("Expected array");
         let names: Vec<&str> = results.iter().map(|r| r[0].as_str().unwrap()).collect();
         assert_eq!(
-            names, vec!["apple", "banana", "cherry", "date"],
+            names,
+            vec!["apple", "banana", "cherry", "date"],
             "String ordering should be alphabetical, got: {:?}",
             names
         );

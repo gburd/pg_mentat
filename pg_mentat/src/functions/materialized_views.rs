@@ -89,10 +89,7 @@ fn validate_refresh_policy(policy: &str) -> Result<(), MentatError> {
 // ---------------------------------------------------------------------------
 
 /// Check if a materialized view with the given name exists for a store.
-fn matview_exists(
-    store_name: &str,
-    view_name: &str,
-) -> Result<bool, pgrx::spi::SpiError> {
+fn matview_exists(store_name: &str, view_name: &str) -> Result<bool, pgrx::spi::SpiError> {
     Spi::connect(|client| {
         let exists = client
             .select(
@@ -115,10 +112,7 @@ fn matview_exists(
 
 /// Generate the SQL for the trigger function that refreshes a materialized view
 /// when datoms change.
-fn refresh_trigger_function_sql(
-    schema: &str,
-    view_name: &str,
-) -> String {
+fn refresh_trigger_function_sql(schema: &str, view_name: &str) -> String {
     let func_name = format!("{}.mentat_matview_refresh_{}", schema, view_name);
     let qualified_view = format!("{}.{}", schema, view_name);
 
@@ -307,9 +301,7 @@ pub fn materialize(
         .enumerate()
         .map(|(i, name)| {
             // Sanitize column name: replace ? and / with _
-            let safe_name = name
-                .trim_start_matches('?')
-                .replace('/', "_");
+            let safe_name = name.trim_start_matches('?').replace('/', "_");
             format!("col{} AS {}", i + 1, quote_ident(&safe_name))
         })
         .collect::<Vec<_>>()

@@ -200,8 +200,8 @@ fn parse_operation(
             let args_map = extract_args_map(map)?;
             let index_str = extract_value_as_string(&args_map, "index", input)?;
             let index = parse_datoms_index(&index_str)?;
-            let components = extract_optional_vector(&args_map, "components", input)
-                .unwrap_or_default();
+            let components =
+                extract_optional_vector(&args_map, "components", input).unwrap_or_default();
 
             Ok(Operation::Datoms { index, components })
         }
@@ -425,7 +425,7 @@ fn extract_args_map(
     // Use pre-allocated key
     match map.get(&*KEY_ARGS) {
         Some(v) => match &v.inner {
-            SpannedValue::Map(m) => Ok(m),  // Return reference, not clone
+            SpannedValue::Map(m) => Ok(m), // Return reference, not clone
             _ => Err(ParseError::MissingField("args".to_string())),
         },
         _ => Err(ParseError::MissingField("args".to_string())),
@@ -494,8 +494,7 @@ fn extract_required_int(
     map: &std::collections::BTreeMap<ValueAndSpan, ValueAndSpan>,
     key: &str,
 ) -> Result<i64, ParseError> {
-    extract_optional_int(map, key)
-        .ok_or_else(|| ParseError::MissingField(key.to_string()))
+    extract_optional_int(map, key).ok_or_else(|| ParseError::MissingField(key.to_string()))
 }
 
 fn extract_value_as_string(
@@ -607,7 +606,11 @@ mod tests {
             Operation::With { tx_data } => {
                 // The EDN debug format uses Rust Debug for SpannedValue,
                 // so keywords appear as Keyword(...) and strings as Text(...)
-                assert!(!tx_data.is_empty(), "tx_data should not be empty: {}", tx_data);
+                assert!(
+                    !tx_data.is_empty(),
+                    "tx_data should not be empty: {}",
+                    tx_data
+                );
             }
             _ => panic!("Expected With operation"),
         }
@@ -619,11 +622,17 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Filter { predicate, query, .. } => {
+            Operation::Filter {
+                predicate, query, ..
+            } => {
                 match predicate {
                     super::super::FilterPredicate::AttrEquals(attr) => {
                         // The EDN debug format wraps keywords in Keyword(...)
-                        assert!(!attr.is_empty(), "attr predicate should not be empty: {}", attr);
+                        assert!(
+                            !attr.is_empty(),
+                            "attr predicate should not be empty: {}",
+                            attr
+                        );
                     }
                     _ => panic!("Expected AttrEquals predicate"),
                 }
@@ -640,12 +649,10 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Filter { predicate, .. } => {
-                match predicate {
-                    super::super::FilterPredicate::Since(t) => assert_eq!(t, 1000),
-                    _ => panic!("Expected Since predicate"),
-                }
-            }
+            Operation::Filter { predicate, .. } => match predicate {
+                super::super::FilterPredicate::Since(t) => assert_eq!(t, 1000),
+                _ => panic!("Expected Since predicate"),
+            },
             _ => panic!("Expected Filter operation"),
         }
     }
@@ -656,12 +663,10 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Filter { predicate, .. } => {
-                match predicate {
-                    super::super::FilterPredicate::EntityEquals(eid) => assert_eq!(eid, 42),
-                    _ => panic!("Expected EntityEquals predicate"),
-                }
-            }
+            Operation::Filter { predicate, .. } => match predicate {
+                super::super::FilterPredicate::EntityEquals(eid) => assert_eq!(eid, 42),
+                _ => panic!("Expected EntityEquals predicate"),
+            },
             _ => panic!("Expected Filter operation"),
         }
     }
@@ -688,7 +693,14 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Query { query, args, timeout, limit, offset, db_id } => {
+            Operation::Query {
+                query,
+                args,
+                timeout,
+                limit,
+                offset,
+                db_id,
+            } => {
                 assert!(query.contains("find"));
                 assert!(args.is_empty());
                 assert!(timeout.is_none());
@@ -755,7 +767,10 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Transact { connection_id, tx_data } => {
+            Operation::Transact {
+                connection_id,
+                tx_data,
+            } => {
                 assert_eq!(connection_id, "abc-123");
                 assert!(tx_data.contains("db/id"));
             }
@@ -807,27 +822,54 @@ mod tests {
 
     #[test]
     fn test_parse_datoms_index_direct_eavt() {
-        assert!(matches!(parse_datoms_index("eavt"), Ok(super::super::DatomsIndex::EAVT)));
-        assert!(matches!(parse_datoms_index("EAVT"), Ok(super::super::DatomsIndex::EAVT)));
-        assert!(matches!(parse_datoms_index(":eavt"), Ok(super::super::DatomsIndex::EAVT)));
+        assert!(matches!(
+            parse_datoms_index("eavt"),
+            Ok(super::super::DatomsIndex::EAVT)
+        ));
+        assert!(matches!(
+            parse_datoms_index("EAVT"),
+            Ok(super::super::DatomsIndex::EAVT)
+        ));
+        assert!(matches!(
+            parse_datoms_index(":eavt"),
+            Ok(super::super::DatomsIndex::EAVT)
+        ));
     }
 
     #[test]
     fn test_parse_datoms_index_direct_aevt() {
-        assert!(matches!(parse_datoms_index("aevt"), Ok(super::super::DatomsIndex::AEVT)));
-        assert!(matches!(parse_datoms_index("AEVT"), Ok(super::super::DatomsIndex::AEVT)));
+        assert!(matches!(
+            parse_datoms_index("aevt"),
+            Ok(super::super::DatomsIndex::AEVT)
+        ));
+        assert!(matches!(
+            parse_datoms_index("AEVT"),
+            Ok(super::super::DatomsIndex::AEVT)
+        ));
     }
 
     #[test]
     fn test_parse_datoms_index_direct_avet() {
-        assert!(matches!(parse_datoms_index("avet"), Ok(super::super::DatomsIndex::AVET)));
-        assert!(matches!(parse_datoms_index("AVET"), Ok(super::super::DatomsIndex::AVET)));
+        assert!(matches!(
+            parse_datoms_index("avet"),
+            Ok(super::super::DatomsIndex::AVET)
+        ));
+        assert!(matches!(
+            parse_datoms_index("AVET"),
+            Ok(super::super::DatomsIndex::AVET)
+        ));
     }
 
     #[test]
     fn test_parse_datoms_index_direct_vaet() {
-        assert!(matches!(parse_datoms_index("vaet"), Ok(super::super::DatomsIndex::VAET)));
-        assert!(matches!(parse_datoms_index("VAET"), Ok(super::super::DatomsIndex::VAET)));
+        assert!(matches!(
+            parse_datoms_index("vaet"),
+            Ok(super::super::DatomsIndex::VAET)
+        ));
+        assert!(matches!(
+            parse_datoms_index("VAET"),
+            Ok(super::super::DatomsIndex::VAET)
+        ));
     }
 
     #[test]
@@ -1113,7 +1155,10 @@ mod tests {
         let anomaly: Anomaly = err.into();
         assert!(matches!(anomaly.category, AnomalyCategory::Incorrect));
         assert!(anomaly.message.contains("test"));
-        assert_eq!(anomaly.db_error.as_deref(), Some(":db.error/invalid-request"));
+        assert_eq!(
+            anomaly.db_error.as_deref(),
+            Some(":db.error/invalid-request")
+        );
     }
 
     // ---- Filter predicate edge cases ----
@@ -1124,14 +1169,12 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Filter { predicate, .. } => {
-                match predicate {
-                    super::super::FilterPredicate::Custom(expr) => {
-                        assert_eq!(expr, "e > 100");
-                    }
-                    _ => panic!("Expected Custom predicate"),
+            Operation::Filter { predicate, .. } => match predicate {
+                super::super::FilterPredicate::Custom(expr) => {
+                    assert_eq!(expr, "e > 100");
                 }
-            }
+                _ => panic!("Expected Custom predicate"),
+            },
             _ => panic!("Expected Filter operation"),
         }
     }
@@ -1207,7 +1250,12 @@ mod tests {
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {
-            Operation::Qseq { query, args, chunk_size, db_id } => {
+            Operation::Qseq {
+                query,
+                args,
+                chunk_size,
+                db_id,
+            } => {
                 assert!(query.contains("find"));
                 assert!(args.is_empty());
                 assert!(chunk_size.is_none());
@@ -1286,7 +1334,8 @@ mod tests {
 
     #[test]
     fn test_parse_index_range_with_bounds() {
-        let input = r#"{:op :index-range :args {:attrid ":person/name" :start "A" :end "M" :limit 100}}"#;
+        let input =
+            r#"{:op :index-range :args {:attrid ":person/name" :start "A" :end "M" :limit 100}}"#;
         let req = parse_request(input);
         assert!(req.is_ok());
         match req.unwrap().op {

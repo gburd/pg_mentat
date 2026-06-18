@@ -26,15 +26,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_entity_schema() {
@@ -91,16 +92,15 @@ mod tests {
         let r: serde_json::Value = serde_json::from_str(&result).expect("parse");
         let eid = r["tempids"]["e"].as_i64().expect("eid");
 
-        let entity = Spi::get_one::<String>(&format!(
-            "SELECT mentat_entity({})::TEXT",
-            eid
-        ))
-        .expect("entity lookup failed")
-        .expect("NULL");
+        let entity = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", eid))
+            .expect("entity lookup failed")
+            .expect("NULL");
 
         let json: serde_json::Value = serde_json::from_str(&entity).expect("parse");
-        assert!(json.get(":ent/name").is_some() || json.get(":db/id").is_some(),
-            "Entity should have attributes");
+        assert!(
+            json.get(":ent/name").is_some() || json.get(":db/id").is_some(),
+            "Entity should have attributes"
+        );
     }
 
     // ========================================================================
@@ -364,9 +364,11 @@ mod tests {
         setup_entity_schema();
 
         assert!(
-            raises_error("SELECT mentat_transact('[
+            raises_error(
+                "SELECT mentat_transact('[
                 [:db/add [:ent/email \"nonexistent@test.com\"] :ent/age 99]
-            ]'::TEXT)"),
+            ]'::TEXT)"
+            ),
             "Lookup ref for nonexistent entity should fail"
         );
     }
@@ -378,9 +380,11 @@ mod tests {
 
         // :ent/name is not unique, so lookup ref should fail
         assert!(
-            raises_error("SELECT mentat_transact('[
+            raises_error(
+                "SELECT mentat_transact('[
                 [:db/add [:ent/name \"some name\"] :ent/age 99]
-            ]'::TEXT)"),
+            ]'::TEXT)"
+            ),
             "Lookup ref on non-unique attr should fail"
         );
     }
@@ -401,10 +405,7 @@ mod tests {
                 i = i
             ));
         }
-        let txn = format!(
-            "SELECT mentat_transact('[{}]'::TEXT)",
-            ops.join("\n")
-        );
+        let txn = format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"));
 
         let result = Spi::get_one::<String>(&txn)
             .expect("batch 100 entities failed")

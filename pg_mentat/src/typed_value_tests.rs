@@ -25,15 +25,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     // ========================================================================
@@ -297,11 +298,10 @@ mod tests {
         )
         .expect("single typed value should be allowed");
 
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.datoms_long_new WHERE e = 99999",
-        )
-        .expect("count failed")
-        .expect("NULL count");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.datoms_long_new WHERE e = 99999")
+                .expect("count failed")
+                .expect("NULL count");
 
         assert_eq!(count, 1);
     }
@@ -1066,7 +1066,10 @@ mod tests {
         .expect("query failed")
         .expect("NULL count");
 
-        assert!(count > 0, "Should have instant datoms in datoms_instant_new");
+        assert!(
+            count > 0,
+            "Should have instant datoms in datoms_instant_new"
+        );
     }
 
     // ========================================================================
@@ -1292,10 +1295,12 @@ mod tests {
         .expect("query failed")
         .expect("NULL entity");
 
-        let result =
-            Spi::get_one::<String>(&format!("SELECT mentat_pull('[*]'::TEXT, {})::TEXT", entity_id))
-                .expect("pull failed")
-                .expect("NULL result");
+        let result = Spi::get_one::<String>(&format!(
+            "SELECT mentat_pull('[*]'::TEXT, {})::TEXT",
+            entity_id
+        ))
+        .expect("pull failed")
+        .expect("NULL result");
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON failed");
 
@@ -1392,7 +1397,9 @@ mod tests {
     fn test_unknown_attribute_error() {
         setup();
         assert!(
-            raises_error("SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"value\"]]'::TEXT)"),
+            raises_error(
+                "SELECT mentat_transact('[[:db/add \"e\" :nonexistent/attr \"value\"]]'::TEXT)"
+            ),
             "Should reject unknown attribute"
         );
     }
@@ -1807,11 +1814,10 @@ mod tests {
         )
         .expect("add txn failed");
 
-        let attr_entid = Spi::get_one::<i64>(
-            "SELECT entid FROM mentat.idents WHERE ident = ':item/labels'",
-        )
-        .expect("query failed")
-        .expect("NULL");
+        let attr_entid =
+            Spi::get_one::<i64>("SELECT entid FROM mentat.idents WHERE ident = ':item/labels'")
+                .expect("query failed")
+                .expect("NULL");
 
         // Get entity IDs (e1 is the first one with :important, could be any order,
         // but we know e1 also has :urgent)
@@ -1999,6 +2005,9 @@ mod tests {
         ))
         .expect("count failed")
         .expect("NULL count");
-        assert_eq!(count, 2, "Both values should remain when retracting nonexistent value");
+        assert_eq!(
+            count, 2,
+            "Both values should remain when retracting nonexistent value"
+        );
     }
 }

@@ -86,8 +86,7 @@ mod tests {
         .expect("NULL");
 
         // Attach vector aux table + populate.
-        Spi::run("SELECT mentat.attach_vector_attribute(':doc/embedding', 3)")
-            .expect("attach");
+        Spi::run("SELECT mentat.attach_vector_attribute(':doc/embedding', 3)").expect("attach");
         Spi::run(&format!(
             "SELECT mentat.set_vector({}, ':doc/embedding', '[0.9, 0.1, 0.0]')",
             e_a
@@ -140,7 +139,12 @@ mod tests {
         .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&raw).expect("parse");
         let results = j["results"].as_array().expect("results");
-        assert_eq!(results.len(), 2, "K=2 should produce exactly 2 rows after join, got: {:?}", results);
+        assert_eq!(
+            results.len(),
+            2,
+            "K=2 should produce exactly 2 rows after join, got: {:?}",
+            results
+        );
 
         let titles: Vec<String> = results
             .iter()
@@ -193,16 +197,12 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        let n1 = Spi::get_one::<String>(
-            "SELECT mentat.attach_vector_attribute(':doc/v', 4)",
-        )
-        .expect("attach 1")
-        .expect("NULL");
-        let n2 = Spi::get_one::<String>(
-            "SELECT mentat.attach_vector_attribute(':doc/v', 4)",
-        )
-        .expect("attach 2")
-        .expect("NULL");
+        let n1 = Spi::get_one::<String>("SELECT mentat.attach_vector_attribute(':doc/v', 4)")
+            .expect("attach 1")
+            .expect("NULL");
+        let n2 = Spi::get_one::<String>("SELECT mentat.attach_vector_attribute(':doc/v', 4)")
+            .expect("attach 2")
+            .expect("NULL");
         assert_eq!(n1, n2);
         assert!(n1.starts_with("mentat.attr_"), "name: {}", n1);
     }
@@ -223,10 +223,8 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        Spi::run("SELECT mentat.attach_vector_attribute(':doc/v', 2)")
-            .expect("attach");
-        Spi::run("SELECT mentat.set_vector(99999, ':doc/v', '[1,2]')")
-            .expect("set");
+        Spi::run("SELECT mentat.attach_vector_attribute(':doc/v', 2)").expect("attach");
+        Spi::run("SELECT mentat.set_vector(99999, ':doc/v', '[1,2]')").expect("set");
         let dropped = Spi::get_one::<bool>("SELECT mentat.del_vector(99999, ':doc/v')")
             .expect("del 1")
             .expect("NULL");

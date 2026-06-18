@@ -314,7 +314,10 @@ mod tests {
             .collect();
 
         // Age was updated twice (25->26, 26->27), so there should be retractions
-        assert!(retractions.len() >= 2, "Should have retractions for old ages");
+        assert!(
+            retractions.len() >= 2,
+            "Should have retractions for old ages"
+        );
     }
 
     #[pg_test]

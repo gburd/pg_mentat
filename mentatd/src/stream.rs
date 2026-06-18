@@ -21,9 +21,8 @@
 
 use crate::metrics;
 use crate::protocol::{
-    parser::parse_request,
-    serializer::serialize_response,
-    Anomaly, AnomalyCategory, Operation, Response, ResponseValue,
+    parser::parse_request, serializer::serialize_response, Anomaly, AnomalyCategory, Operation,
+    Response, ResponseValue,
 };
 use crate::server::AppState;
 use axum::{
@@ -116,7 +115,9 @@ fn validate_stream_request(body: &str) -> Result<Operation, Anomaly> {
         metrics::ERROR_COUNT.inc();
         Err(Anomaly {
             category: AnomalyCategory::Incorrect,
-            message: "Streaming is only supported for query operations (:q, :as-of, :since, :history)".to_string(),
+            message:
+                "Streaming is only supported for query operations (:q, :as-of, :since, :history)"
+                    .to_string(),
             db_error: Some(":db.error/invalid-request".to_string()),
         })
     }
@@ -264,12 +265,7 @@ fn json_to_response_value(val: &serde_json::Value) -> ResponseValue {
         serde_json::Value::Object(obj) => {
             let entries = obj
                 .iter()
-                .map(|(k, v)| {
-                    (
-                        ResponseValue::Keyword(k.clone()),
-                        json_to_response_value(v),
-                    )
-                })
+                .map(|(k, v)| (ResponseValue::Keyword(k.clone()), json_to_response_value(v)))
                 .collect();
             ResponseValue::Map(entries)
         }
@@ -413,9 +409,8 @@ mod tests {
 
     #[test]
     fn test_batch_chunking_logic() {
-        let rows: Vec<Vec<ResponseValue>> = (0..2500)
-            .map(|i| vec![ResponseValue::Integer(i)])
-            .collect();
+        let rows: Vec<Vec<ResponseValue>> =
+            (0..2500).map(|i| vec![ResponseValue::Integer(i)]).collect();
 
         let chunks: Vec<_> = rows.chunks(DEFAULT_BATCH_SIZE).collect();
         assert_eq!(chunks.len(), 3); // 1000 + 1000 + 500

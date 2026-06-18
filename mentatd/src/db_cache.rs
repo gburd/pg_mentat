@@ -112,9 +112,7 @@ impl DbValueCache {
         let mut snapshots = self.snapshots.write().unwrap();
         let now = Instant::now();
 
-        snapshots.retain(|_, snapshot| {
-            now.duration_since(snapshot.created_at) < self.ttl
-        });
+        snapshots.retain(|_, snapshot| now.duration_since(snapshot.created_at) < self.ttl);
     }
 
     /// Get the number of active snapshots.

@@ -63,16 +63,29 @@ mod tests {
         let e = email_eid("a@x.io");
         // Each cardinality-one value present exactly once.
         assert_eq!(
-            Spi::get_one::<String>(&format!("SELECT v FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')", e)).expect("q").expect("NULL"),
+            Spi::get_one::<String>(&format!(
+                "SELECT v FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')",
+                e
+            ))
+            .expect("q")
+            .expect("NULL"),
             "Alice"
         );
         assert_eq!(
-            Spi::get_one::<i64>(&format!("SELECT v FROM mentat.current_long WHERE e={} AND a=mentat.attr_id(':p/age')", e)).expect("q").expect("NULL"),
+            Spi::get_one::<i64>(&format!(
+                "SELECT v FROM mentat.current_long WHERE e={} AND a=mentat.attr_id(':p/age')",
+                e
+            ))
+            .expect("q")
+            .expect("NULL"),
             30
         );
-        assert!(
-            Spi::get_one::<bool>(&format!("SELECT v FROM mentat.current_boolean WHERE e={} AND a=mentat.attr_id(':p/admin')", e)).expect("q").expect("NULL")
-        );
+        assert!(Spi::get_one::<bool>(&format!(
+            "SELECT v FROM mentat.current_boolean WHERE e={} AND a=mentat.attr_id(':p/admin')",
+            e
+        ))
+        .expect("q")
+        .expect("NULL"));
     }
 
     /// Cardinality-one replace leaves exactly one current value.
@@ -82,16 +95,33 @@ mod tests {
         schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/name \"Alice\"}]'::TEXT)").expect("tx");
         let e = email_eid("a@x.io");
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)", e)).expect("r1");
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/name \"Alicia\"}}]'::TEXT)", e)).expect("r2");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)",
+            e
+        ))
+        .expect("r1");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/name \"Alicia\"}}]'::TEXT)",
+            e
+        ))
+        .expect("r2");
 
         let cnt = Spi::get_one::<i64>(&format!(
-            "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')", e
-        )).expect("q").expect("NULL");
-        assert_eq!(cnt, 1, "cardinality-one must have exactly one current value");
+            "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')",
+            e
+        ))
+        .expect("q")
+        .expect("NULL");
+        assert_eq!(
+            cnt, 1,
+            "cardinality-one must have exactly one current value"
+        );
         let v = Spi::get_one::<String>(&format!(
-            "SELECT v FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')", e
-        )).expect("q").expect("NULL");
+            "SELECT v FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/name')",
+            e
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(v, "Alicia");
         verify_clean();
     }
@@ -101,24 +131,38 @@ mod tests {
     fn pg_test_proj_cardinality_many_add_retract() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)").expect("tx");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)",
+        )
+        .expect("tx");
         let e = email_eid("a@x.io");
         Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/tag \"y\"}} {{:db/id {} :p/tag \"z\"}}]'::TEXT)", e, e)).expect("add");
         // Three tags now.
         let cnt = Spi::get_one::<i64>(&format!(
-            "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/tag')", e
-        )).expect("q").expect("NULL");
+            "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/tag')",
+            e
+        ))
+        .expect("q")
+        .expect("NULL");
         assert_eq!(cnt, 3);
 
         // Retract one.
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :p/tag \"y\"]]'::TEXT)", e)).expect("retract");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :p/tag \"y\"]]'::TEXT)",
+            e
+        ))
+        .expect("retract");
         let tags: Vec<String> = {
             let raw = Spi::get_one::<String>(&format!(
                 "SELECT string_agg(v, ',' ORDER BY v) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/tag')", e
             )).expect("q").expect("NULL");
             raw.split(',').map(|s| s.to_string()).collect()
         };
-        assert_eq!(tags, vec!["x".to_string(), "z".to_string()], "y retracted, x and z remain");
+        assert_eq!(
+            tags,
+            vec!["x".to_string(), "z".to_string()],
+            "y retracted, x and z remain"
+        );
         verify_clean();
     }
 
@@ -127,9 +171,16 @@ mod tests {
     fn pg_test_proj_retract_then_reassert() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)").expect("tx");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)",
+        )
+        .expect("tx");
         let e = email_eid("a@x.io");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :p/tag \"x\"]]'::TEXT)", e)).expect("retract");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :p/tag \"x\"]]'::TEXT)",
+            e
+        ))
+        .expect("retract");
         // After retract, gone from projection.
         let after_retract = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/tag') AND v='x'", e
@@ -138,11 +189,18 @@ mod tests {
         verify_clean();
 
         // Re-assert.
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/tag \"x\"}}]'::TEXT)", e)).expect("reassert");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/tag \"x\"}}]'::TEXT)",
+            e
+        ))
+        .expect("reassert");
         let after_reassert = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.current_text WHERE e={} AND a=mentat.attr_id(':p/tag') AND v='x'", e
         )).expect("q").expect("NULL");
-        assert_eq!(after_reassert, 1, "re-asserted tag must return to the projection");
+        assert_eq!(
+            after_reassert, 1,
+            "re-asserted tag must return to the projection"
+        );
         verify_clean();
     }
 
@@ -153,12 +211,19 @@ mod tests {
         schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/name \"Alice\" :p/age 30 :p/tag \"x\"}]'::TEXT)").expect("tx");
         let e = email_eid("a@x.io");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)", e)).expect("retractEntity");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)",
+            e
+        ))
+        .expect("retractEntity");
 
         for tbl in ["current_text", "current_long"] {
             let cnt = Spi::get_one::<i64>(&format!(
-                "SELECT count(*) FROM mentat.{} WHERE e={}", tbl, e
-            )).expect("q").expect("NULL");
+                "SELECT count(*) FROM mentat.{} WHERE e={}",
+                tbl, e
+            ))
+            .expect("q")
+            .expect("NULL");
             assert_eq!(cnt, 0, "{} must be empty after retractEntity", tbl);
         }
         verify_clean();
@@ -169,11 +234,13 @@ mod tests {
     fn pg_test_proj_txinstant_present() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\"}]'::TEXT)").expect("tx");
+        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\"}]'::TEXT)")
+            .expect("tx");
         // Every transaction's txInstant datom should be in current_instant.
-        let txinstant_rows = Spi::get_one::<i64>(
-            "SELECT count(*) FROM mentat.current_instant WHERE a = 50",
-        ).expect("q").expect("NULL");
+        let txinstant_rows =
+            Spi::get_one::<i64>("SELECT count(*) FROM mentat.current_instant WHERE a = 50")
+                .expect("q")
+                .expect("NULL");
         assert!(txinstant_rows >= 1, "txInstant datoms must be projected");
         verify_clean();
     }
@@ -186,11 +253,19 @@ mod tests {
         schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/name \"Alice\" :p/tag \"x\" :p/tag \"y\"}]'::TEXT)").expect("tx");
         let e = email_eid("a@x.io");
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)", e)).expect("replace");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)",
+            e
+        ))
+        .expect("replace");
 
-        let before = Spi::get_one::<i64>("SELECT count(*) FROM mentat.current_text").expect("q").expect("NULL");
+        let before = Spi::get_one::<i64>("SELECT count(*) FROM mentat.current_text")
+            .expect("q")
+            .expect("NULL");
         Spi::get_one::<i64>("SELECT mentat.rebuild_current_projection(0)").expect("rebuild");
-        let after = Spi::get_one::<i64>("SELECT count(*) FROM mentat.current_text").expect("q").expect("NULL");
+        let after = Spi::get_one::<i64>("SELECT count(*) FROM mentat.current_text")
+            .expect("q")
+            .expect("NULL");
         assert_eq!(before, after, "rebuild must reproduce the same row count");
         verify_clean();
     }
@@ -206,7 +281,9 @@ mod tests {
 
         // Corrupt: delete a projection row that the log says is live.
         Spi::run("DELETE FROM mentat.current_text WHERE v = 'Alice'").expect("corrupt");
-        let m = Spi::get_one::<i64>("SELECT mentat.verify_current_projection(0)").expect("verify").expect("NULL");
+        let m = Spi::get_one::<i64>("SELECT mentat.verify_current_projection(0)")
+            .expect("verify")
+            .expect("NULL");
         assert!(m >= 1, "verify must detect the deleted row");
 
         // Heal.

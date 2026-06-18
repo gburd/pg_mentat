@@ -90,9 +90,26 @@ mod protocol_unit_tests {
     #[test]
     fn test_normalize_short_forms() {
         let ops = vec![
-            "connect", "db", "q", "qseq", "pull", "pull-many", "transact", "with", "datoms",
-            "index-range", "tx-range", "entid", "ident", "db-stats", "as-of", "since", "history",
-            "filter", "basis-t", "db-snapshot",
+            "connect",
+            "db",
+            "q",
+            "qseq",
+            "pull",
+            "pull-many",
+            "transact",
+            "with",
+            "datoms",
+            "index-range",
+            "tx-range",
+            "entid",
+            "ident",
+            "db-stats",
+            "as-of",
+            "since",
+            "history",
+            "filter",
+            "basis-t",
+            "db-snapshot",
         ];
         for op in ops {
             assert_eq!(
@@ -320,7 +337,10 @@ mod protocol_unit_tests {
         // Get
         let retrieved = store.get(&session.id).await;
         assert!(retrieved.is_some());
-        assert_eq!(retrieved.as_ref().map(|s| &s.db_name), Some(&"test-db".to_string()));
+        assert_eq!(
+            retrieved.as_ref().map(|s| &s.db_name),
+            Some(&"test-db".to_string())
+        );
 
         // Touch
         assert!(store.touch(&session.id).await);
@@ -464,7 +484,8 @@ mod parser_tests {
 
     #[test]
     fn test_parse_qseq_with_all_options() {
-        let input = r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500 :db-id "snap-123"}}"#;
+        let input =
+            r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500 :db-id "snap-123"}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::Qseq {
@@ -561,8 +582,7 @@ mod parser_tests {
 
     #[test]
     fn test_parse_index_range_with_bounds() {
-        let input =
-            r#"{:op :index-range :args {:attrid ":person/name" :start "Alice" :end "Charlie" :limit 50}}"#;
+        let input = r#"{:op :index-range :args {:attrid ":person/name" :start "Alice" :end "Charlie" :limit 50}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::IndexRange {
@@ -944,8 +964,7 @@ async fn test_http_db_stats_via_transit_json() {
 async fn test_http_qseq_operation() {
     let server = TestServer::start().await;
 
-    let request =
-        r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args [] :chunk-size 100}}"#;
+    let request = r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args [] :chunk-size 100}}"#;
     let response = server.client.post("/", request).await;
 
     assert_eq!(response.status, 200);

@@ -29,7 +29,9 @@ mod tests {
     fn test_sa_define_string_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/str-attr :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/str-attr"));
     }
 
@@ -37,7 +39,9 @@ mod tests {
     fn test_sa_define_long_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/lng-attr :db/valueType :db.type/long :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/lng-attr"));
     }
 
@@ -45,7 +49,9 @@ mod tests {
     fn test_sa_define_double_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/dbl-attr :db/valueType :db.type/double :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/dbl-attr"));
     }
 
@@ -53,7 +59,9 @@ mod tests {
     fn test_sa_define_boolean_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/boo-attr :db/valueType :db.type/boolean :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/boo-attr"));
     }
 
@@ -61,7 +69,9 @@ mod tests {
     fn test_sa_define_keyword_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/kw-attr :db/valueType :db.type/keyword :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/kw-attr"));
     }
 
@@ -69,7 +79,9 @@ mod tests {
     fn test_sa_define_ref_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/ref-attr :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/ref-attr"));
     }
 
@@ -77,7 +89,9 @@ mod tests {
     fn test_sa_define_uuid_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/uuid-attr :db/valueType :db.type/uuid :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/uuid-attr"));
     }
 
@@ -85,7 +99,9 @@ mod tests {
     fn test_sa_define_instant_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/inst-attr :db/valueType :db.type/instant :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/inst-attr"));
     }
 
@@ -93,7 +109,9 @@ mod tests {
     fn test_sa_define_bytes_attr() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/bytes-attr :db/valueType :db.type/bytes :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa/bytes-attr"));
     }
 
@@ -110,8 +128,19 @@ mod tests {
             {:db/id \"a7\" :db/ident :sa/all-uuid :db/valueType :db.type/uuid :db/cardinality :db.cardinality/one}
             {:db/id \"a8\" :db/ident :sa/all-inst :db/valueType :db.type/instant :db/cardinality :db.cardinality/one}
         ]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
-        let expected = ["sa/all-str", "sa/all-lng", "sa/all-dbl", "sa/all-boo", "sa/all-kw", "sa/all-ref", "sa/all-uuid", "sa/all-inst"];
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
+        let expected = [
+            "sa/all-str",
+            "sa/all-lng",
+            "sa/all-dbl",
+            "sa/all-boo",
+            "sa/all-kw",
+            "sa/all-ref",
+            "sa/all-uuid",
+            "sa/all-inst",
+        ];
         for attr in &expected {
             assert!(s.contains(attr), "Missing: {}", attr);
         }
@@ -125,8 +154,10 @@ mod tests {
     fn test_sa_card_one_string() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/c1s :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa/c1s \"hello\"]]'::TEXT)").expect("data");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa/c1s \"world\"]]'::TEXT)").expect("replace");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa/c1s \"hello\"]]'::TEXT)")
+            .expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa/c1s \"world\"]]'::TEXT)")
+            .expect("replace");
         // Should error since different tempid with same name - verify only one value
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [_ :sa/c1s ?v]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -152,15 +183,23 @@ mod tests {
     fn test_sa_card_one_long() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/c1l :db/valueType :db.type/long :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :sa/c1l 42]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :sa/c1l 42]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :sa/c1l 99]]'::TEXT)", eid)).expect("replace");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :sa/c1l 99]]'::TEXT)",
+            eid
+        ))
+        .expect("replace");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1l ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1l ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("v"), 99);
     }
@@ -173,7 +212,11 @@ mod tests {
         for i in 0..10 {
             ops.push(format!("[:db/add \"e\" :sa/cml {}]", i));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("data");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :sa/cml ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -214,13 +257,22 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/c1b :db/valueType :db.type/boolean :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :sa/c1b true]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :sa/c1b false]]'::TEXT)", eid)).expect("replace");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :sa/c1b false]]'::TEXT)",
+            eid
+        ))
+        .expect("replace");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1b ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1b ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_bool().expect("b"), false);
     }
@@ -231,13 +283,22 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa/c1d :db/valueType :db.type/double :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :sa/c1d 3.14]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :sa/c1d 2.72]]'::TEXT)", eid)).expect("replace");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :sa/c1d 2.72]]'::TEXT)",
+            eid
+        ))
+        .expect("replace");
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1d ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :sa/c1d ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let result = v["result"].as_f64().expect("d");
         assert!((result - 2.72).abs() < 0.01);
@@ -254,8 +315,10 @@ mod tests {
             {:db/id \"a\" :db/ident :sa/uid :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/unique :db.unique/identity}
             {:db/id \"v\" :db/ident :sa/uidv :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
         ]'::TEXT)").expect("tx");
-        Spi::run("SELECT mentat_transact('[{:sa/uid \"alice\" :sa/uidv 100}]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[{:sa/uid \"alice\" :sa/uidv 200}]'::TEXT)").expect("upsert");
+        Spi::run("SELECT mentat_transact('[{:sa/uid \"alice\" :sa/uidv 100}]'::TEXT)")
+            .expect("create");
+        Spi::run("SELECT mentat_transact('[{:sa/uid \"alice\" :sa/uidv 200}]'::TEXT)")
+            .expect("upsert");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :sa/uid \"alice\"] [?e :sa/uidv ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -272,8 +335,11 @@ mod tests {
         ]'::TEXT)").expect("tx");
         for i in 0..10 {
             Spi::run(&format!(
-                "SELECT mentat_transact('[{{:sa/uid2 \"user-{}\" :sa/uid2v {}}}]'::TEXT)", i, i * 10
-            )).expect("create");
+                "SELECT mentat_transact('[{{:sa/uid2 \"user-{}\" :sa/uid2v {}}}]'::TEXT)",
+                i,
+                i * 10
+            ))
+            .expect("create");
         }
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [_ :sa/uid2 ?n]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -291,8 +357,10 @@ mod tests {
         ]'::TEXT)").expect("tx");
         for i in 0..10 {
             Spi::run(&format!(
-                "SELECT mentat_transact('[{{:sa/uid3 \"singleton\" :sa/uid3v {}}}]'::TEXT)", i
-            )).expect("upsert");
+                "SELECT mentat_transact('[{{:sa/uid3 \"singleton\" :sa/uid3v {}}}]'::TEXT)",
+                i
+            ))
+            .expect("upsert");
         }
         // Should be one entity
         let q = Spi::get_one::<String>(
@@ -308,7 +376,8 @@ mod tests {
         Spi::run("SELECT mentat_transact('[
             {:db/id \"a\" :db/ident :sa/uv :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/unique :db.unique/value}
         ]'::TEXT)").expect("tx");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sa/uv \"unique-code\"]]'::TEXT)").expect("first");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sa/uv \"unique-code\"]]'::TEXT)")
+            .expect("first");
         // Second entity with same value: :db.unique/value either rejects the
         // collision or merges. Run in a subtransaction so a rejection (PG
         // error) does not abort the test. Either outcome is acceptable; what
@@ -334,7 +403,8 @@ mod tests {
             {:db/id \"s\" :db/ident :sa/uid4s :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
         ]'::TEXT)").expect("tx");
         Spi::run("SELECT mentat_transact('[{:sa/uid4 \"bob\" :sa/uid4v 100 :sa/uid4s \"original\"}]'::TEXT)").expect("create");
-        Spi::run("SELECT mentat_transact('[{:sa/uid4 \"bob\" :sa/uid4v 200}]'::TEXT)").expect("upsert");
+        Spi::run("SELECT mentat_transact('[{:sa/uid4 \"bob\" :sa/uid4v 200}]'::TEXT)")
+            .expect("upsert");
         // uid4s should be preserved
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?s . :where [?e :sa/uid4 \"bob\"] [?e :sa/uid4s ?s]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -357,8 +427,14 @@ mod tests {
                 i, i
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("tx");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..10 {
             assert!(s.contains(&format!("sa.b10/attr-{}", i)));
         }
@@ -370,15 +446,25 @@ mod tests {
         let mut ops = vec![];
         for i in 0..30 {
             let vtype = match i % 5 {
-                0 => "string", 1 => "long", 2 => "double", 3 => "boolean", _ => "keyword"
+                0 => "string",
+                1 => "long",
+                2 => "double",
+                3 => "boolean",
+                _ => "keyword",
             };
             ops.push(format!(
                 "{{:db/id \"a{}\" :db/ident :sa.b30/attr-{} :db/valueType :db.type/{} :db/cardinality :db.cardinality/one}}",
                 i, i, vtype
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("tx");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..30 {
             assert!(s.contains(&format!("sa.b30/attr-{}", i)));
         }
@@ -395,8 +481,14 @@ mod tests {
                 i, i, card
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("tx");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..50 {
             assert!(s.contains(&format!("sa.b50/attr-{}", i)));
         }
@@ -410,7 +502,9 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :sa.seq/attr-{} :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}]'::TEXT)", i
             )).expect("tx");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..10 {
             assert!(s.contains(&format!("sa.seq/attr-{}", i)));
         }
@@ -425,7 +519,9 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :{}/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}]'::TEXT)", ns
             )).expect("tx");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for ns in &namespaces {
             assert!(s.contains(&format!("{}/name", ns)));
         }
@@ -442,9 +538,15 @@ mod tests {
                     i, round, i
                 ));
             }
-            Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[{}]'::TEXT)",
+                ops.join("\n")
+            ))
+            .expect("tx");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for round in 0..5 {
             for i in 0..5 {
                 assert!(s.contains(&format!("sa.grow/r{}-a{}", round, i)));
@@ -461,8 +563,13 @@ mod tests {
         // attribute can collide on schema.ident (UNIQUE). Run in a
         // subtransaction so a collision error does not abort the test; the
         // attribute must still be present afterward either way.
-        let _ = Spi::get_one::<bool>(&format!("SELECT mentat._sa_run('{}')", tx.replace('\'', "''")));
-        let s2 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("s").expect("NULL");
+        let _ = Spi::get_one::<bool>(&format!(
+            "SELECT mentat._sa_run('{}')",
+            tx.replace('\'', "''")
+        ));
+        let s2 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("s")
+            .expect("NULL");
         // Schema should still contain the attribute
         assert!(s2.contains("sa.idem/name"));
     }
@@ -471,7 +578,9 @@ mod tests {
     fn test_sa_schema_with_doc() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.doc/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/doc \"A person name\"}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("sa.doc/name"));
     }
 
@@ -483,7 +592,8 @@ mod tests {
     fn test_sa_define_then_use_immediately() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.use/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa.use/name \"hello\"]]'::TEXT)").expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa.use/name \"hello\"]]'::TEXT)")
+            .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :sa.use/name ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -497,7 +607,8 @@ mod tests {
         // In some systems you can define schema and data in one tx
         // We just verify the schema is available for subsequent txs
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.same/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa.same/name \"test\"]]'::TEXT)").expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :sa.same/name \"test\"]]'::TEXT)")
+            .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :sa.same/name ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -510,7 +621,10 @@ mod tests {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.m1/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("s1");
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.m1/val :db/valueType :db.type/long :db/cardinality :db.cardinality/one}]'::TEXT)").expect("s2");
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :sa.m1/name \"test\" :sa.m1/val 42}]'::TEXT)").expect("data");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e\" :sa.m1/name \"test\" :sa.m1/val 42}]'::TEXT)",
+        )
+        .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :sa.m1/name \"test\"] [?e :sa.m1/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -526,10 +640,14 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :sa.ten/attr-{} :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}]'::TEXT)", i
             )).expect("schema");
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :sa.ten/attr-{} \"val-{}\"]]'::TEXT)", i, i, i
-            )).expect("data");
+                "SELECT mentat_transact('[[:db/add \"e{}\" :sa.ten/attr-{} \"val-{}\"]]'::TEXT)",
+                i, i, i
+            ))
+            .expect("data");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..10 {
             assert!(s.contains(&format!("sa.ten/attr-{}", i)));
         }
@@ -539,7 +657,9 @@ mod tests {
     fn test_sa_schema_visible_in_mentat_schema() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.vis/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&s).expect("parse");
         // Should be valid JSON
         assert!(j.is_object() || j.is_array());
@@ -549,9 +669,10 @@ mod tests {
     fn test_sa_schema_in_idents_table() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.id/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.idents WHERE ident = ':sa.id/name'",
-        ).expect("q").expect("NULL");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.idents WHERE ident = ':sa.id/name'")
+                .expect("q")
+                .expect("NULL");
         assert_eq!(count, 1);
     }
 
@@ -559,9 +680,10 @@ mod tests {
     fn test_sa_ident_entid_positive() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.eid/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("tx");
-        let entid = Spi::get_one::<i64>(
-            "SELECT entid FROM mentat.idents WHERE ident = ':sa.eid/name'",
-        ).expect("q").expect("NULL");
+        let entid =
+            Spi::get_one::<i64>("SELECT entid FROM mentat.idents WHERE ident = ':sa.eid/name'")
+                .expect("q")
+                .expect("NULL");
         assert!(entid > 0);
     }
 
@@ -575,17 +697,24 @@ mod tests {
                 i, i
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("tx");
-        let count = Spi::get_one::<i64>(
-            "SELECT COUNT(*) FROM mentat.idents WHERE ident LIKE ':sa.uniq/%'",
-        ).expect("q").expect("NULL");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("tx");
+        let count =
+            Spi::get_one::<i64>("SELECT COUNT(*) FROM mentat.idents WHERE ident LIKE ':sa.uniq/%'")
+                .expect("q")
+                .expect("NULL");
         assert_eq!(count, 10);
     }
 
     #[pg_test]
     fn test_sa_schema_after_bootstrap() {
         setup();
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         // Should have system attributes
         assert!(s.contains("db/ident"));
     }
@@ -593,8 +722,12 @@ mod tests {
     #[pg_test]
     fn test_sa_schema_stable_across_calls() {
         setup();
-        let s1 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("s").expect("NULL");
-        let s2 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("s").expect("NULL");
+        let s1 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("s")
+            .expect("NULL");
+        let s2 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("s")
+            .expect("NULL");
         assert_eq!(s1, s2);
     }
 }

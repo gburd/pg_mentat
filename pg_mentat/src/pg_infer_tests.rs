@@ -65,8 +65,7 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :p/n \"X\"}]'::TEXT)")
-            .expect("data tx");
+        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :p/n \"X\"}]'::TEXT)").expect("data tx");
 
         // 1-arg form is wrong (needs 2 or 3).
         let err = capture_error(
@@ -141,8 +140,7 @@ mod tests {
         if has_pg_infer() {
             return;
         }
-        let err =
-            capture_error("SELECT mentat.create_infer_index(':not/registered', 'mymodel')");
+        let err = capture_error("SELECT mentat.create_infer_index(':not/registered', 'mymodel')");
         assert!(
             err.contains(":db.error/missing-extension") && err.contains("pg_infer"),
             "expected missing-extension error, got: {}",
@@ -160,8 +158,7 @@ mod tests {
         if !has_pg_infer() {
             return;
         }
-        let err =
-            capture_error("SELECT mentat.create_infer_index(':not/registered', 'mymodel')");
+        let err = capture_error("SELECT mentat.create_infer_index(':not/registered', 'mymodel')");
         assert!(
             err.contains(":db.error/unknown-attribute"),
             "expected unknown-attribute error, got: {}",
@@ -186,8 +183,7 @@ mod tests {
             ]'::TEXT)",
         )
         .expect("schema tx");
-        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :p/n \"X\"}]'::TEXT)")
-            .expect("data tx");
+        Spi::run("SELECT mentat_transact('[{:db/id \"a\" :p/n \"X\"}]'::TEXT)").expect("data tx");
 
         let err = capture_error(
             "SELECT mentat_query('[:find ?n ?s :where [?e :p/n ?n] [(infer-similar ?n \"target\") ?s]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -219,8 +215,7 @@ mod tests {
         );
         // Must mention the <~> operator (or its equivalent function) from postgres.
         assert!(
-            err.contains("<~>") || err.contains("operator")
-                || err.contains("does not exist"),
+            err.contains("<~>") || err.contains("operator") || err.contains("does not exist"),
             "expected pg-side <~> operator-not-found, got: {}",
             err,
         );

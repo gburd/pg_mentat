@@ -47,7 +47,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_all_names() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -57,7 +59,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_all_vals() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :qp/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -67,7 +71,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_all_depts() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?d ...] :where [?e :qp/dept ?d]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -78,7 +84,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_all_flags() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?f ...] :where [?e :qp/flag ?f]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -89,7 +97,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_all_statuses() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?s ...] :where [?e :qp/status ?s]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -104,7 +114,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_name_and_dept() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?d :where [?e :qp/name ?n] [?e :qp/dept ?d]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -114,7 +126,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_name_val_flag() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v ?f :where [?e :qp/name ?n] [?e :qp/val ?v] [?e :qp/flag ?f]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -124,7 +138,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_four_attrs() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?d ?v ?s :where [?e :qp/name ?n] [?e :qp/dept ?d] [?e :qp/val ?v] [?e :qp/status ?s]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -134,7 +150,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_dept_eng() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -144,7 +162,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_dept_sales() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"sales\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -154,7 +174,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_dept_hr() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"hr\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -164,7 +186,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_status_active() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/status :active]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -175,7 +199,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_flag_true() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -186,7 +212,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_with_constant_flag_false() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/flag false]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -197,7 +225,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_dept_and_flag() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"eng\"] [?e :qp/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -207,7 +237,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_join_dept_and_status() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"sales\"] [?e :qp/status :inactive]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -221,7 +253,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_gt_70() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(> ?v 70)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -232,7 +266,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_lt_70() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(< ?v 70)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -243,7 +279,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_gte_80() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(>= ?v 80)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -254,7 +292,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_lte_75() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(<= ?v 75)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -265,7 +305,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_ne_80() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(!= ?v 80)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -276,7 +318,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_range_70_90() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(>= ?v 70)] [(<= ?v 90)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -287,7 +331,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_gt_combined_with_dept() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"eng\"] [?e :qp/val ?v] [(> ?v 77)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -298,7 +344,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_gt_combined_with_flag() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/flag true] [?e :qp/val ?v] [(> ?v 85)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -309,7 +357,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_gt_combined_with_status() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/status :active] [?e :qp/val ?v] [(> ?v 75)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -320,7 +370,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_pred_no_match() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/val ?v] [(> ?v 200)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -334,7 +386,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_ref_forward() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/ref ?r] [?r :qp/name \"Manager\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -345,7 +399,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_ref_with_filter() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/ref ?r] [?r :qp/dept \"exec\"] [?e :qp/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -355,7 +411,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_ref_navigate_and_predicate() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/ref ?r] [?r :qp/val ?rv] [(> ?rv 50)] [?e :qp/val ?v] [(> ?v 70)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -365,7 +423,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_ref_join_two_entities() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?mn :where [?e :qp/name ?n] [?e :qp/ref ?m] [?m :qp/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -379,7 +439,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_scalar_string() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :qp/name ?n] [?e :qp/dept \"hr\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -389,7 +451,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_scalar_long() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [?e :qp/name \"Alice\"] [?e :qp/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -399,7 +463,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_scalar_boolean() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?f . :where [?e :qp/name \"Bob\"] [?e :qp/flag ?f]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -409,7 +475,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_scalar_no_match() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :qp/name ?n] [?e :qp/dept \"nonexistent\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -419,7 +487,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_coll_strings() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -429,7 +499,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_coll_longs() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :qp/val ?v] [?e :qp/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -439,7 +511,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_coll_empty() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/dept \"nobody\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -449,7 +523,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_tuple_name_val() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ?v] :where [?e :qp/name ?n] [?e :qp/val ?v] [?e :qp/dept \"hr\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -462,7 +538,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_tuple_three() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ?d ?v] :where [?e :qp/name ?n] [?e :qp/dept ?d] [?e :qp/val ?v] [?e :qp/dept \"hr\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -472,7 +550,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_tuple_no_match() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ?v] :where [?e :qp/name ?n] [?e :qp/val ?v] [?e :qp/dept \"x\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -482,7 +562,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_relation_2_vars() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v :where [?e :qp/name ?n] [?e :qp/val ?v] [?e :qp/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -492,7 +574,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_relation_3_vars() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?d ?v :where [?e :qp/name ?n] [?e :qp/dept ?d] [?e :qp/val ?v] [?e :qp/flag true]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -502,7 +586,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_relation_empty() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v :where [?e :qp/name ?n] [?e :qp/val ?v] [(> ?v 500)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -516,7 +602,8 @@ mod tests {
 
     #[pg_test]
     fn test_qp_many_tags_query() {
-        setup(); setup_qp_schema();
+        setup();
+        setup_qp_schema();
         // Cardinality-many values must be asserted as separate datoms; a map
         // with duplicate keys collapses to the last value (EDN maps are sets of
         // keys). Use [:db/add ...] vector ops to assert all three tags.
@@ -530,7 +617,8 @@ mod tests {
 
     #[pg_test]
     fn test_qp_many_tags_scalar_finds_one() {
-        setup(); setup_qp_schema();
+        setup();
+        setup_qp_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :qp/name \"Tagged2\" :qp/tags \"x\" :qp/tags \"y\"}]'::TEXT)").expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?t . :where [?e :qp/name \"Tagged2\"] [?e :qp/tags ?t]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -541,7 +629,8 @@ mod tests {
 
     #[pg_test]
     fn test_qp_many_refs_query() {
-        setup(); setup_qp_schema();
+        setup();
+        setup_qp_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"hub\" :qp/name \"Hub\"} {:db/id \"s1\" :qp/name \"S1\"} {:db/id \"s2\" :qp/name \"S2\"} {:db/id \"s3\" :qp/name \"S3\"} [:db/add \"hub\" :qp/refs \"s1\"] [:db/add \"hub\" :qp/refs \"s2\"] [:db/add \"hub\" :qp/refs \"s3\"]]'::TEXT)"
         ).expect("tx").expect("NULL");
@@ -556,7 +645,8 @@ mod tests {
 
     #[pg_test]
     fn test_qp_many_tags_with_filter() {
-        setup(); setup_qp_schema();
+        setup();
+        setup_qp_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e1\" :qp/name \"E1\"} [:db/add \"e1\" :qp/tags \"common\"] [:db/add \"e1\" :qp/tags \"unique1\"] {:db/id \"e2\" :qp/name \"E2\"} [:db/add \"e2\" :qp/tags \"common\"] [:db/add \"e2\" :qp/tags \"unique2\"]]'::TEXT)").expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/tags \"common\"]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -571,7 +661,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_eid() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :qp/name \"Alice\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -581,7 +673,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_eid_collection() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?e ...] :where [?e :qp/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -591,7 +685,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_find_eid_with_name() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e ?n :where [?e :qp/name ?n] [?e :qp/dept \"eng\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -605,7 +701,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_wildcard_entity() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [_ :qp/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -615,7 +713,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_wildcard_entity_with_pred() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [_ :qp/val ?v] [(> ?v 80)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -630,7 +730,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_complex_dept_flag_pred() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?v :where [?e :qp/name ?n] [?e :qp/dept \"eng\"] [?e :qp/flag true] [?e :qp/val ?v] [(> ?v 70)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -640,7 +742,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_complex_status_and_ref() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n ?mn :where [?e :qp/name ?n] [?e :qp/status :active] [?e :qp/ref ?m] [?m :qp/name ?mn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -651,7 +755,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_complex_all_constraints() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [?e :qp/name ?n] [?e :qp/dept \"eng\"] [?e :qp/flag false] [?e :qp/status :active] [?e :qp/val ?v] [(<= ?v 80)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -661,7 +767,9 @@ mod tests {
 
     #[pg_test]
     fn test_qp_same_var_two_patterns() {
-        setup(); setup_qp_schema(); setup_qp_data();
+        setup();
+        setup_qp_schema();
+        setup_qp_data();
         // Find entities that share same department
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n1 ?n2 :where [?e1 :qp/name ?n1] [?e1 :qp/dept ?d] [?e2 :qp/name ?n2] [?e2 :qp/dept ?d] [(!= ?e1 ?e2)]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -673,15 +781,21 @@ mod tests {
 
     #[pg_test]
     fn test_qp_batch_data_then_query() {
-        setup(); setup_qp_schema();
+        setup();
+        setup_qp_schema();
         let mut ops = Vec::new();
         for i in 0..100 {
             ops.push(format!(
                 "{{:db/id \"e{i}\" :qp/name \"entity-{i}\" :qp/val {i} :qp/flag {f}}}",
-                i = i, f = if i % 3 == 0 { "true" } else { "false" }
+                i = i,
+                f = if i % 3 == 0 { "true" } else { "false" }
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("batch");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("batch");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?n ...] :where [?e :qp/name ?n] [?e :qp/flag true] [?e :qp/val ?v] [(> ?v 50)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");

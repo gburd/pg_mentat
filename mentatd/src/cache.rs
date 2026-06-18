@@ -295,9 +295,7 @@ impl QueryCache {
         }
         if let Ok(mut rev) = self.entity_to_keys.write() {
             if is_untracked {
-                rev.entry(UNTRACKED_SENTINEL)
-                    .or_default()
-                    .insert(key);
+                rev.entry(UNTRACKED_SENTINEL).or_default().insert(key);
             } else {
                 for eid in &depends_on {
                     rev.entry(*eid).or_default().insert(key.clone());
@@ -370,20 +368,18 @@ impl QueryCache {
             0.0
         };
 
-        let (tracked_entries, avg_dependency_count) =
-            if let Ok(deps) = self.dependencies.read() {
-                let tracked: Vec<&HashSet<i64>> =
-                    deps.values().filter(|s| !s.is_empty()).collect();
-                let count = tracked.len();
-                let avg = if count > 0 {
-                    tracked.iter().map(|s| s.len()).sum::<usize>() as f64 / count as f64
-                } else {
-                    0.0
-                };
-                (count, avg)
+        let (tracked_entries, avg_dependency_count) = if let Ok(deps) = self.dependencies.read() {
+            let tracked: Vec<&HashSet<i64>> = deps.values().filter(|s| !s.is_empty()).collect();
+            let count = tracked.len();
+            let avg = if count > 0 {
+                tracked.iter().map(|s| s.len()).sum::<usize>() as f64 / count as f64
             } else {
-                (0, 0.0)
+                0.0
             };
+            (count, avg)
+        } else {
+            (0, 0.0)
+        };
 
         CacheStats {
             size,
@@ -426,7 +422,10 @@ mod tests {
         cache.insert(query, r#"["Alice"]"#, "result_a".to_string());
         cache.insert(query, r#"["Bob"]"#, "result_b".to_string());
 
-        assert_eq!(cache.get(query, r#"["Alice"]"#).as_deref(), Some("result_a"));
+        assert_eq!(
+            cache.get(query, r#"["Alice"]"#).as_deref(),
+            Some("result_a")
+        );
         assert_eq!(cache.get(query, r#"["Bob"]"#).as_deref(), Some("result_b"));
     }
 
@@ -542,10 +541,7 @@ mod tests {
         // Transaction on entity 999: untracked removed, tracked survives
         let removed = cache.invalidate_entities(&[999]);
         assert_eq!(removed, 1);
-        assert_eq!(
-            cache.get("q_tracked", "[]").as_deref(),
-            Some("tracked")
-        );
+        assert_eq!(cache.get("q_tracked", "[]").as_deref(), Some("tracked"));
         assert!(cache.get("q_untracked", "[]").is_none());
     }
 
@@ -713,12 +709,7 @@ mod tests {
         for i in 0..100 {
             let mut deps = HashSet::new();
             deps.insert(i as i64);
-            cache.insert_with_deps(
-                &format!("q_{}", i),
-                "[]",
-                format!("r_{}", i),
-                deps,
-            );
+            cache.insert_with_deps(&format!("q_{}", i), "[]", format!("r_{}", i), deps);
         }
 
         let mut handles = Vec::new();
@@ -1010,12 +1001,7 @@ mod tests {
         for i in 0..10 {
             let mut deps = HashSet::new();
             deps.insert(i as i64);
-            cache.insert_with_deps(
-                &format!("q_{}", i),
-                "[]",
-                format!("r_{}", i),
-                deps,
-            );
+            cache.insert_with_deps(&format!("q_{}", i), "[]", format!("r_{}", i), deps);
         }
         assert_eq!(cache.len(), 10);
 

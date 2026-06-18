@@ -334,7 +334,10 @@ mod tests {
         .expect("query")
         .expect("NULL");
         let json: serde_json::Value = serde_json::from_str(&qresult).expect("parse");
-        assert!(json["result"].is_null(), "Entity should be gone after retractEntity");
+        assert!(
+            json["result"].is_null(),
+            "Entity should be gone after retractEntity"
+        );
     }
 
     // ========================================================================
@@ -447,10 +450,8 @@ mod tests {
         setup();
         setup_batch_schema();
 
-        Spi::run(
-            "SELECT mentat_transact('[[:db/add \"e\" :bat/name \"single\"]]'::TEXT)",
-        )
-        .expect("single assertion");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :bat/name \"single\"]]'::TEXT)")
+            .expect("single assertion");
     }
 
     // ========================================================================

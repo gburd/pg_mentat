@@ -1004,7 +1004,10 @@ pub struct ParsedQuery {
 pub(crate) enum QueryPart {
     FindSpec(FindSpec),
     WithVars(Vec<Variable>),
-    #[expect(dead_code, reason = "Kept for backward compat; parser now emits InBindings")]
+    #[expect(
+        dead_code,
+        reason = "Kept for backward compat; parser now emits InBindings"
+    )]
     InVars(Vec<Variable>),
     InBindings(Vec<Binding>),
     Limit(Limit),

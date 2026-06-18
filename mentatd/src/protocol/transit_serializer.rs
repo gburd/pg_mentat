@@ -546,10 +546,7 @@ mod tests {
     #[test]
     fn test_transit_json_list() {
         let response = Response::Success {
-            result: ResponseValue::List(vec![
-                ResponseValue::Integer(1),
-                ResponseValue::Integer(2),
-            ]),
+            result: ResponseValue::List(vec![ResponseValue::Integer(1), ResponseValue::Integer(2)]),
         };
         let output = serialize_transit_json(&response);
         assert_eq!(output, r#"["^ ","~:result",["~#list",[1,2]]]"#);
@@ -661,9 +658,7 @@ mod tests {
         let bytes = serialize_transit_msgpack(&response);
         // "hello" should appear in the binary output
         let hello_bytes = b"hello";
-        assert!(bytes
-            .windows(hello_bytes.len())
-            .any(|w| w == hello_bytes));
+        assert!(bytes.windows(hello_bytes.len()).any(|w| w == hello_bytes));
     }
 
     #[test]

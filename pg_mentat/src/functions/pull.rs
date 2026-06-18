@@ -160,7 +160,11 @@ fn sanitize_added_predicate(where_clause: &str) -> String {
     ] {
         s = s.replace(pat, "");
     }
-    let trimmed = s.trim().trim_end_matches("AND").trim_start_matches("AND").trim();
+    let trimmed = s
+        .trim()
+        .trim_end_matches("AND")
+        .trim_start_matches("AND")
+        .trim();
     if trimmed.is_empty() {
         "true".to_string()
     } else {
@@ -174,7 +178,10 @@ fn sanitize_added_predicate(where_clause: &str) -> String {
 
 /// Cached schema information for an attribute, loaded in bulk.
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "All fields populated during load; not all read yet")]
+#[expect(
+    dead_code,
+    reason = "All fields populated during load; not all read yet"
+)]
 struct SchemaAttrInfo {
     entid: i64,
     ident: String,
@@ -209,11 +216,19 @@ impl SchemaCache {
             let is_component: bool = row.get(4)?.unwrap_or(false);
             by_ident.insert(
                 ident.clone(),
-                SchemaAttrInfo { entid, ident: ident.clone(), cardinality, is_component },
+                SchemaAttrInfo {
+                    entid,
+                    ident: ident.clone(),
+                    cardinality,
+                    is_component,
+                },
             );
             ident_by_entid.insert(entid, ident);
         }
-        Ok(SchemaCache { by_ident, ident_by_entid })
+        Ok(SchemaCache {
+            by_ident,
+            ident_by_entid,
+        })
     }
 
     #[expect(dead_code, reason = "Public API for attribute lookup by ident")]
@@ -334,13 +349,15 @@ pub fn mentat_pull(pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
 pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
     let store_id = get_store_id_from_schema(&db_schema)?;
-    let parsed = edn::parse::value(pattern)
-        .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
+    let parsed = edn::parse::value(pattern).map_err(|e| -> PullError {
+        MentatError::InvalidPullPattern {
             message: format!(
                 "Failed to parse pull pattern as EDN: {e}. \
                  Expected a vector like [:person/name :person/age] or [*]."
             ),
-        }.into() })?;
+        }
+        .into()
+    })?;
     let pattern_value = parsed.without_spans();
 
     let specs = match &pattern_value {
@@ -360,7 +377,17 @@ pub fn pull(store: &str, pattern: &str, entity_id: i64) -> Result<JsonB, PullErr
 
     Spi::connect(|client| {
         let schema = SchemaCache::load(&client, &db_schema)?;
-        execute_pull(&client, &schema, &db_schema, store_id, entity_id, &specs, &mut result_map, &mut visited, 0)
+        execute_pull(
+            &client,
+            &schema,
+            &db_schema,
+            store_id,
+            entity_id,
+            &specs,
+            &mut result_map,
+            &mut visited,
+            0,
+        )
     })?;
 
     Ok(JsonB(serde_json::Value::Object(result_map)))
@@ -395,27 +422,34 @@ pub fn mentat_pull_many(pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, Pu
 pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<JsonB, PullError> {
     let db_schema = get_schema_for_store(store);
     let store_id = get_store_id_from_schema(&db_schema)?;
-    let parsed = edn::parse::value(pattern)
-        .map_err(|e| -> PullError { MentatError::InvalidPullPattern {
+    let parsed = edn::parse::value(pattern).map_err(|e| -> PullError {
+        MentatError::InvalidPullPattern {
             message: format!(
                 "Failed to parse pull pattern as EDN: {e}. \
                  Expected a vector like [:person/name :person/age] or [*]."
             ),
-        }.into() })?;
+        }
+        .into()
+    })?;
     let pattern_value = parsed.without_spans();
 
     let specs = match &pattern_value {
         edn::Value::Vector(items) => parse_pull_pattern(items)?,
-        _ => return Err(MentatError::InvalidPullPattern {
-            message: "Pull pattern must be a vector.".to_string(),
-        }.into()),
+        _ => {
+            return Err(MentatError::InvalidPullPattern {
+                message: "Pull pattern must be a vector.".to_string(),
+            }
+            .into())
+        }
     };
 
     let has_wildcard = specs.iter().any(|s| matches!(s, PullAttrSpec::Wildcard));
-    let has_map_or_recursive = specs.iter().any(|s| matches!(
-        s,
-        PullAttrSpec::MapSpec { .. } | PullAttrSpec::RecursiveSpec { .. }
-    ));
+    let has_map_or_recursive = specs.iter().any(|s| {
+        matches!(
+            s,
+            PullAttrSpec::MapSpec { .. } | PullAttrSpec::RecursiveSpec { .. }
+        )
+    });
 
     // For simple patterns (no wildcard, no map specs, no recursion), use a
     // batched query that fetches all entities' attributes in one round-trip.
@@ -433,7 +467,17 @@ pub fn pull_many(store: &str, pattern: &str, entity_ids: Vec<i64>) -> Result<Jso
             result_map.insert(":db/id".to_string(), json!(eid));
             let mut visited = HashSet::new();
             visited.insert(eid);
-            execute_pull(&client, &schema, &db_schema, store_id, eid, &specs, &mut result_map, &mut visited, 0)?;
+            execute_pull(
+                &client,
+                &schema,
+                &db_schema,
+                store_id,
+                eid,
+                &specs,
+                &mut result_map,
+                &mut visited,
+                0,
+            )?;
             results.push(serde_json::Value::Object(result_map));
         }
         Ok::<(), PullError>(())
@@ -532,7 +576,12 @@ fn pull_many_batched(
 
             // Determine the output key (handle :as renames).
             let output_key = if let Some(spec) = spec_map.get(&ident) {
-                if let PullAttrSpec::Attribute { rename, forward_ident, .. } = spec {
+                if let PullAttrSpec::Attribute {
+                    rename,
+                    forward_ident,
+                    ..
+                } = spec
+                {
                     rename.as_deref().unwrap_or(forward_ident).to_string()
                 } else {
                     ident.clone()
@@ -567,7 +616,11 @@ fn pull_many_batched(
         // Second pass: batch-expand component refs.
         if !pending_components.is_empty() {
             let component_ids: HashSet<i64> = pending_components.iter().map(|p| p.ref_id).collect();
-            let comp_eid_csv: String = component_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+            let comp_eid_csv: String = component_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
 
             let comp_datoms_subquery = build_union_all_datoms_query(
                 store_id,
@@ -587,7 +640,8 @@ fn pull_many_batched(
             );
 
             // Build sub-maps for each component entity.
-            let mut comp_maps: HashMap<i64, serde_json::Map<String, serde_json::Value>> = HashMap::new();
+            let mut comp_maps: HashMap<i64, serde_json::Map<String, serde_json::Value>> =
+                HashMap::new();
             for &cid in &component_ids {
                 let mut m = serde_json::Map::new();
                 m.insert(":db/id".to_string(), json!(cid));
@@ -627,7 +681,13 @@ fn pull_many_batched(
 
         // Apply defaults for missing attributes.
         for spec in specs {
-            if let PullAttrSpec::Attribute { forward_ident, rename, default: Some(def), .. } = spec {
+            if let PullAttrSpec::Attribute {
+                forward_ident,
+                rename,
+                default: Some(def),
+                ..
+            } = spec
+            {
                 let output_key = rename.as_deref().unwrap_or(forward_ident);
                 for result_map in results_by_eid.values_mut() {
                     if !result_map.contains_key(output_key) {
@@ -748,7 +808,8 @@ fn parse_pull_pattern(items: &[edn::Value]) -> Result<Vec<PullAttrSpec>, PullErr
                     ":db.error/invalid-pull-pattern Unsupported pull pattern element: {item}. \
                      Valid elements: keyword attributes (:ns/name), wildcard (*), \
                      map specs ({{:attr [...]}}), or attribute expressions ((:attr :limit N))"
-                ).into());
+                )
+                .into());
             }
         }
     }
@@ -762,8 +823,11 @@ fn parse_attribute_expression(
     specs: &mut Vec<PullAttrSpec>,
 ) -> Result<(), PullError> {
     if items.is_empty() {
-        return Err(":db.error/invalid-pull-pattern Empty attribute expression. \
-                    Expected: (:attribute :limit N :default V :as \"name\")".into());
+        return Err(
+            ":db.error/invalid-pull-pattern Empty attribute expression. \
+                    Expected: (:attribute :limit N :default V :as \"name\")"
+                .into(),
+        );
     }
 
     let kw = match &items[0] {
@@ -794,15 +858,19 @@ fn parse_attribute_expression(
                         i += 1;
                         if i >= items.len() {
                             return Err(":db.error/invalid-pull-pattern :limit modifier requires \
-                                        a value (integer or nil). Example: (:attr :limit 10)".into());
+                                        a value (integer or nil). Example: (:attr :limit 10)"
+                                .into());
                         }
                         limit = Some(parse_limit_value(&items[i])?);
                     }
                     "default" => {
                         i += 1;
                         if i >= items.len() {
-                            return Err(":db.error/invalid-pull-pattern :default modifier requires \
-                                        a value. Example: (:attr :default \"none\")".into());
+                            return Err(
+                                ":db.error/invalid-pull-pattern :default modifier requires \
+                                        a value. Example: (:attr :default \"none\")"
+                                    .into(),
+                            );
                         }
                         default = Some(edn_to_json(&items[i]));
                     }
@@ -810,14 +878,18 @@ fn parse_attribute_expression(
                         i += 1;
                         if i >= items.len() {
                             return Err(":db.error/invalid-pull-pattern :as modifier requires a \
-                                        string value. Example: (:attr :as \"Display Name\")".into());
+                                        string value. Example: (:attr :as \"Display Name\")"
+                                .into());
                         }
                         match &items[i] {
                             edn::Value::Text(ref s) => {
                                 rename = Some(s.to_string());
                             }
-                            _ => return Err(":db.error/invalid-pull-pattern :as value must be \
-                                            a string. Example: (:attr :as \"Display Name\")".into()),
+                            _ => {
+                                return Err(":db.error/invalid-pull-pattern :as value must be \
+                                            a string. Example: (:attr :as \"Display Name\")"
+                                    .into())
+                            }
                         }
                     }
                     _ => {
@@ -1209,7 +1281,9 @@ fn pull_forward_attributes_batched(
 
         // Enforce per-attribute limit.
         let spec = spec_by_ident.get(ident.as_str());
-        let max_rows = spec.map(|s| resolve_limit(s.limit)).unwrap_or(DEFAULT_MANY_LIMIT);
+        let max_rows = spec
+            .map(|s| resolve_limit(s.limit))
+            .unwrap_or(DEFAULT_MANY_LIMIT);
         let count = ident_counts.entry(ident.clone()).or_insert(0);
         if *count >= max_rows {
             continue;
@@ -1221,10 +1295,7 @@ fn pull_forward_attributes_batched(
         let (decoded_val, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
 
         // Determine the output key (handle :as renames).
-        let output_key = spec
-            .and_then(|s| s.rename)
-            .unwrap_or(&ident)
-            .to_string();
+        let output_key = spec.and_then(|s| s.rename).unwrap_or(&ident).to_string();
 
         if v_type_tag == type_tag::REF {
             let rid = ref_id.ok_or("Missing ref ID")?;
@@ -1329,7 +1400,9 @@ fn pull_reverse_attributes_batched(
         let e: i64 = row.get(2)?.ok_or("Missing entity")?;
 
         let spec = spec_by_ident.get(ident.as_str());
-        let max_rows = spec.map(|s| resolve_limit(s.limit)).unwrap_or(DEFAULT_MANY_LIMIT);
+        let max_rows = spec
+            .map(|s| resolve_limit(s.limit))
+            .unwrap_or(DEFAULT_MANY_LIMIT);
         let count = ident_counts.entry(ident.clone()).or_insert(0);
         if *count >= max_rows {
             continue;
@@ -1450,7 +1523,12 @@ fn pull_wildcard(
                 insert_value(result_map, &datom.ident, value, &datom.cardinality);
             }
         } else {
-            insert_value(result_map, &datom.ident, datom.decoded.clone(), &datom.cardinality);
+            insert_value(
+                result_map,
+                &datom.ident,
+                datom.decoded.clone(),
+                &datom.cardinality,
+            );
         }
     }
 
@@ -1648,17 +1726,22 @@ fn pull_recursive(
         let ref_id = ref_ids[0];
         if visited.contains(&ref_id) {
             // Cycle detected: return just {:db/id N} per Datomic behavior.
-            result_map.insert(
-                output_key.to_string(),
-                json!({":db/id": ref_id}),
-            );
+            result_map.insert(output_key.to_string(), json!({":db/id": ref_id}));
         } else {
             let was_new = visited.insert(ref_id);
             let mut sub_map = serde_json::Map::new();
             sub_map.insert(":db/id".to_string(), json!(ref_id));
             // Pull all attributes of the target (excluding the recursive one), plus recurse.
             pull_all_attributes_for_recursive(
-                client, schema, db_schema, store_id, ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                client,
+                schema,
+                db_schema,
+                store_id,
+                ref_id,
+                forward_ident,
+                &mut sub_map,
+                visited,
+                current_depth + 1,
             )?;
             execute_pull(
                 client,
@@ -1687,7 +1770,15 @@ fn pull_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(*ref_id));
                 pull_all_attributes_for_recursive(
-                    client, schema, db_schema, store_id, *ref_id, forward_ident, &mut sub_map, visited, current_depth + 1,
+                    client,
+                    schema,
+                    db_schema,
+                    store_id,
+                    *ref_id,
+                    forward_ident,
+                    &mut sub_map,
+                    visited,
+                    current_depth + 1,
                 )?;
                 execute_pull(
                     client,
@@ -1808,7 +1899,11 @@ fn query_forward_refs_batched(
     }
 
     let max_rows = resolve_limit(limit);
-    let eid_csv: String = entity_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+    let eid_csv: String = entity_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     let escaped_ident = ident.replace('\'', "''");
 
     // Batched forward refs only come from datoms_ref_new.
@@ -1889,7 +1984,14 @@ fn pull_all_attributes_for_recursive(
         let is_component: bool = row.get(3)?.unwrap_or(false);
         let v_type_tag: i16 = row.get(4)?.ok_or("Missing type tag")?;
         let (decoded, ref_id) = decode_row_typed_value(&row, v_type_tag, 5)?;
-        rows.push(AttrRow { ident, cardinality, is_component, v_type_tag, decoded, ref_id });
+        rows.push(AttrRow {
+            ident,
+            cardinality,
+            is_component,
+            v_type_tag,
+            decoded,
+            ref_id,
+        });
     }
 
     for attr_row in &rows {
@@ -1905,7 +2007,17 @@ fn pull_all_attributes_for_recursive(
                 let mut sub_map = serde_json::Map::new();
                 sub_map.insert(":db/id".to_string(), json!(rid));
                 visited.insert(rid);
-                pull_wildcard(client, schema, db_schema, store_id, rid, &mut sub_map, &HashSet::new(), visited, depth + 1)?;
+                pull_wildcard(
+                    client,
+                    schema,
+                    db_schema,
+                    store_id,
+                    rid,
+                    &mut sub_map,
+                    &HashSet::new(),
+                    visited,
+                    depth + 1,
+                )?;
                 let value = serde_json::Value::Object(sub_map);
                 insert_value(result_map, &attr_row.ident, value, &attr_row.cardinality);
             } else {
@@ -1914,7 +2026,12 @@ fn pull_all_attributes_for_recursive(
                 insert_value(result_map, &attr_row.ident, ref_obj, &attr_row.cardinality);
             }
         } else {
-            insert_value(result_map, &attr_row.ident, attr_row.decoded.clone(), &attr_row.cardinality);
+            insert_value(
+                result_map,
+                &attr_row.ident,
+                attr_row.decoded.clone(),
+                &attr_row.cardinality,
+            );
         }
     }
 
@@ -2371,9 +2488,8 @@ mod tests {
         )?;
 
         // Pull :order/items -- should recursively expand component entities
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[:order/name :order/items]', 3000)",
-        )?;
+        let result =
+            Spi::get_one::<JsonB>("SELECT mentat_pull('[:order/name :order/items]', 3000)")?;
 
         assert!(result.is_some(), "Component pull should succeed");
         if let Some(JsonB(json_val)) = result {
@@ -2391,8 +2507,14 @@ mod tests {
             for item in arr {
                 let item_obj = item.as_object().expect("item should be object");
                 assert!(item_obj.contains_key(":db/id"), "item should have :db/id");
-                assert!(item_obj.contains_key(":item/name"), "item should have :item/name");
-                assert!(item_obj.contains_key(":item/qty"), "item should have :item/qty");
+                assert!(
+                    item_obj.contains_key(":item/name"),
+                    "item should have :item/name"
+                );
+                assert!(
+                    item_obj.contains_key(":item/qty"),
+                    "item should have :item/qty"
+                );
             }
         }
 
@@ -2486,9 +2608,7 @@ mod tests {
             ]'::TEXT)",
         )?;
 
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:person/friend ...}]', 5000)",
-        )?;
+        let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend ...}]', 5000)")?;
 
         assert!(result.is_some(), "Mixed recursive pull should succeed");
         if let Some(JsonB(json_val)) = result {
@@ -2507,7 +2627,9 @@ mod tests {
             );
 
             // Follow to Bob
-            let bob = obj.get(":person/friend").expect("should have :person/friend");
+            let bob = obj
+                .get(":person/friend")
+                .expect("should have :person/friend");
             let bob_obj = bob.as_object().expect("friend should be object");
             assert_eq!(bob_obj.get(":db/id"), Some(&json!(5001)));
             assert_eq!(
@@ -2517,7 +2639,9 @@ mod tests {
             );
 
             // Follow to Carol
-            let carol = bob_obj.get(":person/friend").expect("Bob should have :person/friend");
+            let carol = bob_obj
+                .get(":person/friend")
+                .expect("Bob should have :person/friend");
             let carol_obj = carol.as_object().expect("Carol should be object");
             assert_eq!(carol_obj.get(":db/id"), Some(&json!(5002)));
             assert_eq!(
@@ -2560,23 +2684,23 @@ mod tests {
         )?;
 
         // Depth 2: should get N0 -> N1 -> N2, but N2 should NOT have :node/next
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:node/next 2}]', 6000)",
-        )?;
+        let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:node/next 2}]', 6000)")?;
 
         assert!(result.is_some(), "Bounded depth pull should succeed");
         if let Some(JsonB(json_val)) = result {
             let n0 = json_val.as_object().expect("root should be object");
             assert_eq!(n0.get(":db/id"), Some(&json!(6000)));
 
-            let n1 = n0.get(":node/next")
+            let n1 = n0
+                .get(":node/next")
                 .expect("N0 should have :node/next")
                 .as_object()
                 .expect("N1 should be object");
             assert_eq!(n1.get(":db/id"), Some(&json!(6001)));
             assert_eq!(n1.get(":node/label"), Some(&json!("N1")));
 
-            let n2 = n1.get(":node/next")
+            let n2 = n1
+                .get(":node/next")
                 .expect("N1 should have :node/next")
                 .as_object()
                 .expect("N2 should be object");
@@ -2621,9 +2745,7 @@ mod tests {
         )?;
 
         // Reverse recursive: from VP, find who reports to them recursively
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:mgr/_reports-to 3}]', 7000)",
-        )?;
+        let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:mgr/_reports-to 3}]', 7000)")?;
 
         assert!(result.is_some(), "Reverse recursive pull should succeed");
         if let Some(JsonB(json_val)) = result {
@@ -2631,14 +2753,20 @@ mod tests {
             assert_eq!(vp.get(":db/id"), Some(&json!(7000)));
 
             // VP should have reverse lookup results
-            let reports = vp.get(":mgr/_reports-to")
+            let reports = vp
+                .get(":mgr/_reports-to")
                 .expect("VP should have :mgr/_reports-to");
-            let reports_arr = reports.as_array()
+            let reports_arr = reports
+                .as_array()
                 .expect("reverse recursive should produce array");
-            assert!(!reports_arr.is_empty(), "VP should have at least one report");
+            assert!(
+                !reports_arr.is_empty(),
+                "VP should have at least one report"
+            );
 
             // Find the manager in the reports
-            let manager = reports_arr.iter()
+            let manager = reports_arr
+                .iter()
                 .find(|r| r.get(":db/id") == Some(&json!(7001)))
                 .expect("Manager should appear in VP's reports");
             let manager_obj = manager.as_object().expect("manager should be object");
@@ -2684,9 +2812,7 @@ mod tests {
             ]'::TEXT)",
         )?;
 
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:person/friend ...}]', 8000)",
-        )?;
+        let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend ...}]', 8000)")?;
 
         assert!(result.is_some(), "Component+recursive pull should succeed");
         if let Some(JsonB(json_val)) = result {
@@ -2705,14 +2831,17 @@ mod tests {
 
             // Bob is a recursed child, so he is expanded with all attributes,
             // and his component :person/address is fully expanded.
-            let bob = alice.get(":person/friend")
+            let bob = alice
+                .get(":person/friend")
                 .expect("Alice should have :person/friend");
             let bob_obj = bob.as_object().expect("Bob should be object");
             assert_eq!(bob_obj.get(":person/name"), Some(&json!("Bob")));
 
-            let bob_addr = bob_obj.get(":person/address")
+            let bob_addr = bob_obj
+                .get(":person/address")
                 .expect("Bob should have :person/address");
-            let bob_addr_obj = bob_addr.as_object()
+            let bob_addr_obj = bob_addr
+                .as_object()
                 .expect("Bob's address should be object (component expanded)");
             assert_eq!(
                 bob_addr_obj.get(":address/city"),
@@ -2763,7 +2892,8 @@ mod tests {
 
             let alpha = arr[0].as_object().expect("first should be object");
             assert_eq!(alpha.get(":team/name"), Some(&json!("Alpha")));
-            let members = alpha.get(":team/members")
+            let members = alpha
+                .get(":team/members")
                 .expect("Alpha should have members")
                 .as_array()
                 .expect("members should be array");
@@ -2801,8 +2931,7 @@ mod tests {
             ]'::TEXT)",
         )?
         .expect("tx report");
-        let report: serde_json::Value =
-            serde_json::from_str(&report).expect("parse tx report");
+        let report: serde_json::Value = serde_json::from_str(&report).expect("parse tx report");
         let nid = report["tempids"]["n"].as_i64().expect("tempid n");
 
         let result = Spi::get_one::<JsonB>(&format!(
@@ -2817,9 +2946,9 @@ mod tests {
             assert_eq!(obj.get(":node/val"), Some(&json!(42)));
 
             // The :node/self should be a {:db/id nid} stub (cycle)
-            let self_ref = obj.get(":node/self")
-                .expect("should have :node/self");
-            let self_obj = self_ref.as_object()
+            let self_ref = obj.get(":node/self").expect("should have :node/self");
+            let self_obj = self_ref
+                .as_object()
                 .expect(":node/self should be an object");
             assert_eq!(
                 self_obj.get(":db/id"),

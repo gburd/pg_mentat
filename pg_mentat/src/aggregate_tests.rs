@@ -37,7 +37,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_count_all() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         // Count distinct entities
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find (count ?e) . :where [?e :ag/name _]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -57,7 +58,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_count_via_results() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name :where [?e :ag/name ?name]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -67,7 +69,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_count_by_dept() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name :where [?e :ag/name ?name] [?e :ag/dept \"Engineering\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -77,7 +80,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_count_filtered() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name :where [?e :ag/name ?name] [?e :ag/val ?v] [(> ?v 100)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -91,26 +95,36 @@ mod tests {
 
     #[pg_test]
     fn test_ag_min_val_via_predicate() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         // Find the minimum val: Eve has 50
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :ag/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        let vals: Vec<i64> = j["result"].as_array().expect("arr")
-            .iter().map(|v| v.as_i64().expect("v")).collect();
+        let vals: Vec<i64> = j["result"]
+            .as_array()
+            .expect("arr")
+            .iter()
+            .map(|v| v.as_i64().expect("v"))
+            .collect();
         assert_eq!(*vals.iter().min().unwrap(), 50);
     }
 
     #[pg_test]
     fn test_ag_max_val_via_predicate() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :ag/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        let vals: Vec<i64> = j["result"].as_array().expect("arr")
-            .iter().map(|v| v.as_i64().expect("v")).collect();
+        let vals: Vec<i64> = j["result"]
+            .as_array()
+            .expect("arr")
+            .iter()
+            .map(|v| v.as_i64().expect("v"))
+            .collect();
         assert_eq!(*vals.iter().max().unwrap(), 300);
     }
 
@@ -120,13 +134,18 @@ mod tests {
 
     #[pg_test]
     fn test_ag_sum_via_collection() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [?e :ag/val ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        let sum: i64 = j["result"].as_array().expect("arr")
-            .iter().map(|v| v.as_i64().expect("v")).sum();
+        let sum: i64 = j["result"]
+            .as_array()
+            .expect("arr")
+            .iter()
+            .map(|v| v.as_i64().expect("v"))
+            .sum();
         assert_eq!(sum, 100 + 200 + 150 + 300 + 50);
     }
 
@@ -136,7 +155,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_distinct_depts() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?d ...] :where [_ :ag/dept ?d]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -151,7 +171,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_high_scorers() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?name ?s :where [?e :ag/name ?name] [?e :ag/score ?s] [(> ?s 85.0)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -163,7 +184,8 @@ mod tests {
 
     #[pg_test]
     fn test_ag_score_range() {
-        setup(); setup_agg_schema_and_data();
+        setup();
+        setup_agg_schema_and_data();
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?s ...] :where [_ :ag/score ?s] [(>= ?s 70.0)] [(<= ?s 90.0)]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");

@@ -154,8 +154,7 @@ mod tests {
             return; // soft-dep absent; covered by pg_test_fuzzy_match_soft_dep_error
         }
         let [d1, _d2, _d3, _d4, _d5] = install_typo_dataset();
-        Spi::run("SELECT mentat.create_tre_index(':doc/body')")
-            .expect("create_tre_index");
+        Spi::run("SELECT mentat.create_tre_index(':doc/body')").expect("create_tre_index");
         let got = fuzzy_query_entids("database", 0);
         let expected: HashSet<i64> = [d1].into_iter().collect();
         assert_eq!(
@@ -177,8 +176,7 @@ mod tests {
             return;
         }
         let [d1, d2, d3, d4, d5] = install_typo_dataset();
-        Spi::run("SELECT mentat.create_tre_index(':doc/body')")
-            .expect("create_tre_index");
+        Spi::run("SELECT mentat.create_tre_index(':doc/body')").expect("create_tre_index");
         let got = fuzzy_query_entids("database", 1);
         let expected: HashSet<i64> = [d1, d2, d5].into_iter().collect();
         assert_eq!(
@@ -197,8 +195,7 @@ mod tests {
             return;
         }
         let [d1, d2, d3, d4, d5] = install_typo_dataset();
-        Spi::run("SELECT mentat.create_tre_index(':doc/body')")
-            .expect("create_tre_index");
+        Spi::run("SELECT mentat.create_tre_index(':doc/body')").expect("create_tre_index");
         let got = fuzzy_query_entids("database", 2);
         let expected: HashSet<i64> = [d1, d2, d4, d5].into_iter().collect();
         assert_eq!(

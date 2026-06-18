@@ -19,17 +19,18 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     /// Check if a SQL statement raises an error by executing it in a PL/pgSQL
     /// exception handler (which provides subtransaction isolation).
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_eh_schema() {
@@ -52,7 +53,8 @@ mod tests {
 
     #[pg_test]
     fn test_eh_empty_transaction() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         let result = Spi::run("SELECT mentat_transact('[]'::TEXT)");
         // Empty transaction should either succeed (no-op) or error
         assert!(result.is_ok() || result.is_err());
@@ -60,37 +62,53 @@ mod tests {
 
     #[pg_test]
     fn test_eh_malformed_edn_missing_bracket() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_malformed_edn_extra_bracket() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_malformed_edn_no_brackets() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact(':db/add \"e\" :eh/name \"test\"'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact(':db/add \"e\" :eh/name \"test\"'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_malformed_map_missing_brace() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[{:db/id \"e\" :eh/name \"test\"'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[{:db/id \"e\" :eh/name \"test\"'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_completely_invalid_input() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('this is not edn at all!'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('this is not edn at all!'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_null_input() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         let result = Spi::run("SELECT mentat_transact(NULL::TEXT)");
         // NULL input should error
         assert!(result.is_ok() || result.is_err());
@@ -98,7 +116,8 @@ mod tests {
 
     #[pg_test]
     fn test_eh_empty_string_input() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         assert!(raises_error("SELECT mentat_transact(''::TEXT)"));
     }
 
@@ -108,35 +127,49 @@ mod tests {
 
     #[pg_test]
     fn test_eh_malformed_query_no_find() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_query('[:where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_query('[:where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_malformed_query_no_where() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         // A query with no :where clause is rejected by the parser
         // ("expected :where"). Run it in a subtransaction so the raised
         // error does not poison the test's outer transaction.
-        assert!(raises_error("SELECT mentat_query('[:find ?n]'::TEXT, '{}'::jsonb)::TEXT"));
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?n]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_malformed_query_invalid_edn() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_query('not a query'::TEXT, '{}'::jsonb)::TEXT"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_query('not a query'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_query_empty_string() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_query(''::TEXT, '{}'::jsonb)::TEXT"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_query(''::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_query_unbound_variable() {
-        setup(); setup_eh_schema();
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)").expect("data");
+        setup();
+        setup_eh_schema();
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)")
+            .expect("data");
         // ?n appears in :find but is bound by no :where clause -> fail-loud
         // (:db.error/unbound-variable). Route through the subtransaction
         // helper so the error doesn't poison the test transaction.
@@ -147,7 +180,8 @@ mod tests {
 
     #[pg_test]
     fn test_eh_query_unknown_attribute() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         // :nonexistent/attr is not registered -> fail-loud
         // (:db.error/unknown-attribute), not a silent empty result.
         assert!(raises_error(
@@ -157,8 +191,10 @@ mod tests {
 
     #[pg_test]
     fn test_eh_query_null_params() {
-        setup(); setup_eh_schema();
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)").expect("data");
+        setup();
+        setup_eh_schema();
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)")
+            .expect("data");
         let result = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [_ :eh/name ?n]]'::TEXT, NULL::jsonb)::TEXT",
         );
@@ -167,8 +203,11 @@ mod tests {
 
     #[pg_test]
     fn test_eh_query_missing_brackets() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_query(':find ?n :where [_ :eh/name ?n]'::TEXT, '{}'::jsonb)::TEXT"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_query(':find ?n :where [_ :eh/name ?n]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     // ========================================================================
@@ -177,49 +216,71 @@ mod tests {
 
     #[pg_test]
     fn test_eh_undefined_attribute() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :undefined/attr \"value\"]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :undefined/attr \"value\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_wrong_type_string_for_long() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/val \"not-a-number\"]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/val \"not-a-number\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_wrong_type_string_for_boolean() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/flag \"not-a-bool\"]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/flag \"not-a-bool\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_wrong_type_long_for_string() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/name 42]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/name 42]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_wrong_type_boolean_for_long() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\" :eh/val true]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\" :eh/val true]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_incomplete_vector_op() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/add \"e\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_invalid_db_op() {
-        setup(); setup_eh_schema();
-        assert!(raises_error("SELECT mentat_transact('[[:db/invalid \"e\" :eh/name \"test\"]]'::TEXT)"));
+        setup();
+        setup_eh_schema();
+        assert!(raises_error(
+            "SELECT mentat_transact('[[:db/invalid \"e\" :eh/name \"test\"]]'::TEXT)"
+        ));
     }
 
     #[pg_test]
     fn test_eh_retract_nonexistent_entity() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         // Retracting a nonexistent entity should be a no-op or error gracefully
         let result = Spi::run("SELECT mentat_transact('[[:db/retractEntity 999999999]]'::TEXT)");
         assert!(result.is_ok() || result.is_err());
@@ -273,15 +334,19 @@ mod tests {
 
     #[pg_test]
     fn test_eh_valid_after_error() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         // First, trigger an error inside a subtransaction so it does not
         // poison the test's outer transaction.
         let _ = raises_error("SELECT mentat_transact('invalid'::TEXT)");
         // Then, verify system still works
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"recovery\"]]'::TEXT)").expect("should work after error");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"recovery\"]]'::TEXT)")
+            .expect("should work after error");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "recovery");
     }
@@ -292,81 +357,105 @@ mod tests {
 
     #[pg_test]
     fn test_eh_cas_wrong_old_value() {
-        setup(); setup_eh_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        setup();
+        setup_eh_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         assert!(raises_error(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :eh/val 999 200]]'::TEXT)", eid
+            "SELECT mentat_transact('[[:db/cas {} :eh/val 999 200]]'::TEXT)",
+            eid
         )));
     }
 
     #[pg_test]
     fn test_eh_cas_nil_but_has_value() {
-        setup(); setup_eh_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :eh/val 42]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        setup();
+        setup_eh_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :eh/val 42]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         assert!(raises_error(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :eh/val nil 99]]'::TEXT)", eid
+            "SELECT mentat_transact('[[:db/cas {} :eh/val nil 99]]'::TEXT)",
+            eid
         )));
     }
 
     #[pg_test]
     fn test_eh_cas_on_nonexistent_entity() {
-        setup(); setup_eh_schema();
-        let result = Spi::run("SELECT mentat_transact('[[:db/cas 999999999 :eh/val nil 42]]'::TEXT)");
+        setup();
+        setup_eh_schema();
+        let result =
+            Spi::run("SELECT mentat_transact('[[:db/cas 999999999 :eh/val nil 42]]'::TEXT)");
         // CAS on nonexistent entity - may succeed (from nil) or error
         assert!(result.is_ok() || result.is_err());
     }
 
     #[pg_test]
     fn test_eh_cas_preserves_on_failure() {
-        setup(); setup_eh_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        setup();
+        setup_eh_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         // Run the failing CAS inside a subtransaction so its error does not
         // poison the outer transaction; the value must remain unchanged.
-        assert!(raises_error(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :eh/val 999 200]]'::TEXT)", eid
-        )), "CAS with wrong old value should fail");
+        assert!(
+            raises_error(&format!(
+                "SELECT mentat_transact('[[:db/cas {} :eh/val 999 200]]'::TEXT)",
+                eid
+            )),
+            "CAS with wrong old value should fail"
+        );
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :eh/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :eh/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("v"), 100);
     }
 
     #[pg_test]
     fn test_eh_cas_wrong_type() {
-        setup(); setup_eh_schema();
-        let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        setup();
+        setup_eh_schema();
+        let r =
+            Spi::get_one::<String>("SELECT mentat_transact('[[:db/add \"e\" :eh/val 100]]'::TEXT)")
+                .expect("tx")
+                .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         assert!(raises_error(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :eh/val \"100\" 200]]'::TEXT)", eid
+            "SELECT mentat_transact('[[:db/cas {} :eh/val \"100\" 200]]'::TEXT)",
+            eid
         )));
     }
 
     #[pg_test]
     fn test_eh_cas_on_many_cardinality() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :eh/tags \"tag1\"]]'::TEXT)",
-        ).expect("tx").expect("NULL");
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         let result = Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/cas {} :eh/tags \"tag1\" \"tag2\"]]'::TEXT)", eid
+            "SELECT mentat_transact('[[:db/cas {} :eh/tags \"tag1\" \"tag2\"]]'::TEXT)",
+            eid
         ));
         // CAS on cardinality-many is not well-defined
         assert!(result.is_ok() || result.is_err());
@@ -416,7 +505,8 @@ mod tests {
         .expect("create helper");
         // Either it errors (expected: no schema) or is accepted; both are
         // acceptable. The point is not to panic by poisoning the transaction.
-        let _ = raises_error("SELECT mentat_transact('[[:db/add \"e\" :some/attr \"val\"]]'::TEXT)");
+        let _ =
+            raises_error("SELECT mentat_transact('[[:db/add \"e\" :some/attr \"val\"]]'::TEXT)");
     }
 
     #[pg_test]
@@ -432,26 +522,29 @@ mod tests {
 
     #[pg_test]
     fn test_eh_pull_nonexistent_entity() {
-        setup(); setup_eh_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_pull('[*]'::TEXT, 999999999)::TEXT",
-        );
+        setup();
+        setup_eh_schema();
+        let result = Spi::get_one::<String>("SELECT mentat_pull('[*]'::TEXT, 999999999)::TEXT");
         assert!(result.is_ok() || result.is_err());
     }
 
     #[pg_test]
     fn test_eh_successive_errors_dont_break() {
-        setup(); setup_eh_schema();
+        setup();
+        setup_eh_schema();
         // Multiple errors in a row, each isolated in its own subtransaction
         // so they do not poison the outer transaction.
         for _ in 0..5 {
             let _ = raises_error("SELECT mentat_transact('invalid edn'::TEXT)");
         }
         // System should still work
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"still-works\"]]'::TEXT)").expect("recovery");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"still-works\"]]'::TEXT)")
+            .expect("recovery");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?n . :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "still-works");
     }

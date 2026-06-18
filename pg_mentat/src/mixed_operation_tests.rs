@@ -32,10 +32,13 @@ mod tests {
 
     #[pg_test]
     fn test_mx_add_and_retract_different_attrs() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"test\" :mx/val 10}]'::TEXT)"
-        ).expect("tx").expect("NULL");
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"test\" :mx/val 10}]'::TEXT)",
+        )
+        .expect("tx")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         Spi::run(&format!(
@@ -50,7 +53,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_add_new_and_retract_old_many() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[[:db/add \"e\" :mx/name \"h\"] [:db/add \"e\" :mx/tags \"old1\"] [:db/add \"e\" :mx/tags \"old2\"]]'::TEXT)"
         ).expect("tx").expect("NULL");
@@ -63,7 +67,12 @@ mod tests {
             "SELECT mentat_query('[:find [?t ...] :where [{} :mx/tags ?t]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        let tags: Vec<&str> = v["result"].as_array().expect("arr").iter().map(|t| t.as_str().expect("s")).collect();
+        let tags: Vec<&str> = v["result"]
+            .as_array()
+            .expect("arr")
+            .iter()
+            .map(|t| t.as_str().expect("s"))
+            .collect();
         assert_eq!(tags.len(), 2);
         assert!(tags.contains(&"old2"));
         assert!(tags.contains(&"new1"));
@@ -71,7 +80,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_create_and_retract_entity_same_tx_batch() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         // Create entity, add tags, retract one tag - all in sequence
         // Cardinality-many tags must be separate datoms (duplicate map keys
         // collapse to the last value). Assert each tag explicitly.
@@ -96,7 +106,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_create_two_entities_link() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"p\" :mx/name \"Parent\" :mx/val 100} {:db/id \"c\" :mx/name \"Child\" :mx/val 50 :mx/ref \"p\"}]'::TEXT)"
         ).expect("tx").expect("NULL");
@@ -105,15 +116,19 @@ mod tests {
         let child = j["tempids"]["c"].as_i64().expect("c");
         assert_ne!(parent, child);
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?r . :where [{} :mx/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT", child
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?r . :where [{} :mx/ref ?r]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            child
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("r"), parent);
     }
 
     #[pg_test]
     fn test_mx_update_two_entities_same_tx() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"a\" :mx/name \"A\" :mx/val 1} {:db/id \"b\" :mx/name \"B\" :mx/val 2}]'::TEXT)"
         ).expect("tx").expect("NULL");
@@ -121,21 +136,29 @@ mod tests {
         let a = j["tempids"]["a"].as_i64().expect("a");
         let b = j["tempids"]["b"].as_i64().expect("b");
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/add {} :mx/val 10] [:db/add {} :mx/val 20]]'::TEXT)", a, b
-        )).expect("update both");
+            "SELECT mentat_transact('[[:db/add {} :mx/val 10] [:db/add {} :mx/val 20]]'::TEXT)",
+            a, b
+        ))
+        .expect("update both");
         let qa = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :mx/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", a
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :mx/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            a
+        ))
+        .expect("q")
+        .expect("NULL");
         let va: serde_json::Value = serde_json::from_str(&qa).expect("parse");
         assert_eq!(va["result"].as_i64().expect("v"), 10);
     }
 
     #[pg_test]
     fn test_mx_create_and_update_in_sequence() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"init\" :mx/val 0}]'::TEXT)"
-        ).expect("create").expect("NULL");
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"init\" :mx/val 0}]'::TEXT)",
+        )
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
 
@@ -159,10 +182,17 @@ mod tests {
 
     #[pg_test]
     fn test_mx_upsert_then_add_tags() {
-        setup(); setup_mx_schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU1\" :mx/name \"Alice\"}]'::TEXT)").expect("create");
+        setup();
+        setup_mx_schema();
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU1\" :mx/name \"Alice\"}]'::TEXT)",
+        )
+        .expect("create");
         // Upsert and add tags
-        Spi::run("SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU1\" :mx/tags \"tag1\"}]'::TEXT)").expect("upsert+tags");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU1\" :mx/tags \"tag1\"}]'::TEXT)",
+        )
+        .expect("upsert+tags");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?t ...] :where [?e :mx/uid \"MU1\"] [?e :mx/tags ?t]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -172,15 +202,18 @@ mod tests {
 
     #[pg_test]
     fn test_mx_upsert_then_ref() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"target\" :mx/name \"Target\"} {:db/id \"e\" :mx/uid \"MU2\" :mx/name \"Source\"}]'::TEXT)"
         ).expect("create").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let target = j["tempids"]["target"].as_i64().expect("target");
         Spi::run(&format!(
-            "SELECT mentat_transact('[{{:db/id \"e\" :mx/uid \"MU2\" :mx/ref {}}}]'::TEXT)", target
-        )).expect("upsert+ref");
+            "SELECT mentat_transact('[{{:db/id \"e\" :mx/uid \"MU2\" :mx/ref {}}}]'::TEXT)",
+            target
+        ))
+        .expect("upsert+ref");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?rn . :where [?e :mx/uid \"MU2\"] [?e :mx/ref ?r] [?r :mx/name ?rn]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -190,7 +223,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_upsert_with_bool_and_kw() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU3\" :mx/flag true :mx/status :draft}]'::TEXT)").expect("create");
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :mx/uid \"MU3\" :mx/flag false :mx/status :published}]'::TEXT)").expect("upsert");
         let q = Spi::get_one::<String>(
@@ -208,7 +242,8 @@ mod tests {
     fn test_mx_define_attr_then_use_immediately() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :mx.new/attr1 :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :mx.new/attr1 \"works\"]]'::TEXT)").expect("use");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :mx.new/attr1 \"works\"]]'::TEXT)")
+            .expect("use");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :mx.new/attr1 ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -224,10 +259,14 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :mx.dyn/a{} :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}]'::TEXT)", i
             )).expect("schema");
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{}\" :mx.dyn/a{} \"val-{}\"]]'::TEXT)", i, i, i
-            )).expect("use");
+                "SELECT mentat_transact('[[:db/add \"e{}\" :mx.dyn/a{} \"val-{}\"]]'::TEXT)",
+                i, i, i
+            ))
+            .expect("use");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..5 {
             assert!(s.contains(&format!("mx.dyn/a{}", i)));
         }
@@ -241,13 +280,17 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :mx.il/r{i} :db/valueType :db.type/long :db/cardinality :db.cardinality/one}}]'::TEXT)", i = i
             )).expect("schema");
             Spi::run(&format!(
-                "SELECT mentat_transact('[[:db/add \"e{i}\" :mx.il/r{i} {i}]]'::TEXT)", i = i
-            )).expect("data");
+                "SELECT mentat_transact('[[:db/add \"e{i}\" :mx.il/r{i} {i}]]'::TEXT)",
+                i = i
+            ))
+            .expect("data");
         }
         // Verify last one
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :mx.il/r9 ?v]]'::TEXT, '{}'::jsonb)::TEXT",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("v"), 9);
     }
@@ -258,13 +301,22 @@ mod tests {
 
     #[pg_test]
     fn test_mx_batch_add_retract_mixed() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         // Create 20 entities
         let mut ops = Vec::new();
         for i in 0..20 {
-            ops.push(format!("{{:db/id \"e{i}\" :mx/name \"ent-{i}\" :mx/val {i}}}", i = i));
+            ops.push(format!(
+                "{{:db/id \"e{i}\" :mx/name \"ent-{i}\" :mx/val {i}}}",
+                i = i
+            ));
         }
-        let r = Spi::get_one::<String>(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("create").expect("NULL");
+        let r = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
 
         // Update first 10, retract last 10
@@ -277,7 +329,11 @@ mod tests {
             let eid = j["tempids"][&format!("e{}", i)].as_i64().expect("eid");
             mixed_ops.push(format!("[:db/retractEntity {}]", eid));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", mixed_ops.join("\n"))).expect("mixed batch");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            mixed_ops.join("\n")
+        ))
+        .expect("mixed batch");
 
         // Append-only log keeps the original assertions even after
         // retractEntity; count live entities from the current-state projection.
@@ -289,12 +345,21 @@ mod tests {
 
     #[pg_test]
     fn test_mx_batch_50_creates_then_updates() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let mut ops = Vec::new();
         for i in 0..50 {
-            ops.push(format!("{{:db/id \"e{i}\" :mx/name \"ent-{i}\" :mx/val 0}}", i = i));
+            ops.push(format!(
+                "{{:db/id \"e{i}\" :mx/name \"ent-{i}\" :mx/val 0}}",
+                i = i
+            ));
         }
-        let r = Spi::get_one::<String>(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("create").expect("NULL");
+        let r = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
 
         let mut updates = Vec::new();
@@ -302,7 +367,11 @@ mod tests {
             let eid = j["tempids"][&format!("e{}", i)].as_i64().expect("eid");
             updates.push(format!("[:db/add {} :mx/val {}]", eid, i * 2));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", updates.join("\n"))).expect("batch update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            updates.join("\n")
+        ))
+        .expect("batch update");
 
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find [?v ...] :where [_ :mx/val ?v] [(> ?v 0)]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -313,10 +382,13 @@ mod tests {
 
     #[pg_test]
     fn test_mx_rapid_fire_20_txs() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         let r = Spi::get_one::<String>(
-            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"rapid\" :mx/val 0}]'::TEXT)"
-        ).expect("create").expect("NULL");
+            "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"rapid\" :mx/val 0}]'::TEXT)",
+        )
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         for i in 1..=20 {
@@ -337,7 +409,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_full_lifecycle() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         // Create
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"e\" :mx/name \"lifecycle\" :mx/val 0 :mx/flag false :mx/status :new}]'::TEXT)"
@@ -355,7 +428,11 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["results"].as_array().expect("arr").len(), 1);
         // Retract
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)", eid)).expect("delete");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)",
+            eid
+        ))
+        .expect("delete");
         // Verify gone
         let q2 = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?n . :where [{} :mx/name ?n]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
@@ -366,7 +443,8 @@ mod tests {
 
     #[pg_test]
     fn test_mx_project_management_workflow() {
-        setup(); setup_mx_schema();
+        setup();
+        setup_mx_schema();
         // Create project
         let r1 = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"proj\" :mx/name \"Big Project\" :mx/status :planning :mx/val 0}]'::TEXT)"

@@ -54,12 +54,9 @@ mod tests {
              $$",
         )
         .expect("create error_msg helper");
-        Spi::get_one::<String>(&format!(
-            "SELECT mentat._gc_test_error_msg('{}')",
-            escaped
-        ))
-        .expect("error_msg call")
-        .unwrap_or_default()
+        Spi::get_one::<String>(&format!("SELECT mentat._gc_test_error_msg('{}')", escaped))
+            .expect("error_msg call")
+            .unwrap_or_default()
     }
 
     fn setup_gc_schema() {
@@ -237,10 +234,7 @@ mod tests {
             })
             .collect();
         rows.sort();
-        assert_eq!(
-            rows,
-            vec![(1, "Alice".to_string()), (2, "Bob".to_string())]
-        );
+        assert_eq!(rows, vec![(1, "Alice".to_string()), (2, "Bob".to_string())]);
     }
 
     // ========================================================================

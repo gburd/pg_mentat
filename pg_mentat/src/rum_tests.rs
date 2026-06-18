@@ -111,7 +111,11 @@ mod tests {
             Spi::get_one::<String>("SELECT mentat.create_rum_fulltext_index(':issue/body')")
                 .expect("create index")
                 .expect("NULL");
-        assert!(idx_name.starts_with("current_text_rum_"), "idx: {}", idx_name);
+        assert!(
+            idx_name.starts_with("current_text_rum_"),
+            "idx: {}",
+            idx_name
+        );
 
         let raw = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?b ?s :where \
@@ -125,7 +129,11 @@ mod tests {
         assert_eq!(results.len(), 2, "two rows match");
         for row in results {
             let score = row[1].as_f64().expect("score");
-            assert!(score > 0.0, "rum_ts_score should be positive, got {}", score);
+            assert!(
+                score > 0.0,
+                "rum_ts_score should be positive, got {}",
+                score
+            );
         }
     }
 
@@ -141,28 +149,20 @@ mod tests {
         }
         install_body_attr_with_data();
 
-        let n1 = Spi::get_one::<String>(
-            "SELECT mentat.create_rum_fulltext_index(':issue/body')",
-        )
-        .expect("create 1")
-        .expect("NULL");
-        let n2 = Spi::get_one::<String>(
-            "SELECT mentat.create_rum_fulltext_index(':issue/body')",
-        )
-        .expect("create 2")
-        .expect("NULL");
+        let n1 = Spi::get_one::<String>("SELECT mentat.create_rum_fulltext_index(':issue/body')")
+            .expect("create 1")
+            .expect("NULL");
+        let n2 = Spi::get_one::<String>("SELECT mentat.create_rum_fulltext_index(':issue/body')")
+            .expect("create 2")
+            .expect("NULL");
         assert_eq!(n1, n2);
 
-        let dropped1 = Spi::get_one::<bool>(
-            "SELECT mentat.drop_rum_fulltext_index(':issue/body')",
-        )
-        .expect("drop 1")
-        .expect("NULL");
-        let dropped2 = Spi::get_one::<bool>(
-            "SELECT mentat.drop_rum_fulltext_index(':issue/body')",
-        )
-        .expect("drop 2")
-        .expect("NULL");
+        let dropped1 = Spi::get_one::<bool>("SELECT mentat.drop_rum_fulltext_index(':issue/body')")
+            .expect("drop 1")
+            .expect("NULL");
+        let dropped2 = Spi::get_one::<bool>("SELECT mentat.drop_rum_fulltext_index(':issue/body')")
+            .expect("drop 2")
+            .expect("NULL");
         assert!(dropped1);
         assert!(!dropped2);
     }
@@ -192,9 +192,7 @@ mod tests {
         if !has_rum() {
             return;
         }
-        let err = capture_error(
-            "SELECT mentat.create_rum_fulltext_index(':not/registered')",
-        );
+        let err = capture_error("SELECT mentat.create_rum_fulltext_index(':not/registered')");
         assert!(
             err.contains(":db.error/unknown-attribute"),
             "expected unknown-attribute, got: {}",

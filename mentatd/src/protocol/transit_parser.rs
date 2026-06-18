@@ -52,8 +52,8 @@ const MAX_NESTING_DEPTH: usize = 64;
 
 /// Parse a Transit+JSON encoded request body into a `Request`.
 pub fn parse_transit_json(input: &str) -> Result<Request, ParseError> {
-    let json: serde_json::Value =
-        serde_json::from_str(input).map_err(|e| ParseError::Edn(format!("Invalid Transit+JSON: {e}")))?;
+    let json: serde_json::Value = serde_json::from_str(input)
+        .map_err(|e| ParseError::Edn(format!("Invalid Transit+JSON: {e}")))?;
     let transit_val = json_to_transit_bounded(&json, 0)?;
     transit_to_request(&transit_val)
 }
@@ -62,7 +62,10 @@ pub fn parse_transit_json(input: &str) -> Result<Request, ParseError> {
 ///
 /// Enforces a maximum nesting depth to prevent stack overflow from deeply nested
 /// payloads. Returns a `ParseError` if the depth limit is exceeded.
-fn json_to_transit_bounded(val: &serde_json::Value, depth: usize) -> Result<TransitValue, ParseError> {
+fn json_to_transit_bounded(
+    val: &serde_json::Value,
+    depth: usize,
+) -> Result<TransitValue, ParseError> {
     if depth > MAX_NESTING_DEPTH {
         return Err(ParseError::Edn(format!(
             "Transit nesting depth exceeds maximum ({MAX_NESTING_DEPTH})"
@@ -139,7 +142,10 @@ fn decode_transit_tagged_string(s: &str) -> TransitValue {
 /// and tagged values (`["~#list", ...]`, `["~#set", ...]`).
 ///
 /// Enforces nesting depth to prevent stack overflow.
-fn decode_transit_array_bounded(arr: &[serde_json::Value], depth: usize) -> Result<TransitValue, ParseError> {
+fn decode_transit_array_bounded(
+    arr: &[serde_json::Value],
+    depth: usize,
+) -> Result<TransitValue, ParseError> {
     if arr.is_empty() {
         return Ok(TransitValue::Array(Vec::new()));
     }
@@ -164,8 +170,10 @@ fn decode_transit_array_bounded(arr: &[serde_json::Value], depth: usize) -> Resu
                 "list" => {
                     if let Some(items_val) = arr.get(1) {
                         if let serde_json::Value::Array(items) = items_val {
-                            let converted: Result<Vec<_>, _> =
-                                items.iter().map(|v| json_to_transit_bounded(v, depth)).collect();
+                            let converted: Result<Vec<_>, _> = items
+                                .iter()
+                                .map(|v| json_to_transit_bounded(v, depth))
+                                .collect();
                             return Ok(TransitValue::Array(converted?));
                         }
                     }
@@ -174,8 +182,10 @@ fn decode_transit_array_bounded(arr: &[serde_json::Value], depth: usize) -> Resu
                 "set" => {
                     if let Some(items_val) = arr.get(1) {
                         if let serde_json::Value::Array(items) = items_val {
-                            let converted: Result<Vec<_>, _> =
-                                items.iter().map(|v| json_to_transit_bounded(v, depth)).collect();
+                            let converted: Result<Vec<_>, _> = items
+                                .iter()
+                                .map(|v| json_to_transit_bounded(v, depth))
+                                .collect();
                             return Ok(TransitValue::Array(converted?));
                         }
                     }
@@ -187,8 +197,10 @@ fn decode_transit_array_bounded(arr: &[serde_json::Value], depth: usize) -> Resu
     }
 
     // Regular array
-    let converted: Result<Vec<_>, _> =
-        arr.iter().map(|v| json_to_transit_bounded(v, depth)).collect();
+    let converted: Result<Vec<_>, _> = arr
+        .iter()
+        .map(|v| json_to_transit_bounded(v, depth))
+        .collect();
     Ok(TransitValue::Array(converted?))
 }
 
@@ -217,7 +229,10 @@ impl std::fmt::Display for MsgpackError {
 /// `TransitValue` and the remaining unconsumed bytes.
 ///
 /// Enforces a maximum nesting depth to prevent stack overflow from deeply nested payloads.
-fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue, &[u8]), MsgpackError> {
+fn msgpack_read_value_bounded(
+    buf: &[u8],
+    depth: usize,
+) -> Result<(TransitValue, &[u8]), MsgpackError> {
     if depth > MAX_NESTING_DEPTH {
         return Err(MsgpackError(format!(
             "MessagePack nesting depth exceeds maximum ({MAX_NESTING_DEPTH})"
@@ -335,8 +350,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
         // str32
         0xdb => {
             ensure_len(rest, 4)?;
-            let len =
-                u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
             ensure_len(&rest[4..], len)?;
             let s = std::str::from_utf8(&rest[4..4 + len])
                 .map_err(|e| MsgpackError(format!("Invalid UTF-8 in str32: {e}")))?;
@@ -358,8 +372,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
         // array32
         0xdd => {
             ensure_len(rest, 4)?;
-            let len =
-                u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
             msgpack_read_transit_array(&rest[4..], len, depth + 1)
         }
 
@@ -377,8 +390,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
         // map32
         0xdf => {
             ensure_len(rest, 4)?;
-            let len =
-                u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
             msgpack_read_map(&rest[4..], len, depth + 1)
         }
 
@@ -407,8 +419,7 @@ fn msgpack_read_value_bounded(buf: &[u8], depth: usize) -> Result<(TransitValue,
         // bin32
         0xc6 => {
             ensure_len(rest, 4)?;
-            let len =
-                u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            let len = u32::from_be_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
             ensure_len(&rest[4..], len)?;
             let bytes = &rest[4..4 + len];
             Ok((
@@ -451,7 +462,11 @@ fn ensure_len(buf: &[u8], needed: usize) -> Result<(), MsgpackError> {
 
 /// Read `count` msgpack values as an array, then apply Transit array decoding
 /// (cmap detection, tagged forms).
-fn msgpack_read_transit_array(mut buf: &[u8], count: usize, depth: usize) -> Result<(TransitValue, &[u8]), MsgpackError> {
+fn msgpack_read_transit_array(
+    mut buf: &[u8],
+    count: usize,
+    depth: usize,
+) -> Result<(TransitValue, &[u8]), MsgpackError> {
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
         let (val, remaining) = msgpack_read_value_bounded(buf, depth)?;
@@ -489,7 +504,11 @@ fn msgpack_read_transit_array(mut buf: &[u8], count: usize, depth: usize) -> Res
 }
 
 /// Read `count` msgpack key-value pairs as a native msgpack map.
-fn msgpack_read_map(mut buf: &[u8], count: usize, depth: usize) -> Result<(TransitValue, &[u8]), MsgpackError> {
+fn msgpack_read_map(
+    mut buf: &[u8],
+    count: usize,
+    depth: usize,
+) -> Result<(TransitValue, &[u8]), MsgpackError> {
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
         let (key, remaining) = msgpack_read_value_bounded(buf, depth)?;
@@ -511,8 +530,7 @@ fn transit_to_request(val: &TransitValue) -> Result<Request, ParseError> {
         _ => return Err(ParseError::InvalidType("request must be a map".to_string())),
     };
 
-    let op_val = map_get(map, "op")
-        .ok_or_else(|| ParseError::MissingField("op".to_string()))?;
+    let op_val = map_get(map, "op").ok_or_else(|| ParseError::MissingField("op".to_string()))?;
 
     let op_keyword = match op_val {
         TransitValue::Keyword(k) => k.as_str(),
@@ -693,11 +711,7 @@ fn parse_filter_predicate(
 
     let pred_type = match map_get(pred_map, "type") {
         Some(TransitValue::Keyword(k)) => k.clone(),
-        _ => {
-            return Err(ParseError::MissingField(
-                "predicate :type".to_string(),
-            ))
-        }
+        _ => return Err(ParseError::MissingField("predicate :type".to_string())),
     };
 
     let pred_value = map_get(pred_map, "value")
@@ -733,10 +747,7 @@ fn parse_filter_predicate(
 }
 
 /// Look up a key by name in a Transit map. Checks both keyword and string keys.
-fn map_get<'a>(
-    entries: &'a [(TransitValue, TransitValue)],
-    key: &str,
-) -> Option<&'a TransitValue> {
+fn map_get<'a>(entries: &'a [(TransitValue, TransitValue)], key: &str) -> Option<&'a TransitValue> {
     entries.iter().find_map(|(k, v)| match k {
         TransitValue::Keyword(kw) if kw == key => Some(v),
         TransitValue::String(s) if s == key => Some(v),
@@ -767,10 +778,7 @@ fn get_string_from_map(
 }
 
 /// Get an integer value from a Transit map.
-fn get_optional_int(
-    entries: &[(TransitValue, TransitValue)],
-    key: &str,
-) -> Option<i64> {
+fn get_optional_int(entries: &[(TransitValue, TransitValue)], key: &str) -> Option<i64> {
     match map_get(entries, key) {
         Some(TransitValue::Integer(i)) => Some(*i),
         _ => None,
@@ -781,8 +789,7 @@ fn get_required_int(
     entries: &[(TransitValue, TransitValue)],
     key: &str,
 ) -> Result<i64, ParseError> {
-    get_optional_int(entries, key)
-        .ok_or_else(|| ParseError::MissingField(key.to_string()))
+    get_optional_int(entries, key).ok_or_else(|| ParseError::MissingField(key.to_string()))
 }
 
 /// Extract a value as a string representation (for queries, patterns, etc.).
@@ -851,10 +858,7 @@ fn transit_value_to_edn_string(val: &TransitValue) -> String {
 }
 
 /// Get an optional string from a Transit map.
-fn get_optional_string(
-    entries: &[(TransitValue, TransitValue)],
-    key: &str,
-) -> Option<String> {
+fn get_optional_string(entries: &[(TransitValue, TransitValue)], key: &str) -> Option<String> {
     match map_get(entries, key) {
         Some(TransitValue::String(s)) => Some(s.clone()),
         _ => None,
@@ -862,15 +866,9 @@ fn get_optional_string(
 }
 
 /// Get an optional vector of strings from a Transit map.
-fn get_optional_string_vector(
-    entries: &[(TransitValue, TransitValue)],
-    key: &str,
-) -> Vec<String> {
+fn get_optional_string_vector(entries: &[(TransitValue, TransitValue)], key: &str) -> Vec<String> {
     match map_get(entries, key) {
-        Some(TransitValue::Array(items)) => items
-            .iter()
-            .map(transit_value_to_edn_string)
-            .collect(),
+        Some(TransitValue::Array(items)) => items.iter().map(transit_value_to_edn_string).collect(),
         _ => Vec::new(),
     }
 }
@@ -945,8 +943,7 @@ mod tests {
 
     #[test]
     fn test_parse_transit_json_connect() {
-        let input =
-            r#"["^ ","~:op","~:connect","~:args",["^ ","~:db-name","test-db"]]"#;
+        let input = r#"["^ ","~:op","~:connect","~:args",["^ ","~:db-name","test-db"]]"#;
         let req = parse_transit_json(input);
         assert!(req.is_ok());
         match req.expect("should parse").op {
@@ -1121,8 +1118,8 @@ mod tests {
         ];
 
         for (expected, bytes) in test_cases {
-            let (val, _) =
-                msgpack_read_value_bounded(&bytes, 0).unwrap_or_else(|e| panic!("Failed for {expected}: {e}"));
+            let (val, _) = msgpack_read_value_bounded(&bytes, 0)
+                .unwrap_or_else(|e| panic!("Failed for {expected}: {e}"));
             match val {
                 TransitValue::Integer(i) => assert_eq!(i, expected, "Mismatch for input {bytes:?}"),
                 other => panic!("Expected Integer({expected}), got {other:?}"),
@@ -1188,9 +1185,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_transit_msgpack_list_dbs() {
-        use crate::protocol::transit_serializer::{
-            serialize_transit_msgpack,
-        };
+        use crate::protocol::transit_serializer::serialize_transit_msgpack;
         use crate::protocol::{Response, ResponseValue};
 
         // Test that we can serialize a response and that the serializer output
@@ -1205,8 +1200,8 @@ mod tests {
         assert!(!bytes.is_empty());
 
         // Verify the msgpack bytes can be decoded
-        let (val, remaining) =
-            msgpack_read_value_bounded(&bytes, 0).unwrap_or_else(|e| panic!("Failed to decode: {e}"));
+        let (val, remaining) = msgpack_read_value_bounded(&bytes, 0)
+            .unwrap_or_else(|e| panic!("Failed to decode: {e}"));
         assert!(remaining.is_empty(), "Leftover bytes: {remaining:?}");
 
         // The top-level should be a map with a "result" key
@@ -1214,21 +1209,15 @@ mod tests {
             TransitValue::Map(entries) => {
                 assert!(!entries.is_empty());
                 // Find the result key
-                let result_entry = entries.iter().find(|(k, _)| {
-                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
-                });
+                let result_entry = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "result"));
                 assert!(result_entry.is_some(), "No :result key found");
                 match &result_entry.expect("checked above").1 {
                     TransitValue::Array(items) => {
                         assert_eq!(items.len(), 2);
-                        assert_eq!(
-                            items[0],
-                            TransitValue::String("db1".to_string())
-                        );
-                        assert_eq!(
-                            items[1],
-                            TransitValue::String("db2".to_string())
-                        );
+                        assert_eq!(items[0], TransitValue::String("db1".to_string()));
+                        assert_eq!(items[1], TransitValue::String("db2".to_string()));
                     }
                     other => panic!("Expected Array, got {other:?}"),
                 }
@@ -1281,10 +1270,7 @@ mod tests {
                 ),
                 (
                     ResponseValue::Keyword("list-val".to_string()),
-                    ResponseValue::List(vec![
-                        ResponseValue::Integer(3),
-                        ResponseValue::Integer(4),
-                    ]),
+                    ResponseValue::List(vec![ResponseValue::Integer(3), ResponseValue::Integer(4)]),
                 ),
             ]),
         };
@@ -1307,33 +1293,33 @@ mod tests {
                 match &result.expect("checked").1 {
                     TransitValue::Map(inner) => {
                         // Verify each entry
-                        let nil_val = inner
-                            .iter()
-                            .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "nil-val"));
+                        let nil_val = inner.iter().find(
+                            |(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "nil-val"),
+                        );
                         assert!(
                             matches!(nil_val, Some((_, TransitValue::Nil))),
                             "nil-val mismatch: {nil_val:?}"
                         );
 
-                        let bool_val = inner
-                            .iter()
-                            .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "bool-val"));
+                        let bool_val = inner.iter().find(
+                            |(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "bool-val"),
+                        );
                         assert!(
                             matches!(bool_val, Some((_, TransitValue::Bool(true)))),
                             "bool-val mismatch: {bool_val:?}"
                         );
 
-                        let int_val = inner
-                            .iter()
-                            .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "int-val"));
+                        let int_val = inner.iter().find(
+                            |(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "int-val"),
+                        );
                         assert!(
                             matches!(int_val, Some((_, TransitValue::Integer(42)))),
                             "int-val mismatch: {int_val:?}"
                         );
 
-                        let kw_val = inner
-                            .iter()
-                            .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "kw-val"));
+                        let kw_val = inner.iter().find(
+                            |(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "kw-val"),
+                        );
                         match kw_val {
                             Some((_, TransitValue::Keyword(k))) => {
                                 assert_eq!(k, "db/name");
@@ -1505,7 +1491,10 @@ mod tests {
         let edn = transit_value_to_edn_string(&val);
         assert!(edn.starts_with("#inst \""), "Expected #inst, got: {edn}");
         // 1714000000000 ms = 2024-04-24T23:06:40Z
-        assert!(edn.contains("2024-04-24"), "Expected 2024-04-24 date, got: {edn}");
+        assert!(
+            edn.contains("2024-04-24"),
+            "Expected 2024-04-24 date, got: {edn}"
+        );
     }
 
     // -- Msgpack float roundtrip tests --------------------------------------
@@ -1550,15 +1539,14 @@ mod tests {
         };
         let bytes = serialize_transit_msgpack(&response);
 
-        let (val, remaining) =
-            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        let (val, remaining) = msgpack_read_value_bounded(&bytes, 0).unwrap();
         assert!(remaining.is_empty());
 
         match val {
             TransitValue::Map(entries) => {
-                let result = entries.iter().find(|(k, _)| {
-                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
-                });
+                let result = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "result"));
                 assert!(result.is_some());
                 match &result.unwrap().1 {
                     TransitValue::Float(f) => assert!((f - 3.14).abs() < 1e-10),
@@ -1581,15 +1569,14 @@ mod tests {
         };
         let bytes = serialize_transit_msgpack(&response);
 
-        let (val, remaining) =
-            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        let (val, remaining) = msgpack_read_value_bounded(&bytes, 0).unwrap();
         assert!(remaining.is_empty());
 
         match val {
             TransitValue::Map(entries) => {
-                let result = entries.iter().find(|(k, _)| {
-                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
-                });
+                let result = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "result"));
                 assert!(result.is_some());
                 match &result.unwrap().1 {
                     TransitValue::Instant(millis) => {
@@ -1614,15 +1601,14 @@ mod tests {
         };
         let bytes = serialize_transit_msgpack(&response);
 
-        let (val, remaining) =
-            msgpack_read_value_bounded(&bytes, 0).unwrap();
+        let (val, remaining) = msgpack_read_value_bounded(&bytes, 0).unwrap();
         assert!(remaining.is_empty());
 
         match val {
             TransitValue::Map(entries) => {
-                let result = entries.iter().find(|(k, _)| {
-                    matches!(k, TransitValue::Keyword(kw) if kw == "result")
-                });
+                let result = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, TransitValue::Keyword(kw) if kw == "result"));
                 assert!(result.is_some());
                 match &result.unwrap().1 {
                     TransitValue::Uuid(u) => assert_eq!(u.to_string(), uuid_str),
@@ -1688,7 +1674,10 @@ mod tests {
         let req = parse_transit_json(input);
         assert!(req.is_ok(), "Failed: {req:?}");
         match req.expect("should parse").op {
-            Operation::Transact { connection_id, tx_data } => {
+            Operation::Transact {
+                connection_id,
+                tx_data,
+            } => {
                 assert_eq!(connection_id, "abc-123");
                 assert!(tx_data.contains("Alice"));
             }

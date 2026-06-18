@@ -29,15 +29,16 @@ mod tests {
              EXCEPTION WHEN OTHERS THEN
                  RETURN true;
              END;
-             $$"
-        ).expect("create helper");
+             $$",
+        )
+        .expect("create helper");
     }
 
     fn raises_error(sql: &str) -> bool {
         let escaped = sql.replace('\'', "''");
-        Spi::get_one::<bool>(&format!(
-            "SELECT mentat._test_raises_error('{}')", escaped
-        )).expect("raises_error call").unwrap_or(false)
+        Spi::get_one::<bool>(&format!("SELECT mentat._test_raises_error('{}')", escaped))
+            .expect("raises_error call")
+            .unwrap_or(false)
     }
 
     fn setup_department_schema() {
@@ -155,7 +156,10 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
         let results = json["results"].as_array().expect("results array");
 
-        assert!(results.len() >= 3, "Should have at least 3 manager relationships");
+        assert!(
+            results.len() >= 3,
+            "Should have at least 3 manager relationships"
+        );
 
         let pairs: Vec<(String, String)> = results
             .iter()
@@ -286,8 +290,10 @@ mod tests {
             .iter()
             .map(|r| r[0].as_str().expect("name"))
             .collect();
-        assert!(names.contains(&"Carol") || names.contains(&"Dave"),
-            "At least Carol or Dave should lack a manager");
+        assert!(
+            names.contains(&"Carol") || names.contains(&"Dave"),
+            "At least Carol or Dave should lack a manager"
+        );
     }
 
     #[pg_test]
@@ -620,7 +626,10 @@ mod tests {
         let results = json["results"].as_array().expect("results array");
 
         // Engineering + age >= 30: only Alice (35)
-        let names: Vec<&str> = results.iter().map(|r| r[0].as_str().expect("name")).collect();
+        let names: Vec<&str> = results
+            .iter()
+            .map(|r| r[0].as_str().expect("name"))
+            .collect();
         assert!(names.contains(&"Alice"));
     }
 
@@ -708,7 +717,10 @@ mod tests {
 
         let json: serde_json::Value = serde_json::from_str(&result).expect("parse JSON");
         let results = json["results"].as_array().expect("results array");
-        assert!(results.len() >= 20, "Should have at least 20 bootstrap idents");
+        assert!(
+            results.len() >= 20,
+            "Should have at least 20 bootstrap idents"
+        );
     }
 
     #[pg_test]
@@ -738,7 +750,9 @@ mod tests {
     fn test_error_missing_find_clause() {
         setup();
         assert!(
-            raises_error("SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"),
+            raises_error(
+                "SELECT mentat_query('[:where [?e :db/ident ?i]]'::TEXT, '{}'::jsonb)::TEXT"
+            ),
             "Should reject query without :find"
         );
     }

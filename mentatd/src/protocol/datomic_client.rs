@@ -159,11 +159,7 @@ pub fn format_error_response(category: AnomalyCategory, message: String) -> Resp
 ///  :next-t <basis-t+1>
 ///  :type :datomic.client/connection}
 /// ```
-pub fn format_connect_response(
-    db_name: &str,
-    connection_id: &str,
-    basis_t: i64,
-) -> ResponseValue {
+pub fn format_connect_response(db_name: &str, connection_id: &str, basis_t: i64) -> ResponseValue {
     ResponseValue::Map(vec![
         (
             ResponseValue::Keyword("db-name".to_string()),
@@ -281,10 +277,7 @@ mod tests {
             normalize_op_keyword("datomic.client.protocol/transact"),
             "transact"
         );
-        assert_eq!(
-            normalize_op_keyword("datomic.client.protocol/pull"),
-            "pull"
-        );
+        assert_eq!(normalize_op_keyword("datomic.client.protocol/pull"), "pull");
         assert_eq!(
             normalize_op_keyword("datomic.client.protocol/datoms"),
             "datoms"

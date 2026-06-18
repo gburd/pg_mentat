@@ -30,7 +30,8 @@ mod tests {
 
     #[pg_test]
     fn test_wf_create_read_update_delete() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         // CREATE
         let r = Spi::get_one::<String>(
@@ -52,15 +53,20 @@ mod tests {
         )).expect("update");
 
         let q2 = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :wf/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("read").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :wf/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("read")
+        .expect("NULL");
         let v2: serde_json::Value = serde_json::from_str(&q2).expect("parse");
         assert_eq!(v2["result"].as_i64().expect("v"), 100);
 
         // DELETE
         Spi::run(&format!(
-            "SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)", eid
-        )).expect("delete");
+            "SELECT mentat_transact('[[:db/retractEntity {}]]'::TEXT)",
+            eid
+        ))
+        .expect("delete");
 
         let q3 = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?n . :where [{} :wf/name ?n]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
@@ -75,7 +81,8 @@ mod tests {
 
     #[pg_test]
     fn test_wf_status_machine() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"order\" :wf/name \"Order-001\" :wf/status :created :wf/val 0}]'::TEXT)",
@@ -84,20 +91,40 @@ mod tests {
         let eid = j["tempids"]["order"].as_i64().expect("eid");
 
         // created -> pending
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/status :pending]]'::TEXT)", eid)).expect("transition");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/status :pending]]'::TEXT)",
+            eid
+        ))
+        .expect("transition");
         // pending -> processing
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/status :processing]]'::TEXT)", eid)).expect("transition");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/status :processing]]'::TEXT)",
+            eid
+        ))
+        .expect("transition");
         // processing -> shipped
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/status :shipped]]'::TEXT)", eid)).expect("transition");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/status :shipped]]'::TEXT)",
+            eid
+        ))
+        .expect("transition");
         // shipped -> delivered
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/status :delivered]]'::TEXT)", eid)).expect("transition");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/status :delivered]]'::TEXT)",
+            eid
+        ))
+        .expect("transition");
 
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?s . :where [{} :wf/status ?s]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("read").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         let status = v["result"].as_str().expect("s");
-        assert!(status.contains("delivered"), "Final status should be :delivered, got {}", status);
+        assert!(
+            status.contains("delivered"),
+            "Final status should be :delivered, got {}",
+            status
+        );
     }
 
     // ========================================================================
@@ -106,28 +133,56 @@ mod tests {
 
     #[pg_test]
     fn test_wf_progressive_tagging() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"doc\" :wf/name \"Document\"}]'::TEXT)",
-        ).expect("create").expect("NULL");
+        )
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["doc"].as_i64().expect("eid");
 
         // Add tags progressively
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/tags \"draft\"]]'::TEXT)", eid)).expect("tag");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/tags \"reviewed\"]]'::TEXT)", eid)).expect("tag");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/tags \"approved\"]]'::TEXT)", eid)).expect("tag");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/tags \"draft\"]]'::TEXT)",
+            eid
+        ))
+        .expect("tag");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/tags \"reviewed\"]]'::TEXT)",
+            eid
+        ))
+        .expect("tag");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/tags \"approved\"]]'::TEXT)",
+            eid
+        ))
+        .expect("tag");
         // Remove draft tag
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :wf/tags \"draft\"]]'::TEXT)", eid)).expect("untag");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :wf/tags \"draft\"]]'::TEXT)",
+            eid
+        ))
+        .expect("untag");
         // Add published
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/tags \"published\"]]'::TEXT)", eid)).expect("tag");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :wf/tags \"published\"]]'::TEXT)",
+            eid
+        ))
+        .expect("tag");
 
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find [?t ...] :where [{} :wf/tags ?t]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("read").expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
-        let tags: Vec<&str> = v["result"].as_array().expect("arr").iter().map(|t| t.as_str().expect("s")).collect();
+        let tags: Vec<&str> = v["result"]
+            .as_array()
+            .expect("arr")
+            .iter()
+            .map(|t| t.as_str().expect("s"))
+            .collect();
         assert_eq!(tags.len(), 3);
         assert!(!tags.contains(&"draft"));
         assert!(tags.contains(&"reviewed"));
@@ -141,7 +196,8 @@ mod tests {
 
     #[pg_test]
     fn test_wf_create_then_link() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         // TX 1: Create project
         let r1 = Spi::get_one::<String>(
@@ -156,8 +212,11 @@ mod tests {
                 {{:db/id \"t1\" :wf/name \"Task 1\" :wf/status :pending :wf/ref {}}}
                 {{:db/id \"t2\" :wf/name \"Task 2\" :wf/status :pending :wf/ref {}}}
                 {{:db/id \"t3\" :wf/name \"Task 3\" :wf/status :pending :wf/ref {}}}
-            ]'::TEXT)", proj, proj, proj
-        )).expect("create tasks").expect("NULL");
+            ]'::TEXT)",
+            proj, proj, proj
+        ))
+        .expect("create tasks")
+        .expect("NULL");
         let j2: serde_json::Value = serde_json::from_str(&r2).expect("parse");
         assert_eq!(j2["tempids"].as_object().expect("t").len(), 3);
 
@@ -182,7 +241,8 @@ mod tests {
 
     #[pg_test]
     fn test_wf_upsert_sync() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         // Initial sync
         Spi::run(
@@ -190,7 +250,8 @@ mod tests {
                 {:db/id \"u1\" :wf/email \"alice@test.com\" :wf/name \"Alice\" :wf/val 100}
                 {:db/id \"u2\" :wf/email \"bob@test.com\" :wf/name \"Bob\" :wf/val 200}
             ]'::TEXT)",
-        ).expect("sync 1");
+        )
+        .expect("sync 1");
 
         // Second sync: update Alice, add Carol
         Spi::run(
@@ -198,7 +259,8 @@ mod tests {
                 {:db/id \"s1\" :wf/email \"alice@test.com\" :wf/val 150}
                 {:db/id \"s2\" :wf/email \"carol@test.com\" :wf/name \"Carol\" :wf/val 300}
             ]'::TEXT)",
-        ).expect("sync 2");
+        )
+        .expect("sync 2");
 
         // Alice should be updated
         let qa = Spi::get_one::<String>(
@@ -227,20 +289,30 @@ mod tests {
 
     #[pg_test]
     fn test_wf_counter_increment_20x() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
         let r = Spi::get_one::<String>(
             "SELECT mentat_transact('[{:db/id \"c\" :wf/name \"Counter\" :wf/val 0}]'::TEXT)",
-        ).expect("create").expect("NULL");
+        )
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["c"].as_i64().expect("eid");
 
         for i in 1..=20 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :wf/val {}]]'::TEXT)", eid, i)).expect("increment");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[[:db/add {} :wf/val {}]]'::TEXT)",
+                eid, i
+            ))
+            .expect("increment");
         }
 
         let q = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?v . :where [{} :wf/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
-        )).expect("q").expect("NULL");
+            "SELECT mentat_query('[:find ?v . :where [{} :wf/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            eid
+        ))
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_i64().expect("v"), 20);
     }
@@ -251,7 +323,8 @@ mod tests {
 
     #[pg_test]
     fn test_wf_batch_crud_30_entities() {
-        setup(); setup_wf_schema();
+        setup();
+        setup_wf_schema();
 
         // Create 30 entities
         let mut ops = Vec::new();
@@ -261,7 +334,12 @@ mod tests {
                 i = i
             ));
         }
-        let r = Spi::get_one::<String>(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("create").expect("NULL");
+        let r = Spi::get_one::<String>(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("create")
+        .expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
 
         // Query all
@@ -277,7 +355,11 @@ mod tests {
             let eid = j["tempids"][&format!("e{}", i)].as_i64().expect("eid");
             updates.push(format!("[:db/add {} :wf/status :active]", eid));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", updates.join("\n"))).expect("update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            updates.join("\n")
+        ))
+        .expect("update");
 
         // Query: 15 new, 15 active
         let qnew = Spi::get_one::<String>(

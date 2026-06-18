@@ -19,7 +19,9 @@ mod tests {
     fn test_ns_single_namespace() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :ns.test/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("ns.test/name"));
     }
 
@@ -27,7 +29,9 @@ mod tests {
     fn test_ns_two_namespaces() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :user/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one} {:db/id \"b\" :db/ident :product/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("user/name"));
         assert!(s.contains("product/name"));
     }
@@ -41,7 +45,9 @@ mod tests {
                 "SELECT mentat_transact('[{{:db/id \"a\" :db/ident :{}/attr :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}]'::TEXT)", ns
             )).expect("schema");
         }
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for ns in &nss {
             assert!(s.contains(&format!("{}/attr", ns)));
         }
@@ -51,7 +57,9 @@ mod tests {
     fn test_ns_deep_namespace() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :ns.deep.nested.path/attr :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("ns.deep.nested.path/attr"));
     }
 
@@ -59,7 +67,9 @@ mod tests {
     fn test_ns_hyphenated_namespace() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :my-app/user-name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         assert!(s.contains("my-app/user-name"));
     }
 
@@ -96,8 +106,10 @@ mod tests {
     fn test_ns_multiple_attrs_per_ns() {
         setup();
         let attrs = vec![
-            ("item", "name", "string"), ("item", "price", "long"),
-            ("item", "weight", "double"), ("item", "active", "boolean"),
+            ("item", "name", "string"),
+            ("item", "price", "long"),
+            ("item", "weight", "double"),
+            ("item", "active", "boolean"),
             ("item", "category", "keyword"),
         ];
         let mut ops = Vec::new();
@@ -107,7 +119,11 @@ mod tests {
                 i = i, ns = ns, name = name, vtype = vtype
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("schema");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("schema");
         Spi::run("SELECT mentat_transact('[{:db/id \"e\" :item/name \"Widget\" :item/price 999 :item/weight 2.5 :item/active true :item/category :electronics}]'::TEXT)").expect("data");
 
         let q = Spi::get_one::<String>(
@@ -144,8 +160,14 @@ mod tests {
                 "{{:db/id \"a{i}\" :db/ident :wide/attr-{i} :db/valueType :db.type/string :db/cardinality :db.cardinality/one}}", i = i
             ));
         }
-        Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("schema");
-        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("schema").expect("NULL");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{}]'::TEXT)",
+            ops.join("\n")
+        ))
+        .expect("schema");
+        let s = Spi::get_one::<String>("SELECT mentat_schema()::TEXT")
+            .expect("schema")
+            .expect("NULL");
         for i in 0..10 {
             assert!(s.contains(&format!("wide/attr-{}", i)));
         }
@@ -159,7 +181,8 @@ mod tests {
     fn test_ns_numeric_suffix() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :ns123/attr :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :ns123/attr \"test\"]]'::TEXT)").expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :ns123/attr \"test\"]]'::TEXT)")
+            .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :ns123/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -171,7 +194,8 @@ mod tests {
     fn test_ns_underscore_style() {
         setup();
         Spi::run("SELECT mentat_transact('[{:db/id \"a\" :db/ident :my-ns/my-attr :db/valueType :db.type/long :db/cardinality :db.cardinality/one}]'::TEXT)").expect("schema");
-        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :my-ns/my-attr 42]]'::TEXT)").expect("data");
+        Spi::run("SELECT mentat_transact('[[:db/add \"e\" :my-ns/my-attr 42]]'::TEXT)")
+            .expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :my-ns/my-attr ?v]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
@@ -186,7 +210,9 @@ mod tests {
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :x/y \"short\"]]'::TEXT)").expect("data");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?v . :where [_ :x/y ?v]]'::TEXT, '{}'::jsonb)::TEXT",
-        ).expect("q").expect("NULL");
+        )
+        .expect("q")
+        .expect("NULL");
         let v: serde_json::Value = serde_json::from_str(&q).expect("parse");
         assert_eq!(v["result"].as_str().expect("s"), "short");
     }
@@ -236,12 +262,15 @@ mod tests {
             {:db/id \"d\" :db/ident :article/tags :db/valueType :db.type/ref :db/cardinality :db.cardinality/many}
         ]'::TEXT)").expect("schema");
 
-        Spi::run("SELECT mentat_transact('[
+        Spi::run(
+            "SELECT mentat_transact('[
             {:db/id \"t1\" :tag/name \"technology\"}
             {:db/id \"t2\" :tag/name \"programming\" :tag/parent \"t1\"}
             {:db/id \"t3\" :tag/name \"rust\" :tag/parent \"t2\"}
             {:db/id \"a1\" :article/title \"Learning Rust\" :article/tags \"t3\"}
-        ]'::TEXT)").expect("data");
+        ]'::TEXT)",
+        )
+        .expect("data");
 
         // Navigate tag hierarchy
         let q = Spi::get_one::<String>(
@@ -272,7 +301,11 @@ mod tests {
         Spi::run(&format!(
             "SELECT mentat_transact('[{{:db/id \"ev1\" :event/type :deposit :event/entity {} :event/data \"50\"}}]'::TEXT)", acct
         )).expect("event");
-        Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :account/balance 150]]'::TEXT)", acct)).expect("update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/add {} :account/balance 150]]'::TEXT)",
+            acct
+        ))
+        .expect("update");
 
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :account/balance ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", acct

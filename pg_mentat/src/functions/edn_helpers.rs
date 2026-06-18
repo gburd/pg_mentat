@@ -92,8 +92,11 @@ fn execute_query_op(
     if op_vec.len() < 2 {
         return Err(MentatError::BatchMissingArg {
             op: "query".to_string(),
-            message: "Requires a query pattern. Example: [:query [:find ?e :where [?e :person/name]]]".to_string(),
-        }.into());
+            message:
+                "Requires a query pattern. Example: [:query [:find ?e :where [?e :person/name]]]"
+                    .to_string(),
+        }
+        .into());
     }
 
     // Convert query EDN to string
@@ -200,16 +203,20 @@ fn execute_entity_op(
         return Err(MentatError::BatchMissingArg {
             op: "entity".to_string(),
             message: "Requires an entity ID. Example: [:entity 100]".to_string(),
-        }.into());
+        }
+        .into());
     }
 
     // Get entity ID
     let entity_id = match &op_vec[1] {
         edn::Value::Integer(n) => *n,
-        _ => return Err(MentatError::BatchMissingArg {
-            op: "entity".to_string(),
-            message: "Entity ID must be an integer. Example: [:entity 100]".to_string(),
-        }.into()),
+        _ => {
+            return Err(MentatError::BatchMissingArg {
+                op: "entity".to_string(),
+                message: "Entity ID must be an integer. Example: [:entity 100]".to_string(),
+            }
+            .into())
+        }
     };
 
     // Execute entity lookup
@@ -274,9 +281,7 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
             let mut entity_facts: Vec<(i64, String)> = Vec::new();
 
             for row in client.select(query, None, &[DatumWithOid::from(entity_id)])? {
-                if let (Ok(Some(attr_id)), Ok(Some(tt))) =
-                    (row.get::<i64>(1), row.get::<i16>(2))
-                {
+                if let (Ok(Some(attr_id)), Ok(Some(tt))) = (row.get::<i64>(1), row.get::<i16>(2)) {
                     let edn_val = row_value_to_edn(&row, tt, 3)?;
                     entity_facts.push((attr_id, edn_val));
                 }
@@ -294,15 +299,16 @@ fn export_edn(entity_ids: Vec<i64>) -> Result<String, Box<dyn std::error::Error 
 
         for (attr_id, value_edn) in facts {
             // Resolve attribute ident
-            let attr_ident = crate::cache::get_cache()
-                .get_ident(attr_id)
-                .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            let attr_ident = crate::cache::get_cache().get_ident(attr_id).ok_or_else(
+                || -> Box<dyn std::error::Error + Send + Sync> {
                     MentatError::AttributeNotFound {
                         attr: format!("entid:{}", attr_id),
                         available: crate::error::get_available_attributes(),
                         suggestion: None,
-                    }.into()
-                })?;
+                    }
+                    .into()
+                },
+            )?;
 
             entity_edn.push_str(&format!("\n   {} {}", attr_ident, value_edn));
         }
@@ -428,40 +434,54 @@ fn row_value_to_edn(
     match type_tag {
         type_tag::REF | type_tag::LONG => {
             // ref or long - both stored as BIGINT
-            let col = if type_tag == type_tag::REF { col_offset } else { col_offset + 2 };
+            let col = if type_tag == type_tag::REF {
+                col_offset
+            } else {
+                col_offset + 2
+            };
             let val: i64 = row.get(col)?.ok_or_else(|| MentatError::DataCorruption {
                 message: format!("Missing value for type_tag {}", type_tag),
             })?;
             Ok(val.to_string())
         }
         type_tag::BOOLEAN => {
-            let b: bool = row.get(col_offset + 1)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_bool".to_string(),
-            })?;
+            let b: bool = row
+                .get(col_offset + 1)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_bool".to_string(),
+                })?;
             Ok(if b { "true" } else { "false" }.to_string())
         }
         type_tag::DOUBLE => {
-            let f: f64 = row.get(col_offset + 3)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_double".to_string(),
-            })?;
+            let f: f64 = row
+                .get(col_offset + 3)?
+                .ok_or_else(|| MentatError::DataCorruption {
+                    message: "Missing v_double".to_string(),
+                })?;
             Ok(f.to_string())
         }
         type_tag::INSTANT => {
-            let micros: i64 = row.get(col_offset + 6)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_instant_micros".to_string(),
-            })?;
+            let micros: i64 =
+                row.get(col_offset + 6)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_instant_micros".to_string(),
+                    })?;
             Ok(format!("#inst {}", micros))
         }
         type_tag::STRING => {
-            let s: String = row.get(col_offset + 4)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_text".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 4)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_text".to_string(),
+                    })?;
             Ok(format!("\"{}\"", s.replace('"', "\\\"")))
         }
         type_tag::KEYWORD => {
-            let s: String = row.get(col_offset + 5)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_keyword".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 5)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_keyword".to_string(),
+                    })?;
             Ok(if s.starts_with(':') {
                 s
             } else {
@@ -469,15 +489,19 @@ fn row_value_to_edn(
             })
         }
         type_tag::UUID => {
-            let s: String = row.get(col_offset + 7)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_uuid".to_string(),
-            })?;
+            let s: String =
+                row.get(col_offset + 7)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_uuid".to_string(),
+                    })?;
             Ok(format!("#uuid \"{}\"", s))
         }
         type_tag::BYTES => {
-            let b: Vec<u8> = row.get(col_offset + 8)?.ok_or_else(|| MentatError::DataCorruption {
-                message: "Missing v_bytes".to_string(),
-            })?;
+            let b: Vec<u8> =
+                row.get(col_offset + 8)?
+                    .ok_or_else(|| MentatError::DataCorruption {
+                        message: "Missing v_bytes".to_string(),
+                    })?;
             Ok(format!("#bytes \"{}\"", hex::encode(b)))
         }
         _ => Err(MentatError::UnsupportedType { type_tag }.into()),
@@ -609,7 +633,10 @@ mod tests {
     fn test_edn_pretty_narrow_width() {
         crate::ensure_extension_loaded();
         let result = edn_pretty("[1 2 3 4 5 6]", Some(10)).unwrap();
-        assert!(result.contains('\n'), "narrow width should produce multi-line output");
+        assert!(
+            result.contains('\n'),
+            "narrow width should produce multi-line output"
+        );
     }
 
     #[pg_test]

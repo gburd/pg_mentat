@@ -371,7 +371,10 @@ async fn metrics_endpoint(State(state): State<AppState>) -> impl IntoResponse {
     let body = metrics::render_metrics();
     (
         StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
         body,
     )
 }
@@ -408,7 +411,10 @@ async fn handle_request(
             parse_transit_json(body_str)
         }
         InputFormat::TransitMsgpack => {
-            info!("Received Transit+MessagePack request ({} bytes)", body.len());
+            info!(
+                "Received Transit+MessagePack request ({} bytes)",
+                body.len()
+            );
             parse_transit_msgpack(&body)
         }
         InputFormat::Edn => {
@@ -430,7 +436,10 @@ async fn handle_request(
                 metrics::ERROR_COUNT.inc();
                 // Record error in circuit breaker (database/pool errors indicate
                 // systemic issues; parse errors and conflicts are client-side).
-                if matches!(e, ServerError::Pool(_) | ServerError::Database(_) | ServerError::Internal(_)) {
+                if matches!(
+                    e,
+                    ServerError::Pool(_) | ServerError::Database(_) | ServerError::Internal(_)
+                ) {
                     state.circuit_breaker.record_error().await;
                 }
                 Response::Error { anomaly: e.into() }
@@ -467,7 +476,10 @@ async fn handle_request(
             }
             TransitEncoding::Msgpack => {
                 let transit_response = serialize_transit_msgpack(&response);
-                info!("Sending Transit+MessagePack response ({} bytes)", transit_response.len());
+                info!(
+                    "Sending Transit+MessagePack response ({} bytes)",
+                    transit_response.len()
+                );
                 Ok((
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, content_type)],
@@ -495,7 +507,11 @@ async fn handle_request(
     // Log timing breakdown
     tracing::info!(
         "Request timing - total: {:?}, header: {:?}, parse: {:?}, execute: {:?}, serialize: {:?}",
-        total_time, header_time, parse_time, execute_time, serialize_time
+        total_time,
+        header_time,
+        parse_time,
+        execute_time,
+        serialize_time
     );
 
     // Also log as structured data for easier analysis
@@ -616,20 +632,23 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let connection_id = Uuid::new_v4().to_string();
 
-            ("connect", Ok(ResponseValue::Map(vec![
-                (
-                    ResponseValue::Keyword("connection-id".to_string()),
-                    ResponseValue::String(connection_id),
-                ),
-                (
-                    ResponseValue::Keyword("db-name".to_string()),
-                    ResponseValue::String(db_name),
-                ),
-                (
-                    ResponseValue::Keyword("status".to_string()),
-                    ResponseValue::String("connected".to_string()),
-                ),
-            ])))
+            (
+                "connect",
+                Ok(ResponseValue::Map(vec![
+                    (
+                        ResponseValue::Keyword("connection-id".to_string()),
+                        ResponseValue::String(connection_id),
+                    ),
+                    (
+                        ResponseValue::Keyword("db-name".to_string()),
+                        ResponseValue::String(db_name),
+                    ),
+                    (
+                        ResponseValue::Keyword("status".to_string()),
+                        ResponseValue::String("connected".to_string()),
+                    ),
+                ])),
+            )
         }
 
         Operation::Db { connection_id } => {
@@ -639,10 +658,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             // Get current basis-t from PostgreSQL (the latest transaction id)
             let row = client
-                .query_one(
-                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
-                    &[],
-                )
+                .query_one("SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions", &[])
                 .await?;
 
             let basis_t: i64 = row.get(0);
@@ -658,28 +674,31 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 db_id, basis_t, connection_id
             );
 
-            ("db", Ok(ResponseValue::Map(vec![
-                (
-                    ResponseValue::Keyword("db-id".to_string()),
-                    ResponseValue::String(db_id),
-                ),
-                (
-                    ResponseValue::Keyword("basis-t".to_string()),
-                    ResponseValue::Integer(basis_t),
-                ),
-                (
-                    ResponseValue::Keyword("db-name".to_string()),
-                    ResponseValue::String("mentat".to_string()),
-                ),
-                (
-                    ResponseValue::Keyword("t".to_string()),
-                    ResponseValue::Integer(basis_t),
-                ),
-                (
-                    ResponseValue::Keyword("next-t".to_string()),
-                    ResponseValue::Integer(basis_t + 1),
-                ),
-            ])))
+            (
+                "db",
+                Ok(ResponseValue::Map(vec![
+                    (
+                        ResponseValue::Keyword("db-id".to_string()),
+                        ResponseValue::String(db_id),
+                    ),
+                    (
+                        ResponseValue::Keyword("basis-t".to_string()),
+                        ResponseValue::Integer(basis_t),
+                    ),
+                    (
+                        ResponseValue::Keyword("db-name".to_string()),
+                        ResponseValue::String("mentat".to_string()),
+                    ),
+                    (
+                        ResponseValue::Keyword("t".to_string()),
+                        ResponseValue::Integer(basis_t),
+                    ),
+                    (
+                        ResponseValue::Keyword("next-t".to_string()),
+                        ResponseValue::Integer(basis_t + 1),
+                    ),
+                ])),
+            )
         }
 
         Operation::DbSnapshot => {
@@ -689,10 +708,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             // Get current basis-t from PostgreSQL
             let row = client
-                .query_one(
-                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
-                    &[],
-                )
+                .query_one("SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions", &[])
                 .await?;
 
             let basis_t: i64 = row.get(0);
@@ -702,11 +718,19 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             info!("Created db snapshot: db_id={}, basis_t={}", db_id, basis_t);
 
-            ("db_snapshot", Ok(ResponseValue::DbSnapshot { db_id, basis_t }))
+            (
+                "db_snapshot",
+                Ok(ResponseValue::DbSnapshot { db_id, basis_t }),
+            )
         }
 
-        Operation::Query { query, args, db_id, .. } => {
-            info!("Executing query: {} with args: {:?}, db_id: {:?}", query, args, db_id);
+        Operation::Query {
+            query, args, db_id, ..
+        } => {
+            info!(
+                "Executing query: {} with args: {:?}, db_id: {:?}",
+                query, args, db_id
+            );
             metrics::QUERY_COUNT.inc();
             let query_start = Instant::now();
 
@@ -721,7 +745,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                     }
                     None => {
                         warn!("Invalid or expired db_id: {}", id);
-                        return Err(ServerError::Internal(format!("Invalid or expired db-id: {}", id)));
+                        return Err(ServerError::Internal(format!(
+                            "Invalid or expired db-id: {}",
+                            id
+                        )));
                     }
                 }
             } else {
@@ -753,8 +780,8 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
                 // Timing: Parse cached result
                 let parse_cached_start = Instant::now();
-                let result_json: serde_json::Value = serde_json::from_str(&cached_json)
-                    .map_err(|e| {
+                let result_json: serde_json::Value =
+                    serde_json::from_str(&cached_json).map_err(|e| {
                         ServerError::Internal(format!("Failed to parse cached result: {}", e))
                     })?;
                 let result = parse_query_results(&result_json)?;
@@ -802,7 +829,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             // Timing: Execute PostgreSQL query
             let db_start = Instant::now();
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .query_one(
+                    "SELECT mentat_query($1, $2::jsonb)",
+                    &[&query, &inputs_json],
+                )
                 .await?;
             let db_time = db_start.elapsed();
 
@@ -950,9 +980,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 metrics::CACHE_FULL_INVALIDATIONS.inc();
                 debug!("Query cache fully invalidated (no entity info in tx report)");
             } else {
-                let removed = state
-                    .query_cache
-                    .invalidate_entities(&changed_entities);
+                let removed = state.query_cache.invalidate_entities(&changed_entities);
                 metrics::CACHE_TARGETED_INVALIDATIONS.inc();
                 debug!(
                     "Query cache: invalidated {} entries for {} changed entities",
@@ -971,7 +999,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
         }
 
         Operation::Pull { pattern, entity_id } => {
-            info!("Executing pull: pattern={}, entity_id={}", pattern, entity_id);
+            info!(
+                "Executing pull: pattern={}, entity_id={}",
+                pattern, entity_id
+            );
 
             // Use cache with precise entity dependency: a pull only depends on
             // the single entity being pulled.
@@ -981,8 +1012,8 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             if let Some(cached_json) = state.query_cache.get(&cache_query, &cache_args) {
                 debug!("Cache hit for pull: entity_id={}", entity_id);
                 metrics::CACHE_HITS.inc();
-                let result_json: serde_json::Value = serde_json::from_str(&cached_json)
-                    .map_err(|e| {
+                let result_json: serde_json::Value =
+                    serde_json::from_str(&cached_json).map_err(|e| {
                         ServerError::Internal(format!("Failed to parse cached pull: {}", e))
                     })?;
                 let result = json_to_response_value(&result_json);
@@ -1019,10 +1050,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let client = state.pool.get().await?;
 
             let row = client
-                .query_one(
-                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
-                    &[],
-                )
+                .query_one("SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions", &[])
                 .await?;
 
             let basis_t: i64 = row.get(0);
@@ -1055,7 +1083,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             query,
             args,
         } => {
-            info!("Executing filtered query: {} with predicate: {:?}", query, predicate);
+            info!(
+                "Executing filtered query: {} with predicate: {:?}",
+                query, predicate
+            );
             metrics::QUERY_COUNT.inc();
 
             let client = state.pool.get().await?;
@@ -1084,7 +1115,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
 
             let result = async {
                 let row = client
-                    .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                    .query_one(
+                        "SELECT mentat_query($1, $2::jsonb)",
+                        &[&query, &inputs_json],
+                    )
                     .await?;
                 let result_json: serde_json::Value = row.get(0);
                 parse_query_results(&result_json)
@@ -1096,9 +1130,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let _ = client
                 .execute("ROLLBACK TO SAVEPOINT filter_view", &[])
                 .await;
-            let _ = client
-                .execute("RELEASE SAVEPOINT filter_view", &[])
-                .await;
+            let _ = client.execute("RELEASE SAVEPOINT filter_view", &[]).await;
 
             match result {
                 Ok(r) => ("filter", Ok(ResponseValue::Vector(r))),
@@ -1107,7 +1139,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
         }
 
         Operation::Datoms { index, components } => {
-            info!("Executing datoms: index={:?}, components={:?}", index, components);
+            info!(
+                "Executing datoms: index={:?}, components={:?}",
+                index, components
+            );
 
             let client = state.pool.get().await?;
 
@@ -1177,7 +1212,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let inputs_json = serde_json::Value::Object(inputs);
 
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .query_one(
+                    "SELECT mentat_query($1, $2::jsonb)",
+                    &[&query, &inputs_json],
+                )
                 .await?;
 
             let result_json: serde_json::Value = row.get(0);
@@ -1201,7 +1239,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let inputs_json = serde_json::Value::Object(inputs);
 
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .query_one(
+                    "SELECT mentat_query($1, $2::jsonb)",
+                    &[&query, &inputs_json],
+                )
                 .await?;
 
             let result_json: serde_json::Value = row.get(0);
@@ -1225,7 +1266,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             let inputs_json = serde_json::Value::Object(inputs);
 
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .query_one(
+                    "SELECT mentat_query($1, $2::jsonb)",
+                    &[&query, &inputs_json],
+                )
                 .await?;
 
             let result_json: serde_json::Value = row.get(0);
@@ -1325,7 +1369,10 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             };
 
             let row = client
-                .query_one("SELECT mentat_query($1, $2::jsonb)", &[&query, &inputs_json])
+                .query_one(
+                    "SELECT mentat_query($1, $2::jsonb)",
+                    &[&query, &inputs_json],
+                )
                 .await?;
 
             let result_json: serde_json::Value = row.get(0);
@@ -1341,20 +1388,23 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .map(|chunk| ResponseValue::Vector(chunk.to_vec()))
                 .collect();
 
-            ("qseq", Ok(ResponseValue::Map(vec![
-                (
-                    ResponseValue::Keyword("chunks".to_string()),
-                    ResponseValue::Vector(chunks),
-                ),
-                (
-                    ResponseValue::Keyword("total-count".to_string()),
-                    ResponseValue::Integer(result.len() as i64),
-                ),
-                (
-                    ResponseValue::Keyword("chunk-size".to_string()),
-                    ResponseValue::Integer(_chunk as i64),
-                ),
-            ])))
+            (
+                "qseq",
+                Ok(ResponseValue::Map(vec![
+                    (
+                        ResponseValue::Keyword("chunks".to_string()),
+                        ResponseValue::Vector(chunks),
+                    ),
+                    (
+                        ResponseValue::Keyword("total-count".to_string()),
+                        ResponseValue::Integer(result.len() as i64),
+                    ),
+                    (
+                        ResponseValue::Keyword("chunk-size".to_string()),
+                        ResponseValue::Integer(_chunk as i64),
+                    ),
+                ])),
+            )
         }
 
         Operation::PullMany {
@@ -1425,9 +1475,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             // Build SQL for AVET index range scan using typed-column schema.
             // We query the appropriate type-specific tables.
             // For simplicity, we query all types with a UNION ALL and filter by attribute.
-            let limit_clause = limit
-                .map(|l| format!(" LIMIT {}", l))
-                .unwrap_or_default();
+            let limit_clause = limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
 
             // Determine which value conditions to apply
             let (start_condition, end_condition) = match (&start, &end) {
@@ -1522,10 +1570,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                     ("entid", Ok(ResponseValue::Integer(entid)))
                 }
                 None => {
-                    return Err(ServerError::Internal(format!(
-                        "Unknown ident: {}",
-                        ident
-                    )));
+                    return Err(ServerError::Internal(format!("Unknown ident: {}", ident)));
                 }
             }
         }
@@ -1545,15 +1590,15 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
             match row {
                 Some(r) => {
                     let ident: String = r.get(0);
-                    ("ident", Ok(ResponseValue::Keyword(
-                        ident.trim_start_matches(':').to_string(),
-                    )))
+                    (
+                        "ident",
+                        Ok(ResponseValue::Keyword(
+                            ident.trim_start_matches(':').to_string(),
+                        )),
+                    )
                 }
                 None => {
-                    return Err(ServerError::Internal(format!(
-                        "Unknown entid: {}",
-                        entid
-                    )));
+                    return Err(ServerError::Internal(format!("Unknown entid: {}", entid)));
                 }
             }
         }
@@ -1583,10 +1628,7 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .get(0);
 
             let total_transactions: i64 = client
-                .query_one(
-                    "SELECT COUNT(*)::BIGINT FROM mentat.transactions",
-                    &[],
-                )
+                .query_one("SELECT COUNT(*)::BIGINT FROM mentat.transactions", &[])
                 .await?
                 .get(0);
 
@@ -1596,31 +1638,31 @@ async fn execute_operation(op: Operation, state: &AppState) -> Result<ResponseVa
                 .get(0);
 
             let basis_t: i64 = client
-                .query_one(
-                    "SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions",
-                    &[],
-                )
+                .query_one("SELECT COALESCE(MAX(tx), 0) FROM mentat.transactions", &[])
                 .await?
                 .get(0);
 
-            ("db_stats", Ok(ResponseValue::Map(vec![
-                (
-                    ResponseValue::Keyword("datoms".to_string()),
-                    ResponseValue::Integer(total_datoms),
-                ),
-                (
-                    ResponseValue::Keyword("transactions".to_string()),
-                    ResponseValue::Integer(total_transactions),
-                ),
-                (
-                    ResponseValue::Keyword("schema-attributes".to_string()),
-                    ResponseValue::Integer(schema_attributes),
-                ),
-                (
-                    ResponseValue::Keyword("basis-t".to_string()),
-                    ResponseValue::Integer(basis_t),
-                ),
-            ])))
+            (
+                "db_stats",
+                Ok(ResponseValue::Map(vec![
+                    (
+                        ResponseValue::Keyword("datoms".to_string()),
+                        ResponseValue::Integer(total_datoms),
+                    ),
+                    (
+                        ResponseValue::Keyword("transactions".to_string()),
+                        ResponseValue::Integer(total_transactions),
+                    ),
+                    (
+                        ResponseValue::Keyword("schema-attributes".to_string()),
+                        ResponseValue::Integer(schema_attributes),
+                    ),
+                    (
+                        ResponseValue::Keyword("basis-t".to_string()),
+                        ResponseValue::Integer(basis_t),
+                    ),
+                ])),
+            )
         }
     };
 
@@ -1691,12 +1733,7 @@ fn json_to_response_value(val: &serde_json::Value) -> ResponseValue {
             }
             let entries = obj
                 .iter()
-                .map(|(k, v)| {
-                    (
-                        ResponseValue::Keyword(k.clone()),
-                        json_to_response_value(v),
-                    )
-                })
+                .map(|(k, v)| (ResponseValue::Keyword(k.clone()), json_to_response_value(v)))
                 .collect();
             ResponseValue::Map(entries)
         }
@@ -1780,21 +1817,13 @@ fn parse_tx_report(report_str: &str) -> Result<ResponseValue, ServerError> {
             serde_json::Value::Object(obj) => {
                 let map_entries: Vec<(ResponseValue, ResponseValue)> = obj
                     .iter()
-                    .map(|(k, v)| {
-                        (
-                            ResponseValue::String(k.clone()),
-                            json_to_response_value(v),
-                        )
-                    })
+                    .map(|(k, v)| (ResponseValue::String(k.clone()), json_to_response_value(v)))
                     .collect();
                 ResponseValue::Map(map_entries)
             }
             other => json_to_response_value(other),
         };
-        entries.push((
-            ResponseValue::Keyword("tempids".to_string()),
-            tempids_value,
-        ));
+        entries.push((ResponseValue::Keyword("tempids".to_string()), tempids_value));
     }
 
     // Legacy format fields (backwards compatibility)
@@ -1845,9 +1874,7 @@ fn build_filter_clause(predicate: &FilterPredicate) -> String {
         FilterPredicate::AttrEquals(attr) => {
             // Filter datoms to only those with a specific attribute ident.
             // The attr string may be a keyword like ":person/name" or a quoted form.
-            let clean = attr
-                .trim_matches(|c| c == ':' || c == '"')
-                .to_string();
+            let clean = attr.trim_matches(|c| c == ':' || c == '"').to_string();
             // Validate: attribute idents must be alphanumeric with / . - _
             if !is_valid_attribute_ident(&clean) {
                 return "FALSE".to_string(); // safe no-op: match nothing
@@ -1910,10 +1937,7 @@ fn quote_identifier(name: &str) -> String {
 /// For the typed-column schema, value filtering (v component) only works for
 /// VAET index (ref lookups via v_ref) since the value column depends on type.
 /// Other value-based filters are ignored (only e and a components are used).
-fn build_datoms_query(
-    index: crate::protocol::DatomsIndex,
-    component_count: usize,
-) -> String {
+fn build_datoms_query(index: crate::protocol::DatomsIndex, component_count: usize) -> String {
     use crate::protocol::DatomsIndex;
 
     // Select all typed value columns; convert v_instant to epoch microseconds
@@ -2024,7 +2048,9 @@ fn decode_typed_datom_value(row: &tokio_postgres::Row, v_type_tag: i16) -> Respo
         11 => {
             // BYTES -> v_bytes at column 11
             let v: Option<Vec<u8>> = row.get(11);
-            v.map_or(ResponseValue::Nil, |b| ResponseValue::String(format!("0x{}", hex::encode(&b))))
+            v.map_or(ResponseValue::Nil, |b| {
+                ResponseValue::String(format!("0x{}", hex::encode(&b)))
+            })
         }
         _ => ResponseValue::Nil,
     }
@@ -2154,7 +2180,10 @@ fn extract_result_entities(result_json: &serde_json::Value) -> std::collections:
 ///
 /// Used to extract entity IDs from pull results, which may contain nested
 /// maps with `:db/id` fields and ref attribute values.
-fn collect_entity_ids_from_json(value: &serde_json::Value, out: &mut std::collections::HashSet<i64>) {
+fn collect_entity_ids_from_json(
+    value: &serde_json::Value,
+    out: &mut std::collections::HashSet<i64>,
+) {
     match value {
         serde_json::Value::Number(n) => {
             if let Some(id) = n.as_i64() {
@@ -2352,33 +2381,53 @@ mod tests {
         match result.unwrap_or(ResponseValue::Nil) {
             ResponseValue::Map(entries) => {
                 // tx-id should be an integer
-                let tx_id_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-id"));
+                let tx_id_entry = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-id"));
                 assert!(tx_id_entry.is_some());
-                match &tx_id_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tx_id_entry
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Integer(i) => assert_eq!(*i, 12345),
                     other => panic!("Expected Integer for tx-id, got {:?}", other),
                 }
 
                 // tx-instant should be nil
-                let tx_instant_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-instant"));
+                let tx_instant_entry = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-instant"));
                 assert!(tx_instant_entry.is_some());
-                match &tx_instant_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tx_instant_entry
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Nil => {}
                     other => panic!("Expected Nil for tx-instant, got {:?}", other),
                 }
 
                 // datoms-inserted should be an integer
-                let datoms_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "datoms-inserted"));
+                let datoms_entry = entries.iter().find(
+                    |(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "datoms-inserted"),
+                );
                 assert!(datoms_entry.is_some());
-                match &datoms_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &datoms_entry
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Integer(i) => assert_eq!(*i, 3),
                     other => panic!("Expected Integer for datoms-inserted, got {:?}", other),
                 }
 
                 // tempids should be a map
-                let tempids_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
+                let tempids_entry = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
                 assert!(tempids_entry.is_some());
-                match &tempids_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tempids_entry
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Map(inner) => {
                         assert_eq!(inner.len(), 1);
                     }
@@ -2394,8 +2443,7 @@ mod tests {
         use crate::protocol::serializer::serialize_response;
         use crate::protocol::Response;
 
-        let report_str =
-            r#"{"tx-id":12345,"tx-instant":null,"tempids":{},"datoms-inserted":3}"#;
+        let report_str = r#"{"tx-id":12345,"tx-instant":null,"tempids":{},"datoms-inserted":3}"#;
         let result = parse_tx_report(report_str).unwrap_or(ResponseValue::Nil);
         let response = Response::Success { result };
         let output = serialize_response(&response);
@@ -2412,9 +2460,14 @@ mod tests {
         assert!(result.is_ok());
         match result.unwrap_or(ResponseValue::Nil) {
             ResponseValue::Map(entries) => {
-                let tempids_entry = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
+                let tempids_entry = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
                 assert!(tempids_entry.is_some());
-                match &tempids_entry.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tempids_entry
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Map(inner) => assert!(inner.is_empty()),
                     other => panic!("Expected empty Map for tempids, got {:?}", other),
                 }
@@ -2439,14 +2492,24 @@ mod tests {
         match result.unwrap_or(ResponseValue::Nil) {
             ResponseValue::Map(entries) => {
                 // db-before should be a map with basis-t
-                let db_before = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-before"));
+                let db_before = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-before"));
                 assert!(db_before.is_some(), "Missing :db-before");
-                match &db_before.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &db_before
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Map(inner) => {
                         assert_eq!(inner.len(), 1);
-                        let basis_t = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"));
+                        let basis_t = inner.iter().find(
+                            |(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"),
+                        );
                         assert!(basis_t.is_some());
-                        match &basis_t.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                        match &basis_t
+                            .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                            .1
+                        {
                             ResponseValue::Integer(t) => assert_eq!(*t, 1000),
                             other => panic!("Expected Integer for basis-t, got {:?}", other),
                         }
@@ -2455,12 +2518,22 @@ mod tests {
                 }
 
                 // db-after should be a map with basis-t
-                let db_after = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-after"));
+                let db_after = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-after"));
                 assert!(db_after.is_some(), "Missing :db-after");
-                match &db_after.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &db_after
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Map(inner) => {
-                        let basis_t = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"));
-                        match &basis_t.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                        let basis_t = inner.iter().find(
+                            |(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"),
+                        );
+                        match &basis_t
+                            .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                            .1
+                        {
                             ResponseValue::Integer(t) => assert_eq!(*t, 1001),
                             other => panic!("Expected Integer for basis-t, got {:?}", other),
                         }
@@ -2469,9 +2542,14 @@ mod tests {
                 }
 
                 // tx-data should be a vector of vectors
-                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"));
+                let tx_data = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"));
                 assert!(tx_data.is_some(), "Missing :tx-data");
-                match &tx_data.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tx_data
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Vector(datoms) => {
                         assert_eq!(datoms.len(), 2);
                         // First datom should be [1001, 10, 1714000000000000, 1001, true]
@@ -2494,9 +2572,14 @@ mod tests {
                 }
 
                 // tempids should be a map with String keys (not Keyword keys)
-                let tempids = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
+                let tempids = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
                 assert!(tempids.is_some(), "Missing :tempids");
-                match &tempids.unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil)).1 {
+                match &tempids
+                    .unwrap_or(&(ResponseValue::Nil, ResponseValue::Nil))
+                    .1
+                {
                     ResponseValue::Map(inner) => {
                         assert_eq!(inner.len(), 1);
                         // Verify the key is a String, not a Keyword (Datomic tempids use string keys)
@@ -2525,10 +2608,26 @@ mod tests {
         let result = parse_tx_report(report_str).unwrap_or(ResponseValue::Nil);
         let response = Response::Success { result };
         let output = serialize_response(&response);
-        assert!(output.contains(":db-before {:basis-t 0}"), "Output missing db-before: {}", output);
-        assert!(output.contains(":db-after {:basis-t 1001}"), "Output missing db-after: {}", output);
-        assert!(output.contains(":tx-data"), "Output missing tx-data: {}", output);
-        assert!(output.contains(":tempids {}"), "Output missing tempids: {}", output);
+        assert!(
+            output.contains(":db-before {:basis-t 0}"),
+            "Output missing db-before: {}",
+            output
+        );
+        assert!(
+            output.contains(":db-after {:basis-t 1001}"),
+            "Output missing db-after: {}",
+            output
+        );
+        assert!(
+            output.contains(":tx-data"),
+            "Output missing tx-data: {}",
+            output
+        );
+        assert!(
+            output.contains(":tempids {}"),
+            "Output missing tempids: {}",
+            output
+        );
     }
 
     #[test]
@@ -3016,14 +3115,20 @@ mod tests {
         use crate::protocol::parser::ParseError;
         let err: ServerError = ParseError::MissingField("test".to_string()).into();
         let anomaly: Anomaly = err.into();
-        assert!(matches!(anomaly.category, crate::protocol::AnomalyCategory::Incorrect));
+        assert!(matches!(
+            anomaly.category,
+            crate::protocol::AnomalyCategory::Incorrect
+        ));
     }
 
     #[test]
     fn test_server_error_internal_to_anomaly() {
         let err = ServerError::Internal("something went wrong".to_string());
         let anomaly: Anomaly = err.into();
-        assert!(matches!(anomaly.category, crate::protocol::AnomalyCategory::Fault));
+        assert!(matches!(
+            anomaly.category,
+            crate::protocol::AnomalyCategory::Fault
+        ));
         assert!(anomaly.message.contains("something went wrong"));
     }
 
@@ -3047,7 +3152,9 @@ mod tests {
     fn test_is_valid_attribute_ident_blocks_injection() {
         // SQL injection via attribute ident
         assert!(!is_valid_attribute_ident("'; DROP TABLE mentat.datoms; --"));
-        assert!(!is_valid_attribute_ident("person/name' UNION SELECT * FROM pg_shadow --"));
+        assert!(!is_valid_attribute_ident(
+            "person/name' UNION SELECT * FROM pg_shadow --"
+        ));
         assert!(!is_valid_attribute_ident(""));
         // Oversized ident
         let long_ident = "a".repeat(257);
@@ -3063,7 +3170,10 @@ mod tests {
         assert_eq!(escape_sql_string("hello"), "hello");
         assert_eq!(escape_sql_string("it's"), "it''s");
         assert_eq!(escape_sql_string("a''b"), "a''''b");
-        assert_eq!(escape_sql_string("'; DROP TABLE users; --"), "''; DROP TABLE users; --");
+        assert_eq!(
+            escape_sql_string("'; DROP TABLE users; --"),
+            "''; DROP TABLE users; --"
+        );
     }
 
     #[test]
@@ -3092,8 +3202,14 @@ mod tests {
     #[test]
     fn test_body_size_limit_configured() {
         // Verify the body size limit constant is reasonable (not too large)
-        assert!(MAX_BODY_SIZE <= 64 * 1024 * 1024, "Body limit should not exceed 64 MiB");
-        assert!(MAX_BODY_SIZE >= 1024 * 1024, "Body limit should be at least 1 MiB");
+        assert!(
+            MAX_BODY_SIZE <= 64 * 1024 * 1024,
+            "Body limit should not exceed 64 MiB"
+        );
+        assert!(
+            MAX_BODY_SIZE >= 1024 * 1024,
+            "Body limit should be at least 1 MiB"
+        );
     }
 
     #[test]
@@ -3155,19 +3271,31 @@ mod tests {
         match result {
             ResponseValue::Map(entries) => {
                 // db-before
-                let db_before = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-before")).unwrap();
+                let db_before = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-before"))
+                    .unwrap();
                 match &db_before.1 {
                     ResponseValue::Map(inner) => {
-                        let bt = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t")).unwrap();
+                        let bt = inner
+                            .iter()
+                            .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"))
+                            .unwrap();
                         assert!(matches!(&bt.1, ResponseValue::Integer(999)));
                     }
                     other => panic!("db-before should be Map, got {:?}", other),
                 }
                 // db-after
-                let db_after = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-after")).unwrap();
+                let db_after = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "db-after"))
+                    .unwrap();
                 match &db_after.1 {
                     ResponseValue::Map(inner) => {
-                        let bt = inner.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t")).unwrap();
+                        let bt = inner
+                            .iter()
+                            .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "basis-t"))
+                            .unwrap();
                         assert!(matches!(&bt.1, ResponseValue::Integer(1000)));
                     }
                     other => panic!("db-after should be Map, got {:?}", other),
@@ -3184,7 +3312,10 @@ mod tests {
         let result = parse_tx_report(report).unwrap();
         match result {
             ResponseValue::Map(entries) => {
-                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data")).unwrap();
+                let tx_data = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"))
+                    .unwrap();
                 match &tx_data.1 {
                     ResponseValue::Vector(datoms) => {
                         assert_eq!(datoms.len(), 1);
@@ -3215,21 +3346,20 @@ mod tests {
         let result = parse_tx_report(report).unwrap();
         match result {
             ResponseValue::Map(entries) => {
-                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data")).unwrap();
+                let tx_data = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"))
+                    .unwrap();
                 match &tx_data.1 {
-                    ResponseValue::Vector(datoms) => {
-                        match &datoms[0] {
-                            ResponseValue::Vector(d) => {
-                                match &d[2] {
-                                    ResponseValue::Uuid(u) => {
-                                        assert_eq!(u, "550e8400-e29b-41d4-a716-446655440000");
-                                    }
-                                    other => panic!("Expected Uuid, got {:?}", other),
-                                }
+                    ResponseValue::Vector(datoms) => match &datoms[0] {
+                        ResponseValue::Vector(d) => match &d[2] {
+                            ResponseValue::Uuid(u) => {
+                                assert_eq!(u, "550e8400-e29b-41d4-a716-446655440000");
                             }
-                            other => panic!("Expected Vector, got {:?}", other),
-                        }
-                    }
+                            other => panic!("Expected Uuid, got {:?}", other),
+                        },
+                        other => panic!("Expected Vector, got {:?}", other),
+                    },
                     other => panic!("Expected Vector, got {:?}", other),
                 }
             }
@@ -3243,21 +3373,20 @@ mod tests {
         let result = parse_tx_report(report).unwrap();
         match result {
             ResponseValue::Map(entries) => {
-                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data")).unwrap();
+                let tx_data = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"))
+                    .unwrap();
                 match &tx_data.1 {
-                    ResponseValue::Vector(datoms) => {
-                        match &datoms[0] {
-                            ResponseValue::Vector(d) => {
-                                match &d[2] {
-                                    ResponseValue::Float(f) => {
-                                        assert!((f - 3.14).abs() < 0.001);
-                                    }
-                                    other => panic!("Expected Float, got {:?}", other),
-                                }
+                    ResponseValue::Vector(datoms) => match &datoms[0] {
+                        ResponseValue::Vector(d) => match &d[2] {
+                            ResponseValue::Float(f) => {
+                                assert!((f - 3.14).abs() < 0.001);
                             }
-                            other => panic!("Expected Vector, got {:?}", other),
-                        }
-                    }
+                            other => panic!("Expected Float, got {:?}", other),
+                        },
+                        other => panic!("Expected Vector, got {:?}", other),
+                    },
                     other => panic!("Expected Vector, got {:?}", other),
                 }
             }
@@ -3271,14 +3400,21 @@ mod tests {
         let result = parse_tx_report(report).unwrap();
         match result {
             ResponseValue::Map(entries) => {
-                let tempids = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids")).unwrap();
+                let tempids = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"))
+                    .unwrap();
                 match &tempids.1 {
                     ResponseValue::Map(inner) => {
                         assert_eq!(inner.len(), 2);
                         // Datomic tempids map uses String keys (the tempid names), not Keywords.
                         // EDN: {"alice" 5001, "bob" 5002}
                         for (k, v) in inner {
-                            assert!(matches!(k, ResponseValue::String(_)), "Tempid key should be String, got {:?}", k);
+                            assert!(
+                                matches!(k, ResponseValue::String(_)),
+                                "Tempid key should be String, got {:?}",
+                                k
+                            );
                             assert!(matches!(v, ResponseValue::Integer(_)));
                         }
                     }
@@ -3301,11 +3437,31 @@ mod tests {
         let output = serialize_response(&response);
 
         // Verify the EDN output contains properly formatted fields
-        assert!(output.contains(":db-before {:basis-t 100}"), "Missing db-before in: {}", output);
-        assert!(output.contains(":db-after {:basis-t 101}"), "Missing db-after in: {}", output);
-        assert!(output.contains(":tx-data"), "Missing tx-data in: {}", output);
-        assert!(output.contains("#inst \""), "Missing #inst in tx-data: {}", output);
-        assert!(output.contains(":tempids"), "Missing tempids in: {}", output);
+        assert!(
+            output.contains(":db-before {:basis-t 100}"),
+            "Missing db-before in: {}",
+            output
+        );
+        assert!(
+            output.contains(":db-after {:basis-t 101}"),
+            "Missing db-after in: {}",
+            output
+        );
+        assert!(
+            output.contains(":tx-data"),
+            "Missing tx-data in: {}",
+            output
+        );
+        assert!(
+            output.contains("#inst \""),
+            "Missing #inst in tx-data: {}",
+            output
+        );
+        assert!(
+            output.contains(":tempids"),
+            "Missing tempids in: {}",
+            output
+        );
     }
 
     #[test]
@@ -3319,12 +3475,32 @@ mod tests {
         let output = serialize_transit_json(&response);
 
         // Transit: instant should be ~m<millis>
-        assert!(output.contains("~m1714000000000"), "Missing Transit instant ~m in: {}", output);
+        assert!(
+            output.contains("~m1714000000000"),
+            "Missing Transit instant ~m in: {}",
+            output
+        );
         // Transit: keywords should be ~:
-        assert!(output.contains("~:db-before"), "Missing ~:db-before in: {}", output);
-        assert!(output.contains("~:db-after"), "Missing ~:db-after in: {}", output);
-        assert!(output.contains("~:tx-data"), "Missing ~:tx-data in: {}", output);
-        assert!(output.contains("~:tempids"), "Missing ~:tempids in: {}", output);
+        assert!(
+            output.contains("~:db-before"),
+            "Missing ~:db-before in: {}",
+            output
+        );
+        assert!(
+            output.contains("~:db-after"),
+            "Missing ~:db-after in: {}",
+            output
+        );
+        assert!(
+            output.contains("~:tx-data"),
+            "Missing ~:tx-data in: {}",
+            output
+        );
+        assert!(
+            output.contains("~:tempids"),
+            "Missing ~:tempids in: {}",
+            output
+        );
     }
 
     #[test]
@@ -3334,14 +3510,21 @@ mod tests {
         let result = parse_tx_report(report).unwrap();
         match result {
             ResponseValue::Map(entries) => {
-                let tx_data = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data")).unwrap();
+                let tx_data = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tx-data"))
+                    .unwrap();
                 match &tx_data.1 {
                     ResponseValue::Vector(datoms) => {
                         assert_eq!(datoms.len(), 2);
                         for datom in datoms {
                             match datom {
                                 ResponseValue::Vector(d) => {
-                                    assert_eq!(d.len(), 5, "Each datom must be a 5-tuple [e a v tx added]");
+                                    assert_eq!(
+                                        d.len(),
+                                        5,
+                                        "Each datom must be a 5-tuple [e a v tx added]"
+                                    );
                                     // e and a should be integers
                                     assert!(matches!(&d[0], ResponseValue::Integer(_)));
                                     assert!(matches!(&d[1], ResponseValue::Integer(_)));
@@ -3408,7 +3591,9 @@ mod tests {
 
         match result {
             ResponseValue::Map(entries) => {
-                let tempids = entries.iter().find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
+                let tempids = entries
+                    .iter()
+                    .find(|(k, _)| matches!(k, ResponseValue::Keyword(s) if s == "tempids"));
                 assert!(tempids.is_some(), "Missing :tempids");
                 match &tempids.unwrap().1 {
                     ResponseValue::Map(inner) => {
@@ -3468,19 +3653,51 @@ mod tests {
         let output = serialize_response(&response);
 
         // Verify all 4 required Datomic fields
-        assert!(output.contains(":db-before"), "Missing :db-before in: {}", output);
-        assert!(output.contains(":db-after"), "Missing :db-after in: {}", output);
-        assert!(output.contains(":tx-data"), "Missing :tx-data in: {}", output);
-        assert!(output.contains(":tempids"), "Missing :tempids in: {}", output);
+        assert!(
+            output.contains(":db-before"),
+            "Missing :db-before in: {}",
+            output
+        );
+        assert!(
+            output.contains(":db-after"),
+            "Missing :db-after in: {}",
+            output
+        );
+        assert!(
+            output.contains(":tx-data"),
+            "Missing :tx-data in: {}",
+            output
+        );
+        assert!(
+            output.contains(":tempids"),
+            "Missing :tempids in: {}",
+            output
+        );
 
         // Verify db-before/db-after structure
-        assert!(output.contains(":db-before {:basis-t 1000}"), "Wrong db-before in: {}", output);
-        assert!(output.contains(":db-after {:basis-t 1001}"), "Wrong db-after in: {}", output);
+        assert!(
+            output.contains(":db-before {:basis-t 1000}"),
+            "Wrong db-before in: {}",
+            output
+        );
+        assert!(
+            output.contains(":db-after {:basis-t 1001}"),
+            "Wrong db-after in: {}",
+            output
+        );
 
         // Verify instant value is serialized as #inst
-        assert!(output.contains("#inst \""), "Missing #inst in tx-data: {}", output);
+        assert!(
+            output.contains("#inst \""),
+            "Missing #inst in tx-data: {}",
+            output
+        );
 
         // Verify tempids use string keys
-        assert!(output.contains(r#""person-1" 5001"#), "Tempids should use string keys: {}", output);
+        assert!(
+            output.contains(r#""person-1" 5001"#),
+            "Tempids should use string keys: {}",
+            output
+        );
     }
 }

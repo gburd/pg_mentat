@@ -46,8 +46,7 @@ mod parser_tests {
 
     #[test]
     fn test_parse_qseq_with_chunk_size() {
-        let input =
-            r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500}}"#;
+        let input = r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::Qseq { chunk_size, .. } => {
@@ -59,8 +58,7 @@ mod parser_tests {
 
     #[test]
     fn test_parse_qseq_with_db_id() {
-        let input =
-            r#"{:op :qseq :args {:query "[:find ?e]" :args [] :db-id "snap-123"}}"#;
+        let input = r#"{:op :qseq :args {:query "[:find ?e]" :args [] :db-id "snap-123"}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::Qseq { db_id, .. } => {
@@ -72,7 +70,8 @@ mod parser_tests {
 
     #[test]
     fn test_parse_qseq_with_all_options() {
-        let input = r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500 :db-id "snap-123"}}"#;
+        let input =
+            r#"{:op :qseq :args {:query "[:find ?e]" :args [] :chunk-size 500 :db-id "snap-123"}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::Qseq {
@@ -169,8 +168,7 @@ mod parser_tests {
 
     #[test]
     fn test_parse_index_range_with_bounds_and_limit() {
-        let input =
-            r#"{:op :index-range :args {:attrid ":person/name" :start "Alice" :end "Charlie" :limit 50}}"#;
+        let input = r#"{:op :index-range :args {:attrid ":person/name" :start "Alice" :end "Charlie" :limit 50}}"#;
         let req = parse_request(input).expect("parse failed");
         match req.op {
             Operation::IndexRange {
@@ -352,10 +350,29 @@ mod protocol_unit_tests {
     #[test]
     fn test_normalize_short_forms_pass_through() {
         let ops = [
-            "q", "qseq", "pull", "pull-many", "transact", "with", "datoms",
-            "index-range", "tx-range", "entid", "ident", "db-stats", "connect",
-            "db", "list-dbs", "create-db", "delete-db", "as-of", "since",
-            "history", "filter", "basis-t", "db-snapshot",
+            "q",
+            "qseq",
+            "pull",
+            "pull-many",
+            "transact",
+            "with",
+            "datoms",
+            "index-range",
+            "tx-range",
+            "entid",
+            "ident",
+            "db-stats",
+            "connect",
+            "db",
+            "list-dbs",
+            "create-db",
+            "delete-db",
+            "as-of",
+            "since",
+            "history",
+            "filter",
+            "basis-t",
+            "db-snapshot",
         ];
         for op in &ops {
             assert_eq!(
@@ -384,12 +401,15 @@ mod protocol_unit_tests {
 
     #[test]
     fn test_new_operations_are_valid() {
-        for op in &["qseq", "pull-many", "index-range", "entid", "ident", "db-stats"] {
-            assert!(
-                is_valid_operation(op),
-                "'{}' should be valid",
-                op
-            );
+        for op in &[
+            "qseq",
+            "pull-many",
+            "index-range",
+            "entid",
+            "ident",
+            "db-stats",
+        ] {
+            assert!(is_valid_operation(op), "'{}' should be valid", op);
         }
     }
 
@@ -633,8 +653,7 @@ async fn test_http_basis_t_transit_json() {
 #[tokio::test]
 async fn test_http_qseq_edn() {
     let server = TestServer::start().await;
-    let request =
-        r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args [] :chunk-size 100}}"#;
+    let request = r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args [] :chunk-size 100}}"#;
     let response = server.client.post("/", request).await;
     assert_eq!(response.status, 200);
     assert_valid_datomic_edn_response(&response.body, "qseq");
@@ -643,8 +662,7 @@ async fn test_http_qseq_edn() {
 #[tokio::test]
 async fn test_http_qseq_default_chunk_size() {
     let server = TestServer::start().await;
-    let request =
-        r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args []}}"#;
+    let request = r#"{:op :qseq :args {:query "[:find ?e :where [?e :db/ident _]]" :args []}}"#;
     let response = server.client.post("/", request).await;
     assert_eq!(response.status, 200);
     assert_valid_datomic_edn_response(&response.body, "qseq (no chunk-size)");
@@ -674,7 +692,8 @@ async fn test_http_pull_many_empty_ids() {
 async fn test_http_pull_many_transit_json() {
     let server = TestServer::start().await;
     // Transit+JSON: {:op :pull-many :args {:pattern "[*]" :entity-ids [1 2]}}
-    let request = r#"["^ ","~:op","~:pull-many","~:args",["^ ","~:pattern","[*]","~:entity-ids",[1,2]]]"#;
+    let request =
+        r#"["^ ","~:op","~:pull-many","~:args",["^ ","~:pattern","[*]","~:entity-ids",[1,2]]]"#;
     let response = server.client.post_transit_json("/", request).await;
     assert_eq!(response.status, 200);
     assert_valid_datomic_transit_response(&response.body, "pull-many");
@@ -827,9 +846,7 @@ async fn test_concurrent_http_requests() {
     let mut handles = Vec::new();
     for _ in 0..10 {
         let client = server.client.clone();
-        let handle = tokio::spawn(async move {
-            client.post("/", "{:op :health}").await
-        });
+        let handle = tokio::spawn(async move { client.post("/", "{:op :health}").await });
         handles.push(handle);
     }
 

@@ -51,26 +51,37 @@ mod tests {
     fn pg_test_nh_cardinality_one_no_trail() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/seen 100}]'::TEXT)")
-            .expect("tx");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/seen 100}]'::TEXT)",
+        )
+        .expect("tx");
         let e = eid();
         for v in 101..=110 {
-            Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/seen {}}}]'::TEXT)", e, v))
-                .expect("update");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[{{:db/id {} :p/seen {}}}]'::TEXT)",
+                e, v
+            ))
+            .expect("update");
         }
         // Exactly ONE log row for :p/seen (the current value), not 10+ history rows.
         let log_rows = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.datoms_long_new \
-             WHERE e = {} AND a = mentat.attr_id(':p/seen')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/seen')",
+            e
         ))
         .expect("count")
         .expect("NULL");
-        assert_eq!(log_rows, 1, "noHistory must keep exactly 1 log row, got {}", log_rows);
+        assert_eq!(
+            log_rows, 1,
+            "noHistory must keep exactly 1 log row, got {}",
+            log_rows
+        );
 
         // And it's the latest value.
         let v = Spi::get_one::<i64>(&format!(
             "SELECT v FROM mentat.datoms_long_new \
-             WHERE e = {} AND a = mentat.attr_id(':p/seen')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/seen')",
+            e
         ))
         .expect("v")
         .expect("NULL");
@@ -87,12 +98,16 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/name \"Alice\"}]'::TEXT)")
             .expect("tx");
         let e = eid();
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)", e))
-            .expect("update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/name \"Alyce\"}}]'::TEXT)",
+            e
+        ))
+        .expect("update");
         // Normal attr: full trail (Alice asserted, Alice retracted, Alyce asserted) = 3.
         let log_rows = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.datoms_text_new \
-             WHERE e = {} AND a = mentat.attr_id(':p/name')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/name')",
+            e
         ))
         .expect("count")
         .expect("NULL");
@@ -108,10 +123,14 @@ mod tests {
         Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/seen 1}]'::TEXT)")
             .expect("tx");
         let e = eid();
-        Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/seen 42}}]'::TEXT)", e))
-            .expect("update");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[{{:db/id {} :p/seen 42}}]'::TEXT)",
+            e
+        ))
+        .expect("update");
         let raw = Spi::get_one::<String>(&format!(
-            "SELECT mentat_query('[:find ?s :where [{} :p/seen ?s]]'::TEXT, '{{}}'::jsonb)::TEXT", e
+            "SELECT mentat_query('[:find ?s :where [{} :p/seen ?s]]'::TEXT, '{{}}'::jsonb)::TEXT",
+            e
         ))
         .expect("query")
         .expect("NULL");
@@ -132,12 +151,16 @@ mod tests {
             .expect("tx");
         let e = eid();
         for _ in 0..5 {
-            Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/seen 7}}]'::TEXT)", e))
-                .expect("reassert");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[{{:db/id {} :p/seen 7}}]'::TEXT)",
+                e
+            ))
+            .expect("reassert");
         }
         let log_rows = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.datoms_long_new \
-             WHERE e = {} AND a = mentat.attr_id(':p/seen')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/seen')",
+            e
         ))
         .expect("count")
         .expect("NULL");
@@ -151,28 +174,38 @@ mod tests {
     fn pg_test_nh_cardinality_many() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)")
-            .expect("tx");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)",
+        )
+        .expect("tx");
         let e = eid();
         // Add two more tags, then re-assert x several times.
         Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/tag \"y\"}} {{:db/id {} :p/tag \"z\"}}]'::TEXT)", e, e))
             .expect("add");
         for _ in 0..3 {
-            Spi::run(&format!("SELECT mentat_transact('[{{:db/id {} :p/tag \"x\"}}]'::TEXT)", e))
-                .expect("reassert x");
+            Spi::run(&format!(
+                "SELECT mentat_transact('[{{:db/id {} :p/tag \"x\"}}]'::TEXT)",
+                e
+            ))
+            .expect("reassert x");
         }
         // 3 current tags, and each appears exactly once in the log (noHistory).
         let log_rows = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.datoms_text_new \
-             WHERE e = {} AND a = mentat.attr_id(':p/tag')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/tag')",
+            e
         ))
         .expect("count")
         .expect("NULL");
-        assert_eq!(log_rows, 3, "noHistory many: one log row per distinct value");
+        assert_eq!(
+            log_rows, 3,
+            "noHistory many: one log row per distinct value"
+        );
 
         let current = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.current_text \
-             WHERE e = {} AND a = mentat.attr_id(':p/tag')", e
+             WHERE e = {} AND a = mentat.attr_id(':p/tag')",
+            e
         ))
         .expect("count")
         .expect("NULL");
@@ -185,18 +218,27 @@ mod tests {
     fn pg_test_nh_retract() {
         setup();
         schema();
-        Spi::run("SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)")
-            .expect("tx");
+        Spi::run(
+            "SELECT mentat_transact('[{:db/id \"p\" :p/email \"a@x.io\" :p/tag \"x\"}]'::TEXT)",
+        )
+        .expect("tx");
         let e = eid();
-        Spi::run(&format!("SELECT mentat_transact('[[:db/retract {} :p/tag \"x\"]]'::TEXT)", e))
-            .expect("retract");
+        Spi::run(&format!(
+            "SELECT mentat_transact('[[:db/retract {} :p/tag \"x\"]]'::TEXT)",
+            e
+        ))
+        .expect("retract");
         let current = Spi::get_one::<i64>(&format!(
             "SELECT count(*) FROM mentat.current_text \
-             WHERE e = {} AND a = mentat.attr_id(':p/tag') AND v = 'x'", e
+             WHERE e = {} AND a = mentat.attr_id(':p/tag') AND v = 'x'",
+            e
         ))
         .expect("count")
         .expect("NULL");
-        assert_eq!(current, 0, "retracted noHistory value gone from current state");
+        assert_eq!(
+            current, 0,
+            "retracted noHistory value gone from current state"
+        );
         verify_clean();
     }
 }

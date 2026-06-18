@@ -152,6 +152,9 @@ mod tests {
     #[test]
     fn test_pool_error_display() {
         let err = PoolError::Config("test error".to_string());
-        assert_eq!(err.to_string(), "Failed to create connection pool: test error");
+        assert_eq!(
+            err.to_string(),
+            "Failed to create connection pool: test error"
+        );
     }
 }
