@@ -1,0 +1,44 @@
+# cargo-deny configuration.
+#
+# Without this file the cargo-deny GitHub action uses an empty license
+# allow-list and rejects every crate. The allow-list below covers the
+# permissive licenses present in the dependency tree.
+
+[advisories]
+version = 2
+# Mirror .cargo/audit.toml: actively-patchable advisories are fixed in
+# Cargo.lock (tokio-postgres 0.7.18 / postgres-protocol 0.6.12 close
+# RUSTSEC-2026-0178/0179/0180). The rest have no clean fix on the current
+# graph and are deliberately accepted; revisit on upstream updates.
+ignore = [
+    "RUSTSEC-2024-0437",  # protobuf 2.x recursion crash; pinned by prometheus 0.13
+    "RUSTSEC-2024-0436",  # paste unmaintained (informational); via pgrx 0.17
+    "RUSTSEC-2021-0127",  # serde_cbor unmaintained (informational); via pgrx 0.17
+    "RUSTSEC-2026-0002",  # lru 0.12 IterMut unsoundness; IterMut path unused
+]
+
+[licenses]
+version = 2
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+# Crates whose only license alternatives are copyleft are accepted via the
+# permissive arm of their OR expression; cargo-deny picks the allowed one.
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "allow"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

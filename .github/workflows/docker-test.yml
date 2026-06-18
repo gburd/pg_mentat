@@ -1,7 +1,7 @@
 # Docker/Podman-based CI workflow for pg_mentat
 #
 # Alternative to the Nix workflow for environments that already have a
-# container runtime but cannot install Nix.  Builds the Containerfile
+# container runtime but cannot install Nix.  Builds the Dockerfile
 # and runs tests inside the resulting image.
 #
 # See CI_CD_GUIDE.md for documentation.
@@ -26,7 +26,7 @@ jobs:
           submodules: recursive
 
       - name: Build container image
-        run: docker build -t pg_mentat_ci -f Containerfile .
+        run: docker build -t pg_mentat_ci -f Dockerfile .
 
       - name: Run tests
         run: |
@@ -55,4 +55,4 @@ jobs:
           echo "- **Date**: $(date -u)" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Commit**: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Branch**: ${{ github.ref_name }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Runner**: Containerfile (Fedora 43)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Runner**: Dockerfile (Fedora 43)" >> "$GITHUB_STEP_SUMMARY"
