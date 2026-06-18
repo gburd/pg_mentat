@@ -172,7 +172,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
               postgresql-server-dev-16 libpq-dev build-essential \
-              pkg-config libclang-dev clang
+              pkg-config libclang-dev clang \
+              libreadline-dev zlib1g-dev libicu-dev bison flex
 
       - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
         uses: dtolnay/rust-toolchain@master
