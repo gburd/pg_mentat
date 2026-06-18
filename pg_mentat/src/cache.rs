@@ -64,6 +64,7 @@ pub struct AttributeInfo {
     pub fulltext: bool,
     pub indexed: bool,
     pub component: bool,
+    pub no_history: bool,
 }
 
 /// Per-store schema and ident cache.
@@ -119,7 +120,7 @@ impl SchemaCache {
         let _ = Spi::connect(|client| {
             let query = format!(
                 "SELECT entid, ident, value_type::TEXT, cardinality::TEXT, \
-                 unique_constraint::TEXT, fulltext, indexed, component \
+                 unique_constraint::TEXT, fulltext, indexed, component, no_history \
                  FROM {}.schema",
                 schema
             );
@@ -150,6 +151,7 @@ impl SchemaCache {
                 let fulltext: bool = row.get(6).ok().flatten().unwrap_or(false);
                 let indexed: bool = row.get(7).ok().flatten().unwrap_or(false);
                 let component: bool = row.get(8).ok().flatten().unwrap_or(false);
+                let no_history: bool = row.get(9).ok().flatten().unwrap_or(false);
 
                 attrs.insert(
                     entid,
@@ -160,6 +162,7 @@ impl SchemaCache {
                         fulltext,
                         indexed,
                         component,
+                        no_history,
                     },
                 );
 

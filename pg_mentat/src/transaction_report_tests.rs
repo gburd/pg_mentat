@@ -44,7 +44,8 @@ mod tests {
             "SELECT mentat_transact('[[:db/add \"e\" :tr/name \"test\"]]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-        assert!(j["tx"].as_i64().is_some() || j["tx_id"].as_i64().is_some() || j.get("tx").is_some());
+        // The transaction report exposes the tx id as db-after.basis-t.
+        assert!(j["db-after"]["basis-t"].as_i64().is_some());
     }
 
     #[pg_test]

@@ -111,7 +111,7 @@ mod tests {
             Spi::get_one::<String>("SELECT mentat.create_rum_fulltext_index(':issue/body')")
                 .expect("create index")
                 .expect("NULL");
-        assert!(idx_name.starts_with("datoms_text_rum_"), "idx: {}", idx_name);
+        assert!(idx_name.starts_with("current_text_rum_"), "idx: {}", idx_name);
 
         let raw = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?b ?s :where \

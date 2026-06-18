@@ -9,6 +9,16 @@ mod tests {
     fn setup() {
         crate::ensure_extension_loaded();
         Spi::run("SELECT bootstrap_schema()").expect("bootstrap_schema failed");
+        // A raw failing Spi::run aborts the whole test transaction (pgrx
+        // longjmp). Tests that exercise an expected PG error must run it in a
+        // subtransaction via this helper so the error is observable.
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._sa_run(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN EXECUTE stmt; RETURN true;
+             EXCEPTION WHEN OTHERS THEN RETURN false; END; $$",
+        )
+        .expect("helper");
     }
 
     // ========================================================================
@@ -299,10 +309,20 @@ mod tests {
             {:db/id \"a\" :db/ident :sa/uv :db/valueType :db.type/string :db/cardinality :db.cardinality/one :db/unique :db.unique/value}
         ]'::TEXT)").expect("tx");
         Spi::run("SELECT mentat_transact('[[:db/add \"e1\" :sa/uv \"unique-code\"]]'::TEXT)").expect("first");
-        // Second entity with same value should fail or upsert
-        let result = Spi::run("SELECT mentat_transact('[[:db/add \"e2\" :sa/uv \"unique-code\"]]'::TEXT)");
-        // db.unique/value prevents different entities from having same value
-        assert!(result.is_ok() || result.is_err());
+        // Second entity with same value: :db.unique/value either rejects the
+        // collision or merges. Run in a subtransaction so a rejection (PG
+        // error) does not abort the test. Either outcome is acceptable; what
+        // matters is exactly one entity holds the value afterward.
+        let _ = Spi::get_one::<bool>(
+            "SELECT mentat._sa_run('SELECT mentat_transact(''[[:db/add \"e2\" :sa/uv \"unique-code\"]]''::TEXT)')",
+        );
+        let count = Spi::get_one::<i64>(
+            "SELECT COUNT(*) FROM mentat.current_text \
+             WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':sa/uv') AND v = 'unique-code'",
+        )
+        .expect("count")
+        .expect("NULL");
+        assert_eq!(count, 1);
     }
 
     #[pg_test]
@@ -437,9 +457,11 @@ mod tests {
         setup();
         let tx = "SELECT mentat_transact('[{:db/id \"a\" :db/ident :sa.idem/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}]'::TEXT)";
         Spi::run(tx).expect("first");
-        let s1 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("s").expect("NULL");
-        // Define again - should be idempotent or error
-        let _ = Spi::run(tx);
+        // Define again. A fresh tempid maps to a new entid, so re-installing the
+        // attribute can collide on schema.ident (UNIQUE). Run in a
+        // subtransaction so a collision error does not abort the test; the
+        // attribute must still be present afterward either way.
+        let _ = Spi::get_one::<bool>(&format!("SELECT mentat._sa_run('{}')", tx.replace('\'', "''")));
         let s2 = Spi::get_one::<String>("SELECT mentat_schema()::TEXT").expect("s").expect("NULL");
         // Schema should still contain the attribute
         assert!(s2.contains("sa.idem/name"));

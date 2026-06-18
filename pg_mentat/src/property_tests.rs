@@ -244,7 +244,7 @@ mod tests {
             .enumerate()
         {
             let result = Spi::get_one::<String>(&format!(
-                "SELECT mentat_transact('[[:db/add \"d{}\" :prop/dbl {}]]'::TEXT)",
+                "SELECT mentat_transact('[[:db/add \"d{}\" :prop/dbl {:?}]]'::TEXT)",
                 i, val
             ))
             .expect("tx")
@@ -385,11 +385,12 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&qr).expect("parse");
         assert_eq!(json["result"].as_i64().expect("num"), 50);
 
-        // Should only have 1 active datom for this e/a
+        // Append-only log keeps every prior assertion; count the live datom
+        // from the current-state projection, which holds exactly one row per
+        // (e, a) for cardinality-one.
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms
-             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':prop/num')
-             AND added = true",
+            "SELECT COUNT(*) FROM mentat.current_long
+             WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':prop/num')",
             eid
         ))
         .expect("q")
@@ -919,7 +920,7 @@ mod tests {
 
         let unicode_strings = vec![
             ("u0", "Hello World"),           // ASCII
-            ("u1", "cafe\\u0301"),            // Combining accent
+            ("u1", "cafe\u{0301}"),           // Combining accent (NFD)
             ("u2", "Tokyo"),                  // ASCII representation
             ("u3", "Привет"),                  // Cyrillic
             ("u4", "مرحبا"),                   // Arabic

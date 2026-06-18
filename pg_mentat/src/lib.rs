@@ -847,6 +847,10 @@ pub mod infra_extensions_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod operational_accessors_tests;
 #[cfg(any(test, feature = "pg_test"))]
+pub mod current_projection_tests;
+#[cfg(any(test, feature = "pg_test"))]
+pub mod no_history_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod ground_collection_tests;
 pub mod error;
 pub mod functions;
@@ -865,12 +869,38 @@ mod mentat {
     /// Edn is a PostgreSQL custom type that wraps Mentat's EDN Value.
     /// Uses CBOR for binary storage and custom EDN text I/O functions.
     /// Exposed to PostgreSQL as the "edn" type in the mentat schema.
+    ///
+    /// `#[inoutfuncs]` selects the manual `InOutFuncs` impl (below) for text
+    /// I/O so `'<edn>'::mentat.edn` parses raw EDN and `::text` renders raw
+    /// EDN. Without it pgrx's default text I/O is JSON-of-the-struct, which
+    /// rejects bare EDN like `42` (the input function returns NULL).
     #[derive(
         Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PostgresType, PostgresEq,
     )]
+    #[inoutfuncs]
     pub struct Edn {
         #[serde(serialize_with = "serialize_edn", deserialize_with = "deserialize_edn")]
         pub(crate) inner: edn::Value,
+    }
+
+    impl ::pgrx::inoutfuncs::InOutFuncs for Edn {
+        /// Parse raw EDN text into an Edn value, validating size/nesting.
+        /// Malformed input raises a PostgreSQL error (fail-loud).
+        fn input(input: &core::ffi::CStr) -> Self {
+            let text = match input.to_str() {
+                Ok(s) => s,
+                Err(_) => ::pgrx::error!(":db.error/invalid-edn input is not valid UTF-8"),
+            };
+            match crate::types::edn::parse_and_validate(text) {
+                Ok(edn) => edn,
+                Err(e) => ::pgrx::error!(":db.error/invalid-edn {}", e),
+            }
+        }
+
+        /// Render the Edn value as canonical EDN text.
+        fn output(&self, buffer: &mut ::pgrx::StringInfo) {
+            buffer.push_str(&format!("{}", self.inner));
+        }
     }
 
     fn serialize_edn<S>(value: &edn::Value, serializer: S) -> Result<S::Ok, S::Error>
@@ -1087,6 +1117,18 @@ extension_sql_file!(
     requires = ["narrow_storage"],
 );
 
+// Current-state projection: nine mentat.current_<type> tables holding only
+// the live datoms, maintained by the transact path. Foundation of the
+// 1.5.0 append-only work -- lets current-time reads avoid latest-tx-wins
+// resolution over the full log, and lets history be dropped wholesale in
+// 1.6.0. Includes rebuild + verify helpers. See docs/src/operations.md
+// and .agent/notes/v1.5.0-plan.md.
+extension_sql_file!(
+    "../sql/24_current_projection.sql",
+    name = "current_projection",
+    requires = ["narrow_storage"],
+);
+
 // Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)
 // Must run after all mentat_* functions are created by pgrx.
 extension_sql_file!(
@@ -1216,7 +1258,7 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_boolean() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT edn_out(edn_in('true'))")
+        let result = Spi::get_one::<String>("SELECT ('true'::mentat.edn)::text")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
         assert!(result.contains("true"));
@@ -1225,7 +1267,7 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_integer() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT edn_out(edn_in('42'))")
+        let result = Spi::get_one::<String>("SELECT ('42'::mentat.edn)::text")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
         assert!(result.contains("42"));
@@ -1234,7 +1276,7 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_string() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT edn_out(edn_in('\"hello\"'))")
+        let result = Spi::get_one::<String>("SELECT ('\"hello\"'::mentat.edn)::text")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
         assert!(result.contains("hello"));
@@ -1243,7 +1285,7 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_vector() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT edn_out(edn_in('[1 2 3]'))")
+        let result = Spi::get_one::<String>("SELECT ('[1 2 3]'::mentat.edn)::text")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
         assert!(result.contains("1"));
@@ -1252,7 +1294,7 @@ mod tests {
     #[pg_test]
     fn test_edn_roundtrip_map() {
         crate::ensure_extension_loaded();
-        let result = Spi::get_one::<String>("SELECT edn_out(edn_in('{:name \"Alice\" :age 30}'))")
+        let result = Spi::get_one::<String>("SELECT ('{:name \"Alice\" :age 30}'::mentat.edn)::text")
             .expect("Failed to execute query")
             .expect("Query returned NULL");
         assert!(result.contains("Alice"));
@@ -1324,7 +1366,7 @@ mod tests {
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query(
-                '[:find ?ident . :where [1 :db/ident ?ident]]'::TEXT,
+                '[:find ?ident . :where [10 :db/ident ?ident]]'::TEXT,
                 '{}'::jsonb
             )::TEXT",
         )
@@ -1345,7 +1387,7 @@ mod tests {
 
         let result = Spi::get_one::<String>(
             "SELECT mentat_query(
-                '[:find [?ident ?type] :where [1 :db/ident ?ident] [1 :db/valueType ?type]]'::TEXT,
+                '[:find [?ident ?type] :where [10 :db/ident ?ident] [10 :db/valueType ?type]]'::TEXT,
                 '{}'::jsonb
             )::TEXT",
         )
@@ -2320,12 +2362,12 @@ mod tests {
         bootstrap_schema().expect("Failed to bootstrap schema");
         setup_person_schema();
 
+        // :person/status is already defined by setup_person_schema(); re-asserting
+        // its :db/ident on a fresh tempid would create a second entity claiming the
+        // same (unique-identity) ident and is correctly rejected. Just add people.
         Spi::run(
             "SELECT mentat_transact('
-                [[:db/add \"status-attr\" :db/ident :person/status]
-                 [:db/add \"status-attr\" :db/valueType :db.type/string]
-                 [:db/add \"status-attr\" :db/cardinality :db.cardinality/one]
-                 [:db/add \"p1\" :person/name \"Alice\"]
+                [[:db/add \"p1\" :person/name \"Alice\"]
                  [:db/add \"p1\" :person/status \"active\"]
                  [:db/add \"p2\" :person/name \"Bob\"]
                  [:db/add \"p2\" :person/status \"inactive\"]]
@@ -2867,13 +2909,14 @@ mod tests {
             "Expected no results after retractEntity"
         );
 
-        // Verify retractions are recorded in history
+        // Verify retractions are recorded in history. A literal boolean is not
+        // accepted in the 5th (added) pattern position, so bind ?added and count
+        // the retraction rows (added = false) in Rust over the full history.
         let history_query = Spi::get_one::<String>(&format!(
             "SELECT mentat_query(
-                    '[:find (count ?a)
+                    '[:find ?a ?added
                       :where
-                      [?e ?a _ _ false]
-                      [(= ?e {})]]'::TEXT,
+                      [{} ?a ?v ?tx ?added]]'::TEXT,
                     '{{\"history\": true}}' ::jsonb
                 )::TEXT",
             alice_eid
@@ -2883,9 +2926,12 @@ mod tests {
 
         let history_json: serde_json::Value =
             serde_json::from_str(&history_query).expect("Failed to parse history result");
-        let retraction_count = history_json["result"]
-            .as_i64()
-            .expect("Expected retraction count");
+        let retraction_count = history_json["results"]
+            .as_array()
+            .expect("Expected results array")
+            .iter()
+            .filter(|row| row[1].as_bool() == Some(false))
+            .count();
 
         assert_eq!(
             retraction_count, 3,
@@ -2965,7 +3011,7 @@ mod tests {
 
         // Test 2: Pull Bob's entity - should include :person/friend with correct entity ID
         let pull_result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[* {{:person/friend [*]}}]', {})",
+            "SELECT mentat_pull('[* {{:person/friend [*]}}]', {})::TEXT",
             bob_eid
         ))
         .expect("Pull failed")
@@ -3055,9 +3101,11 @@ mod tests {
         let target_eid = tempids["target"].as_i64().expect("Missing target tempid");
         let source_eid = tempids["source"].as_i64().expect("Missing source tempid");
 
-        // Test: mentat_entity should correctly decode ref (type_tag=0) as an integer
+        // Test: mentat_entity decodes a ref to a non-ident target as a
+        // lookup-ref object {":db/id": <entid>} (its longstanding behavior;
+        // refs to entities that DO have a :db/ident render as the keyword).
         let entity_result = Spi::get_one::<String>(
-            &format!("SELECT mentat_entity({})", source_eid),
+            &format!("SELECT mentat_entity({})::TEXT", source_eid),
         )
         .expect("Entity query failed")
         .expect("Entity returned NULL");
@@ -3070,9 +3118,9 @@ mod tests {
             Some("Source"),
             "Entity should return the name"
         );
-        let link_ref = entity_json[":item/link"]
+        let link_ref = entity_json[":item/link"][":db/id"]
             .as_i64()
-            .expect(":item/link should be decoded as integer entity ID (type_tag=0)");
+            .expect(":item/link should be a lookup-ref object {:db/id <entid>} (type_tag=0)");
         assert_eq!(
             link_ref, target_eid,
             "Entity should decode ref correctly with type tag 0"
@@ -3646,7 +3694,12 @@ mod tests {
         // Verify transaction report
         let tx_report: serde_json::Value =
             serde_json::from_str(&result).expect("Failed to parse transaction report");
-        assert!(tx_report["tx-id"].is_number(), "Should have tx-id");
+        // The report identifies the transaction via Datomic-style
+        // db-after.basis-t (the new basis tx id), not a flat tx-id field.
+        assert!(
+            tx_report["db-after"]["basis-t"].is_number(),
+            "Should have db-after.basis-t (transaction id)"
+        );
 
         // Verify both entities committed
         let count_result = Spi::get_one::<String>(
@@ -4166,7 +4219,7 @@ mod tests {
 
         // Pull should return cardinality-many as an array
         let pull_result = Spi::get_one::<String>(&format!(
-            "SELECT mentat_pull('[:person/name :person/tag]', {})",
+            "SELECT mentat_pull('[:person/name :person/tag]', {})::TEXT",
             alice_eid
         ))
         .expect("Pull failed")
@@ -4917,7 +4970,7 @@ mod tests {
             .expect("Cache clear failed");
 
         let query = "SELECT mentat_query(
-            '[:find ?ident . :where [1 :db/ident ?ident]]'::TEXT,
+            '[:find ?ident . :where [10 :db/ident ?ident]]'::TEXT,
             '{}'::jsonb
         )::TEXT";
 
@@ -5062,14 +5115,17 @@ mod tests {
         )
         .expect("Schema transaction failed");
 
-        // Test transact with instant value (RFC3339 format)
+        // Test transact with instant values. Instant attributes require the
+        // tagged EDN literal `#inst "..."`; a bare string is rejected as a
+        // type mismatch (string tag 7 vs instant tag 4) -- the transact path
+        // does no string->instant coercion.
         let data_tx = r#"[
             {:db/id "e1"
-             :event/timestamp "2024-01-15T10:30:00Z"}
+             :event/timestamp #inst "2024-01-15T10:30:00Z"}
             {:db/id "e2"
-             :event/timestamp "2024-01-15T14:45:00Z"}
+             :event/timestamp #inst "2024-01-15T14:45:00Z"}
             {:db/id "e3"
-             :event/timestamp "1970-01-01T00:00:00Z"}
+             :event/timestamp #inst "1970-01-01T00:00:00Z"}
         ]"#;
 
         let tx_result = Spi::get_one_with_args::<String>(
@@ -5085,7 +5141,10 @@ mod tests {
             .as_i64()
             .expect("Missing e1 tempid");
 
-        // Test query filtering on instant
+        // Test query filtering on instant. mentat_query renders instants as
+        // ISO-8601 strings; pin the session TZ to UTC so the rendered text is
+        // deterministic regardless of the test cluster's local timezone.
+        Spi::run("SET TIME ZONE 'UTC'").expect("set tz");
         let query_result = Spi::get_one::<String>(
             "SELECT mentat_query(
                 '[:find ?e ?ts
@@ -5103,13 +5162,20 @@ mod tests {
             .expect("Expected array");
 
         assert_eq!(results.len(), 3, "Should find all three timestamps");
-        let ts = results[0][1].as_str().expect("Timestamp should be string");
-        assert!(
-            ts.contains("2024-01-15") || ts.contains("1970-01-01"),
-            "Timestamp should be in ISO format"
-        );
+        // Each instant comes back as an ISO-8601 string; in UTC the three
+        // values are 2024-01-15 (x2) and 1970-01-01.
+        let mut rendered: Vec<String> = results
+            .iter()
+            .map(|r| r[1].as_str().expect("Timestamp should be string").to_string())
+            .collect();
+        rendered.sort();
+        assert!(rendered[0].contains("1970-01-01"), "earliest should be 1970-01-01, got {rendered:?}");
+        assert!(rendered[1].contains("2024-01-15"), "got {rendered:?}");
+        assert!(rendered[2].contains("2024-01-15"), "got {rendered:?}");
 
-        // Test pull API returns correct format
+        // Test pull API. mentat_pull returns instants as raw microsecond
+        // counts (an integer), NOT an ISO string. 2024-01-15T10:30:00Z is
+        // 1705314600000000 microseconds since the epoch.
         let pull_result = Spi::get_one::<String>(&format!(
             "SELECT mentat_pull('[:event/timestamp]', {})::TEXT",
             e1_eid
@@ -5120,14 +5186,11 @@ mod tests {
         let pull_json: serde_json::Value =
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
         let pull_ts = pull_json[":event/timestamp"]
-            .as_str()
-            .expect("Pull should return instant as string");
-        assert!(
-            pull_ts.contains("2024-01-15T10:30:00"),
-            "Pull instant should match"
-        );
+            .as_i64()
+            .expect("Pull should return instant as microsecond integer");
+        assert_eq!(pull_ts, 1_705_314_600_000_000, "Pull instant micros should match");
 
-        // Test entity API returns correct format
+        // Test entity API: same microsecond-integer representation as pull.
         let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", e1_eid))
             .expect("Entity failed")
             .expect("Entity returned NULL");
@@ -5135,12 +5198,9 @@ mod tests {
         let entity_json: serde_json::Value =
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
         let entity_ts = entity_json[":event/timestamp"]
-            .as_str()
-            .expect("Entity should return instant as string");
-        assert!(
-            entity_ts.contains("2024-01-15T10:30:00"),
-            "Entity instant should match"
-        );
+            .as_i64()
+            .expect("Entity should return instant as microsecond integer");
+        assert_eq!(entity_ts, 1_705_314_600_000_000, "Entity instant micros should match");
     }
 
     #[pg_test]
@@ -5161,14 +5221,16 @@ mod tests {
         )
         .expect("Schema transaction failed");
 
-        // Test transact with uuid value
+        // Test transact with uuid value. UUID attributes require the tagged
+        // EDN literal `#uuid "..."`; a bare string is rejected as a type
+        // mismatch (string tag 7 vs uuid tag 10).
         let test_uuid = "550e8400-e29b-41d4-a716-446655440000";
         let data_tx = format!(
             r#"[
             {{:db/id "s1"
-             :session/id "{}"}}
+             :session/id #uuid "{}"}}
             {{:db/id "s2"
-             :session/id "123e4567-e89b-12d3-a456-426614174000"}}
+             :session/id #uuid "123e4567-e89b-12d3-a456-426614174000"}}
         ]"#,
             test_uuid
         );
@@ -5256,17 +5318,27 @@ mod tests {
         )
         .expect("Schema transaction failed");
 
-        // Test transact with bytes value (base64 encoded)
-        // "Hello, World!" in base64
-        let test_bytes_b64 = "SGVsbG8sIFdvcmxkIQ==";
+        // Test transact with a bytes value. Bytes attributes require the
+        // tagged EDN literal `#bytes <hex>`; the EDN reader parses the hex
+        // digits into a byte buffer. A bare string is rejected as a type
+        // mismatch. mentat represents bytes as lowercase hex everywhere it
+        // renders them (query/pull/entity all use encode(v, 'hex')).
+        //
+        // PRODUCT BUG (see report): functions/transact.rs::encode_value has no
+        // arm for edn::Value::Bytes, so #bytes literals currently fail with
+        // :db.error/unsupported-value-type. This test is written to the
+        // correct intended behavior and will pass once that arm is added; it
+        // must NOT be weakened to hide the missing encode path.
+        let hello_hex = "48656c6c6f2c20576f726c6421"; // "Hello, World!"
+        let four_hex = "01020304";
         let data_tx = format!(
             r#"[
             {{:db/id "f1"
-             :file/data "{}"}}
+             :file/data #bytes {}}}
             {{:db/id "f2"
-             :file/data "AQIDBA=="}}
+             :file/data #bytes {}}}
         ]"#,
-            test_bytes_b64
+            hello_hex, four_hex
         );
 
         let tx_result = Spi::get_one_with_args::<String>(
@@ -5300,13 +5372,13 @@ mod tests {
             .expect("Expected array");
 
         assert_eq!(results.len(), 2, "Should find both byte arrays");
-        let bytes_val = results[0][1].as_str().expect("Bytes should be string (base64)");
+        let bytes_val = results[0][1].as_str().expect("Bytes should be hex string");
         assert!(
-            bytes_val == test_bytes_b64 || bytes_val == "AQIDBA==",
-            "Bytes should match one of the inserted values (base64 encoded)"
+            bytes_val == hello_hex || bytes_val == four_hex,
+            "Bytes should match one of the inserted values (lowercase hex)"
         );
 
-        // Test pull API returns correct format
+        // Test pull API returns correct format (hex string)
         let pull_result = Spi::get_one::<String>(&format!(
             "SELECT mentat_pull('[:file/data]', {})::TEXT",
             f1_eid
@@ -5318,10 +5390,10 @@ mod tests {
             serde_json::from_str(&pull_result).expect("Failed to parse pull result");
         let pull_bytes = pull_json[":file/data"]
             .as_str()
-            .expect("Pull should return bytes as base64 string");
-        assert_eq!(pull_bytes, test_bytes_b64, "Pull bytes should match");
+            .expect("Pull should return bytes as hex string");
+        assert_eq!(pull_bytes, hello_hex, "Pull bytes should match");
 
-        // Test entity API returns correct format
+        // Test entity API returns correct format (hex string)
         let entity_result = Spi::get_one::<String>(&format!("SELECT mentat_entity({})::TEXT", f1_eid))
             .expect("Entity failed")
             .expect("Entity returned NULL");
@@ -5330,8 +5402,8 @@ mod tests {
             serde_json::from_str(&entity_result).expect("Failed to parse entity result");
         let entity_bytes = entity_json[":file/data"]
             .as_str()
-            .expect("Entity should return bytes as base64 string");
-        assert_eq!(entity_bytes, test_bytes_b64, "Entity bytes should match");
+            .expect("Entity should return bytes as hex string");
+        assert_eq!(entity_bytes, hello_hex, "Entity bytes should match");
     }
 
     // ============================================================================
@@ -5862,22 +5934,25 @@ mod tests {
         )
         .expect("Schema transaction failed");
 
-        // Insert events with timestamps spanning different years/months
-        // These are chosen so that BYTEA LE comparison would fail:
-        // epoch microseconds for 2020 vs 2024 differ in higher bytes
+        // Insert events with timestamps spanning different years/months.
+        // Instant attributes require the tagged EDN literal #inst "..."; a
+        // bare string is rejected as a type mismatch.
         Spi::run(
             "SELECT mentat_transact('
                 [[:db/add \"e1\" :event/label \"Ancient\"]
-                 [:db/add \"e1\" :event/timestamp \"1999-06-15T12:00:00Z\"]
+                 [:db/add \"e1\" :event/timestamp #inst \"1999-06-15T12:00:00Z\"]
                  [:db/add \"e2\" :event/label \"Early\"]
-                 [:db/add \"e2\" :event/timestamp \"2020-01-01T00:00:00Z\"]
+                 [:db/add \"e2\" :event/timestamp #inst \"2020-01-01T00:00:00Z\"]
                  [:db/add \"e3\" :event/label \"Middle\"]
-                 [:db/add \"e3\" :event/timestamp \"2022-06-15T12:00:00Z\"]
+                 [:db/add \"e3\" :event/timestamp #inst \"2022-06-15T12:00:00Z\"]
                  [:db/add \"e4\" :event/label \"Recent\"]
-                 [:db/add \"e4\" :event/timestamp \"2024-12-25T18:30:00Z\"]]
+                 [:db/add \"e4\" :event/timestamp #inst \"2024-12-25T18:30:00Z\"]]
             '::TEXT)",
         )
         .expect("Transaction failed");
+
+        // Pin session TZ to UTC so instant text rendering is deterministic.
+        Spi::run("SET TIME ZONE 'UTC'").expect("set tz");
 
         // Test ORDER BY timestamp ascending - should be chronological
         let result = Spi::get_one::<String>(

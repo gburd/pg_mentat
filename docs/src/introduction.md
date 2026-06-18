@@ -16,7 +16,7 @@
 
 | Property | Value |
 |----------|-------|
-| Version | 1.4.0 |
+| Version | 1.5.0 |
 | PostgreSQL | 13, 14, 15, 16 (default), 17, 18 |
 | Rust | 1.88+ |
 | pgrx | 0.17.0 |

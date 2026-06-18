@@ -566,9 +566,11 @@ mod tests {
         let vb: serde_json::Value = serde_json::from_str(&qb).expect("parse");
         assert!(vb["result"].is_null());
 
-        // Verify c created
+        // Verify c created. Bind ?n via the value pattern, then constrain it,
+        // so the find variable is actually bound (a bare value-constant pattern
+        // leaves ?n unbound).
         let qc = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?n . :where [?e :tx/name \"Carol\"]]'::TEXT, '{}'::jsonb)::TEXT",
+            "SELECT mentat_query('[:find ?n . :where [?e :tx/name ?n] [?e :tx/name \"Carol\"]]'::TEXT, '{}'::jsonb)::TEXT",
         ).expect("q").expect("NULL");
         let vc: serde_json::Value = serde_json::from_str(&qc).expect("parse");
         assert_eq!(vc["result"].as_str().expect("s"), "Carol");

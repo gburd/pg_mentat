@@ -115,11 +115,10 @@ mod tests {
     #[pg_test]
     fn test_eh_malformed_query_no_where() {
         setup(); setup_eh_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?n]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // Missing :where clause might return empty or error
-        assert!(result.is_ok() || result.is_err());
+        // A query with no :where clause is rejected by the parser
+        // ("expected :where"). Run it in a subtransaction so the raised
+        // error does not poison the test's outer transaction.
+        assert!(raises_error("SELECT mentat_query('[:find ?n]'::TEXT, '{}'::jsonb)::TEXT"));
     }
 
     #[pg_test]
@@ -138,21 +137,22 @@ mod tests {
     fn test_eh_query_unbound_variable() {
         setup(); setup_eh_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)").expect("data");
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?n :where [_ :eh/name ?x]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // ?n in find but not bound in where - should error or return empty
-        assert!(result.is_ok() || result.is_err());
+        // ?n appears in :find but is bound by no :where clause -> fail-loud
+        // (:db.error/unbound-variable). Route through the subtransaction
+        // helper so the error doesn't poison the test transaction.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?n :where [_ :eh/name ?x]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_query_unknown_attribute() {
         setup(); setup_eh_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?v . :where [_ :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // Unknown attribute - should error or return null
-        assert!(result.is_ok() || result.is_err());
+        // :nonexistent/attr is not registered -> fail-loud
+        // (:db.error/unknown-attribute), not a silent empty result.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?v . :where [_ :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
@@ -274,8 +274,9 @@ mod tests {
     #[pg_test]
     fn test_eh_valid_after_error() {
         setup(); setup_eh_schema();
-        // First, trigger an error
-        let _ = Spi::run("SELECT mentat_transact('invalid'::TEXT)");
+        // First, trigger an error inside a subtransaction so it does not
+        // poison the test's outer transaction.
+        let _ = raises_error("SELECT mentat_transact('invalid'::TEXT)");
         // Then, verify system still works
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"recovery\"]]'::TEXT)").expect("should work after error");
         let q = Spi::get_one::<String>(
@@ -331,9 +332,11 @@ mod tests {
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
-        let _ = Spi::run(&format!(
+        // Run the failing CAS inside a subtransaction so its error does not
+        // poison the outer transaction; the value must remain unchanged.
+        assert!(raises_error(&format!(
             "SELECT mentat_transact('[[:db/cas {} :eh/val 999 200]]'::TEXT)", eid
-        )); // Should fail
+        )), "CAS with wrong old value should fail");
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find ?v . :where [{} :eh/val ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid
         )).expect("q").expect("NULL");
@@ -393,27 +396,45 @@ mod tests {
 
     #[pg_test]
     fn test_eh_transact_before_bootstrap() {
-        // Don't call setup() - test without bootstrap
-        let result = Spi::run("SELECT mentat_transact('[[:db/add \"e\" :some/attr \"val\"]]'::TEXT)");
-        // Should error since schema not bootstrapped
-        assert!(result.is_ok() || result.is_err());
+        // Don't call bootstrap_schema() - test without a bootstrapped schema.
+        // The extension must still be present for mentat_transact to exist.
+        crate::ensure_extension_loaded();
+        // Create the subtransaction-isolated error helper without bootstrapping
+        // the schema, so a raised error (the attribute is undefined) does not
+        // poison the test's outer transaction.
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION mentat._test_raises_error(stmt TEXT) RETURNS BOOLEAN
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE stmt;
+                 RETURN false;
+             EXCEPTION WHEN OTHERS THEN
+                 RETURN true;
+             END;
+             $$",
+        )
+        .expect("create helper");
+        // Either it errors (expected: no schema) or is accepted; both are
+        // acceptable. The point is not to panic by poisoning the transaction.
+        let _ = raises_error("SELECT mentat_transact('[[:db/add \"e\" :some/attr \"val\"]]'::TEXT)");
     }
 
     #[pg_test]
     fn test_eh_query_empty_db() {
         setup();
-        let q = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find [?n ...] :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // No schema defined yet for :eh/name
-        assert!(q.is_ok() || q.is_err());
+        // No schema defined yet for :eh/name -> querying an unregistered
+        // attribute is fail-loud (:db.error/unknown-attribute). Route
+        // through the subtransaction helper.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find [?n ...] :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_pull_nonexistent_entity() {
         setup(); setup_eh_schema();
         let result = Spi::get_one::<String>(
-            "SELECT mentat_pull(999999999, '[*]'::TEXT)::TEXT",
+            "SELECT mentat_pull('[*]'::TEXT, 999999999)::TEXT",
         );
         assert!(result.is_ok() || result.is_err());
     }
@@ -421,9 +442,10 @@ mod tests {
     #[pg_test]
     fn test_eh_successive_errors_dont_break() {
         setup(); setup_eh_schema();
-        // Multiple errors in a row
+        // Multiple errors in a row, each isolated in its own subtransaction
+        // so they do not poison the outer transaction.
         for _ in 0..5 {
-            let _ = Spi::run("SELECT mentat_transact('invalid edn'::TEXT)");
+            let _ = raises_error("SELECT mentat_transact('invalid edn'::TEXT)");
         }
         // System should still work
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"still-works\"]]'::TEXT)").expect("recovery");

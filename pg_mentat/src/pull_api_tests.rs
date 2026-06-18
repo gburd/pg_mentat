@@ -151,7 +151,7 @@ mod tests {
     fn test_pa_pull_many_tags() {
         setup(); setup_pa_schema();
         Spi::run(
-            "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Tagged\" :pa/tags \"a\" :pa/tags \"b\" :pa/tags \"c\"}]'::TEXT)"
+            "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Tagged\"} [:db/add \"e\" :pa/tags \"a\"] [:db/add \"e\" :pa/tags \"b\"] [:db/add \"e\" :pa/tags \"c\"]]'::TEXT)"
         ).expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :pa/name \"Tagged\"]]'::TEXT, '{}'::jsonb)::TEXT",
@@ -169,7 +169,7 @@ mod tests {
     fn test_pa_pull_many_with_single() {
         setup(); setup_pa_schema();
         Spi::run(
-            "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Both\" :pa/val 42 :pa/tags \"x\" :pa/tags \"y\"}]'::TEXT)"
+            "SELECT mentat_transact('[{:db/id \"e\" :pa/name \"Both\" :pa/val 42} [:db/add \"e\" :pa/tags \"x\"] [:db/add \"e\" :pa/tags \"y\"]]'::TEXT)"
         ).expect("tx");
         let q = Spi::get_one::<String>(
             "SELECT mentat_query('[:find ?e . :where [?e :pa/name \"Both\"]]'::TEXT, '{}'::jsonb)::TEXT",

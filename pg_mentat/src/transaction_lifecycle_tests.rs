@@ -48,7 +48,8 @@ mod tests {
             "SELECT mentat_transact('[[:db/add \"e\" :tl/name \"test\"]]'::TEXT)",
         ).expect("tx").expect("NULL");
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-        assert!(j["tx"].is_number() || j["tx_id"].is_number());
+        // The transaction report exposes the tx id as db-after.basis-t.
+        assert!(j["db-after"]["basis-t"].is_number());
     }
 
     #[pg_test]
@@ -160,7 +161,7 @@ mod tests {
                 "SELECT mentat_transact('[[:db/add \"e{}\" :tl/val {}]]'::TEXT)", i, i
             )).expect("tx").expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-            let tx = j["tx"].as_i64().or(j["tx_id"].as_i64()).expect("tx");
+            let tx = j["db-after"]["basis-t"].as_i64().expect("tx");
             tx_ids.push(tx);
         }
         for w in tx_ids.windows(2) {
@@ -177,7 +178,7 @@ mod tests {
                 "SELECT mentat_transact('[[:db/add \"e{}\" :tl/val {}]]'::TEXT)", i, i
             )).expect("tx").expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-            let tx = j["tx"].as_i64().or(j["tx_id"].as_i64()).expect("tx");
+            let tx = j["db-after"]["basis-t"].as_i64().expect("tx");
             tx_ids.push(tx);
         }
         for w in tx_ids.windows(2) {
@@ -194,7 +195,7 @@ mod tests {
                 "SELECT mentat_transact('[[:db/add \"e{}\" :tl/val {}]]'::TEXT)", i, i
             )).expect("tx").expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-            let tx = j["tx"].as_i64().or(j["tx_id"].as_i64()).expect("tx");
+            let tx = j["db-after"]["basis-t"].as_i64().expect("tx");
             tx_ids.push(tx);
         }
         for w in tx_ids.windows(2) {
@@ -211,7 +212,7 @@ mod tests {
                 "SELECT mentat_transact('[[:db/add \"e{}\" :tl/name \"n-{}\"]]'::TEXT)", i, i
             )).expect("tx").expect("NULL");
             let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
-            let tx = j["tx"].as_i64().or(j["tx_id"].as_i64()).expect("tx");
+            let tx = j["db-after"]["basis-t"].as_i64().expect("tx");
             tx_ids.push(tx);
         }
         let unique: std::collections::HashSet<_> = tx_ids.iter().collect();

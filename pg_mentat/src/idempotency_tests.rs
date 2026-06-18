@@ -221,9 +221,12 @@ mod tests {
             Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :id/val 42]]'::TEXT)", eid)).expect("readd");
         }
 
-        // Should still have exactly 1 active datom
+        // Should still have exactly 1 live datom. In the append-only model
+        // a `mentat.datoms WHERE added = true` scan returns every historical
+        // assertion (each re-add appends a new row), so liveness must be read
+        // from the current-state projection.
         let count = Spi::get_one::<i64>(&format!(
-            "SELECT COUNT(*) FROM mentat.datoms WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':id/val') AND added = true", eid
+            "SELECT COUNT(*) FROM mentat.current_datoms WHERE e = {} AND a = (SELECT entid FROM mentat.idents WHERE ident = ':id/val')", eid
         )).expect("q").expect("NULL");
         assert_eq!(count, 1);
 

@@ -144,10 +144,53 @@ latency or disk.
 > **Note on `:last-seen`-style attributes.** Keeping full history of a
 > value that changes every sync is inherently bloat-generating: each
 > change is a retraction + an assertion. If you do not need the history
-> of a monotonic timestamp, consider storing it outside the datom log
-> (e.g. a plain side table keyed by entid that you upsert in place).
-> A first-class "non-historical attribute" class is on the roadmap; until
-> then, the side-table pattern avoids the churn entirely.
+> of a monotonic timestamp, mark the attribute **`:db/noHistory true`**
+> (see below) — noHistory attributes keep only the current value, so
+> they generate no history trail and cannot bloat.
+
+### `:db/noHistory` — non-historical attributes
+
+As of 1.5.0 the datom log is **append-only**: a retraction is a new
+immutable datom, never an in-place flip of the prior assertion. That
+makes history exact, but it also means an attribute whose value changes
+every sync (the `:observed-at` / `:last-seen` class) accumulates one
+assert + one retract datom per change — unbounded growth.
+
+Mark such an attribute `:db/noHistory true` to opt out of history:
+
+```clojure
+{:db/ident :host/last-seen
+ :db/valueType :db.type/instant
+ :db/cardinality :db.cardinality/one
+ :db/noHistory true}
+```
+
+For a `:db/noHistory` attribute, each assertion **physically replaces**
+the prior value in the log (and the projection) instead of appending a
+retraction + assertion. The log holds exactly the current value:
+
+```sql
+-- After 10 updates to a noHistory :host/last-seen:
+SELECT count(*) FROM mentat.datoms_instant_new
+  WHERE e = :host AND a = mentat.attr_id(':host/last-seen');
+-- => 1   (a normal attribute would have ~20 rows: 10 asserts + 10 retracts)
+```
+
+Semantics:
+
+- **Current-time queries are unchanged** — `[?h :host/last-seen ?t]`
+  returns the current value exactly as for a normal attribute.
+- **`:as-of` / history queries see only the current value**, because no
+  prior versions are retained. This is the deliberate trade: you give
+  up time-travel on that attribute in exchange for zero bloat.
+- **Per-attribute, not global** — a noHistory attribute and a
+  full-history attribute on the same entity each behave correctly.
+- This is Datomic-compatible: Datomic's `:db/noHistory` has the same
+  "keep only the current value" meaning.
+
+Use it for high-churn, history-irrelevant values (heartbeats,
+last-seen timestamps, observed counters). Do **not** use it for
+attributes whose history you audit or time-travel.
 
 ## 3. The live projection: `mentat.current()` and `mentat.attr_id()`
 

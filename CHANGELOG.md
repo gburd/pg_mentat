@@ -5,6 +5,131 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-06-17
+
+### The "Append-Only Datom Log" release
+
+Makes the datom log a true immutable append-only log and adds the
+Datomic-compatible `:db/noHistory` attribute class. Driven by the same
+production feedback as 1.4.0: the instant-datom bloat was rooted in
+(a) an in-place `added`-flip on retraction that violated the datom
+model and (b) keeping full history of monotonic timestamps that change
+every sync. Both are now fixed structurally.
+
+This is a **storage-model change** with a required upgrade migration
+(see Upgrading). Current-time query results are unchanged; the
+internal representation of history is not.
+
+### Changed — append-only datom log
+
+- **Retraction no longer flips the prior assertion in place.** A
+  retraction is now a new immutable `(e, a, v, tx, false)` datom; the
+  original `(e, a, v, tx0, true)` row is preserved unchanged. This
+  resolves the 1.4.0 "redundant retraction row" Known Issue at its
+  root — the in-place flip *was* the bug; appending the retraction is
+  the correct Datomic behavior.
+- **Current-time queries read a maintained current-state projection**
+  (nine `mentat.current_<type>` tables) instead of resolving
+  latest-tx-wins over the full log. `:as-of` / `:since` / history
+  queries continue to read the append-only log.
+- **`fillfactor` 85/90 → 100** on the nine `datoms_*_new` log tables.
+  Append-only tables never update in place, so the reserved
+  HOT-update space the old flip required is pure waste.
+
+### Added — current-state projection (the read path)
+
+- Nine `mentat.current_<type>` tables holding only live datoms,
+  maintained in lock-step with the log inside each transaction.
+- `mentat.current_datoms` view (union over the nine, legacy
+  `datoms`-shaped columns) for callers needing current state.
+- `mentat.rebuild_current_projection(store)` — repopulate from the log
+  (used by the upgrade and for recovery).
+- `mentat.verify_current_projection(store)` — returns the count of
+  rows where the projection disagrees with a fresh latest-tx-wins
+  resolution of the log; `0` means consistent. Used as the cutover
+  safety gate and in tests.
+
+### Added — `:db/noHistory` attributes
+
+- Datomic-compatible `:db/noHistory true` attribute flag. A noHistory
+  attribute keeps **only the current value**: each assertion
+  physically replaces the prior value in the log and projection
+  instead of appending a retraction + assertion. The structural fix
+  for monotonic-attribute bloat (`:last-seen` / `:observed-at`):
+  10 updates leave 1 log row, not ~20.
+- Per-attribute and per-cardinality (one and many). Current-time
+  queries behave identically to a normal attribute; `:as-of` sees
+  only the current value (the trade for zero bloat).
+
+### Fixed (exposed by the conversion)
+
+- `:db.fn/cas` read the current value via `datoms WHERE added=true`,
+  which in the append-only model returns superseded historical
+  assertions too. CAS now reads `mentat.current_datoms`.
+- `batch_insert_datoms` dedups by full PK `(e,a,v,tx,added)`: CAS
+  queues a retraction and the cardinality-one replace path
+  independently queues the same one; a single `INSERT ... ON CONFLICT`
+  cannot list a key twice.
+- `is_duplicate_cardinality_many` reads the projection (presence ==
+  live) rather than an `added=true` log scan.
+- `pull`, `(fulltext)`, and the extension-search where-fns
+  (`(fuzzy-match)`/pg_tre, `(similar-to)`/pg_trgm, `(rum-fulltext)`/rum,
+  `(infer-near)`/pg_infer) read the current-state projection, so they
+  no longer return values that were replaced or retracted. The
+  extension index helpers (`create_trgm_index`, `create_rum_fulltext_index`,
+  …) now build on `mentat.current_text` rather than the log table.
+- Reverse-reference (`:ns/_attr`) and recursive-reference pull
+  traversals read the projection instead of the append-only log.
+
+### Fixed — query/transaction correctness (fail-loud)
+
+- `(pull ?e [...])` inside a `:find` clause is now implemented; it
+  previously produced a NULL column. The result nests as a JSON object.
+- The `mentat.edn` type's text input parsed nothing (returned NULL for
+  all valid EDN); it now round-trips raw EDN via an explicit I/O impl.
+- A scalar supplied through `:in` and used only in a predicate (e.g.
+  `[(>= ?age ?min)]`) was rejected as unbound; it now binds correctly.
+- An unknown transaction op, a malformed assertion, an incomplete
+  schema-attribute definition, an unbound `:find` variable, and an
+  unknown attribute in a query now all fail loud with a
+  `:db.error/*` message instead of silently returning wrong or empty
+  results. A bare `:db/ident` (naming a non-attribute entity, e.g. an
+  enum value) is no longer mis-flagged as an incomplete attribute.
+
+### Tests
+
+- `current_projection_tests` (8), `no_history_tests` (6) — all green.
+- `history_tests::test_hi_many_retract_history` (failing on 1.4.0)
+  now passes.
+- **Full suite is green: 1829 passed, 0 failed.** The pre-existing
+  test debt (108 failures across ~30 suites — obsolete `idx_datoms_*`
+  introspection from the storage redesign plus scattered functional
+  rot) has been cleared, partly by retargeting stale tests to the
+  narrow-table / projection model and partly by the fail-loud fixes
+  above (several failures were correct tests guarding real bugs).
+- The `1.4.0 → 1.5.0` in-place upgrade is qualified end to end:
+  install 1.4.0, load data, `ALTER EXTENSION … UPDATE TO '1.5.0'`,
+  then `verify_current_projection(0) = 0` and current-time queries
+  return results identical to pre-upgrade.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.0';
+```
+
+The migration creates the projection tables, retunes the log tables to
+`fillfactor=100`, and — **required** — runs
+`mentat.rebuild_current_projection(0)` to populate the projection from
+the existing log. Without that population step, current-time queries
+return nothing. The migration handles it automatically; if you build a
+store by other means, call `rebuild_current_projection` yourself.
+
+Pre-1.5.0 history was flip-based; those rows remain as-is. The
+projection is rebuilt by latest-tx-wins resolution, which is correct
+against both flip-era and append-only-era history. All retractions
+going forward are appended, never flipped.
+
 ## [1.4.0] - 2026-06-16
 
 ### The "Production Throughput & Bloat" release

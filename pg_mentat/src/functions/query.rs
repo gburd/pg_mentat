@@ -211,6 +211,31 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i64, Box<dyn std::error::Erro
 ///
 /// `store_id_param` is the $N placeholder for the store_id parameter.
 fn build_datoms_union_subquery(store_id_param: &str) -> String {
+    build_datoms_union_subquery_opt(store_id_param, false)
+}
+
+/// UNION-ALL over the nine type tables. When `use_projection` is true, reads
+/// the current-state projection tables (current_<type>, all rows live, so
+/// `true AS added`) instead of the append-only log tables. Used for
+/// variable-typed-attribute patterns where the type isn't known at compile
+/// time so a single typed table can't be selected.
+fn build_datoms_union_subquery_opt(store_id_param: &str, use_projection: bool) -> String {
+    // Pick log vs projection table names and the `added` column expression.
+    let t = |log: &str, cur: &str| -> String {
+        if use_projection { format!("mentat.{cur}") } else { format!("mentat.{log}") }
+    };
+    let added = if use_projection { "true" } else { "added" };
+    let (t_ref, t_bool, t_long, t_double, t_instant, t_text, t_kw, t_uuid, t_bytes) = (
+        t("datoms_ref_new", "current_ref"),
+        t("datoms_boolean_new", "current_boolean"),
+        t("datoms_long_new", "current_long"),
+        t("datoms_double_new", "current_double"),
+        t("datoms_instant_new", "current_instant"),
+        t("datoms_text_new", "current_text"),
+        t("datoms_keyword_new", "current_keyword"),
+        t("datoms_uuid_new", "current_uuid"),
+        t("datoms_bytes_new", "current_bytes"),
+    );
     // Cast every per-arm tag literal to SMALLINT so the UNION result column
     // is SMALLINT. Casting only the first arm is not enough — Postgres resolves
     // the UNION type across all arms and an untyped `1` / `2` / ... promotes
@@ -220,40 +245,40 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
                 v AS v_ref, NULL::BOOLEAN AS v_bool, NULL::BIGINT AS v_long, \
                 NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                 NULL::TEXT AS v_keyword, NULL::TIMESTAMPTZ AS v_instant, \
-                NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, added \
-         FROM mentat.datoms_ref_new WHERE store_id = {sid} \
+                NULL::UUID AS v_uuid, NULL::BYTEA AS v_bytes, tx, {added} AS added \
+         FROM {t_ref} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {bool_tag}::SMALLINT, \
-                NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_boolean_new WHERE store_id = {sid} \
+                NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_bool} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {long_tag}::SMALLINT, \
-                NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_long_new WHERE store_id = {sid} \
+                NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_long} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {double_tag}::SMALLINT, \
-                NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_double_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_double} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {instant_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, added \
-         FROM mentat.datoms_instant_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, tx, {added} \
+         FROM {t_instant} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {str_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_text_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, tx, {added} \
+         FROM {t_text} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {kw_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, added \
-         FROM mentat.datoms_keyword_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, tx, {added} \
+         FROM {t_kw} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {uuid_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, added \
-         FROM mentat.datoms_uuid_new WHERE store_id = {sid} \
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, NULL, tx, {added} \
+         FROM {t_uuid} WHERE store_id = {sid} \
          UNION ALL \
          SELECT e, a, {bytes_tag}::SMALLINT, \
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, added \
-         FROM mentat.datoms_bytes_new WHERE store_id = {sid})",
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v, tx, {added} \
+         FROM {t_bytes} WHERE store_id = {sid})",
         sid = store_id_param,
         ref_tag = type_tag::REF,
         bool_tag = type_tag::BOOLEAN,
@@ -270,10 +295,10 @@ fn build_datoms_union_subquery(store_id_param: &str) -> String {
 /// Build a FROM-clause fragment for a single datoms-like table alias.
 ///
 /// This generates `(UNION ALL subquery) AS alias` with store_id filtering.
-fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
+fn build_datoms_from_fragment(alias: &str, store_id_param: &str, use_projection: bool) -> String {
     format!(
         "{} AS {}",
-        build_datoms_union_subquery(store_id_param),
+        build_datoms_union_subquery_opt(store_id_param, use_projection),
         alias
     )
 }
@@ -287,6 +312,11 @@ fn build_datoms_from_fragment(alias: &str, store_id_param: &str) -> String {
 struct TypedTableInfo {
     /// The table name (e.g., "mentat.datoms_text_new").
     table: &'static str,
+    /// The current-state projection table for this type (e.g.,
+    /// "mentat.current_text"). Read instead of `table` for current-time
+    /// (non-as-of) queries: it holds only live datoms, so liveness needs no
+    /// `added=true` filter or latest-tx-wins resolution over the log.
+    current_table: &'static str,
     /// The SQL type of the native `v` column (e.g., "TEXT", "BIGINT").
     _sql_type: &'static str,
     /// The type tag constant for this value type.
@@ -304,54 +334,63 @@ fn value_type_to_table_info(value_type: &str) -> Option<TypedTableInfo> {
     match value_type {
         "ref" => Some(TypedTableInfo {
             table: "mentat.datoms_ref_new",
+            current_table: "mentat.current_ref",
             _sql_type: "BIGINT",
             type_tag: type_tag::REF,
             value_column: "v_ref",
         }),
         "boolean" => Some(TypedTableInfo {
             table: "mentat.datoms_boolean_new",
+            current_table: "mentat.current_boolean",
             _sql_type: "BOOLEAN",
             type_tag: type_tag::BOOLEAN,
             value_column: "v_bool",
         }),
         "long" => Some(TypedTableInfo {
             table: "mentat.datoms_long_new",
+            current_table: "mentat.current_long",
             _sql_type: "BIGINT",
             type_tag: type_tag::LONG,
             value_column: "v_long",
         }),
         "double" => Some(TypedTableInfo {
             table: "mentat.datoms_double_new",
+            current_table: "mentat.current_double",
             _sql_type: "DOUBLE PRECISION",
             type_tag: type_tag::DOUBLE,
             value_column: "v_double",
         }),
         "instant" => Some(TypedTableInfo {
             table: "mentat.datoms_instant_new",
+            current_table: "mentat.current_instant",
             _sql_type: "TIMESTAMPTZ",
             type_tag: type_tag::INSTANT,
             value_column: "v_instant",
         }),
         "string" => Some(TypedTableInfo {
             table: "mentat.datoms_text_new",
+            current_table: "mentat.current_text",
             _sql_type: "TEXT",
             type_tag: type_tag::STRING,
             value_column: "v_text",
         }),
         "keyword" => Some(TypedTableInfo {
             table: "mentat.datoms_keyword_new",
+            current_table: "mentat.current_keyword",
             _sql_type: "TEXT",
             type_tag: type_tag::KEYWORD,
             value_column: "v_keyword",
         }),
         "uuid" => Some(TypedTableInfo {
             table: "mentat.datoms_uuid_new",
+            current_table: "mentat.current_uuid",
             _sql_type: "UUID",
             type_tag: type_tag::UUID,
             value_column: "v_uuid",
         }),
         "bytes" => Some(TypedTableInfo {
             table: "mentat.datoms_bytes_new",
+            current_table: "mentat.current_bytes",
             _sql_type: "BYTEA",
             type_tag: type_tag::BYTES,
             value_column: "v_bytes",
@@ -463,6 +502,7 @@ fn build_typed_datoms_from_fragment_with_pushdown(
     store_id_param: &str,
     info: &TypedTableInfo,
     pushdown: Option<&PushdownConditions>,
+    use_projection: bool,
 ) -> String {
     // Build the SELECT list with the native column in its correct position
     // and NULLs for all other typed columns.
@@ -476,10 +516,22 @@ fn build_typed_datoms_from_fragment_with_pushdown(
     let v_uuid = if info.value_column == "v_uuid" { "v" } else { "NULL::UUID" };
     let v_bytes = if info.value_column == "v_bytes" { "v" } else { "NULL::BYTEA" };
 
+    // Current-time queries read the current-state projection (only live
+    // datoms, no `added` column). As-of / history queries read the
+    // append-only log and keep the `added` column for supersession logic.
+    let (table, added_col, drop_added_pushdown) = if use_projection {
+        // Projection rows are all live: synthesize `true AS added`.
+        (info.current_table, "true AS added", true)
+    } else {
+        (info.table, "added", false)
+    };
+
     // Build pushdown WHERE conditions for direct index usage
     let mut extra_where = String::new();
     if let Some(pd) = pushdown {
-        if pd.added_true {
+        // The projection has no `added` column; its presence == live, so the
+        // `AND added` pushdown is both unnecessary and invalid there.
+        if pd.added_true && !drop_added_pushdown {
             extra_where.push_str(" AND added");
         }
         if let Some(ref attr_entid) = pd.attribute_entid {
@@ -492,10 +544,9 @@ fn build_typed_datoms_from_fragment_with_pushdown(
                 {v_ref} AS v_ref, {v_bool} AS v_bool, {v_long} AS v_long, \
                 {v_double} AS v_double, {v_text} AS v_text, \
                 {v_keyword} AS v_keyword, {v_instant} AS v_instant, \
-                {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, added \
+                {v_uuid} AS v_uuid, {v_bytes} AS v_bytes, tx, {added_col} \
          FROM {table} WHERE store_id = {sid}{extra}) AS {alias}",
         tag = info.type_tag,
-        table = info.table,
         sid = store_id_param,
         extra = extra_where,
     )
@@ -1086,6 +1137,12 @@ pub(crate) fn mentat_query_internal(
         // automatically.
         apply_optimizer_hints(client, &complexity);
 
+        // Pull columns return a JSON object as text; parse those as JSON so
+        // they nest as real objects in the result rather than as a string.
+        let pull_cols: Vec<bool> = (0..find_vars.len())
+            .map(|i| matches!(get_find_element(&parsed_query.find_spec, i), Some(Element::Pull(_))))
+            .collect();
+
         let mut rows_json = Vec::new();
         let row_limit = if !has_explicit_limit && max_rows > 0 {
             max_rows as usize
@@ -1116,7 +1173,15 @@ pub(crate) fn mentat_query_internal(
                 let col_idx = (idx + 1) as usize;
 
                 if let Ok(Some(val)) = row.get::<String>(col_idx) {
-                    row_values.push(decode_text_result(&val));
+                    if pull_cols.get(idx).copied().unwrap_or(false) {
+                        // Parse pull JSON text into a nested object/array.
+                        match serde_json::from_str::<serde_json::Value>(&val) {
+                            Ok(v) => row_values.push(v),
+                            Err(_) => row_values.push(json!(val)),
+                        }
+                    } else {
+                        row_values.push(decode_text_result(&val));
+                    }
                 } else {
                     row_values.push(json!(null));
                 }
@@ -1772,7 +1837,9 @@ fn element_to_var_name(elem: &Element) -> Option<String> {
             })
         }
         Element::Corresponding(v) => Some(format!("{}", v)),
-        Element::Pull(_) => None,
+        // The pull's entity variable must be tracked/bound by :where so the
+        // SELECT can pull for each matched entity.
+        Element::Pull(pull) => Some(format!("{}", pull.var)),
     }
 }
 
@@ -1834,14 +1901,28 @@ fn bind_constant_value(
     alias: &str,
     place: &PatternValuePlace,
     builder: &mut SqlBuilder<'_>,
+    value_type: Option<&str>,
 ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
     match place {
+        // An integer constant in value position is ambiguous: it can be a
+        // long or a ref (entity id). EDN parses both as EntidOrInteger.
+        // When the attribute is ref-typed, the value lives in v_ref with
+        // value_type_tag = REF, not v_long/LONG -- match that column so
+        // `[?e :attr <entid>]` patterns resolve. Without this, ref-constant
+        // value patterns never match (v_long is NULL in the ref table).
         PatternValuePlace::EntidOrInteger(i) => {
             let param = builder.bind_bigint(*i);
-            Ok(Some(format!(
-                "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
-                tag = type_tag::LONG
-            )))
+            if value_type == Some("ref") {
+                Ok(Some(format!(
+                    "({alias}.v_ref = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::REF
+                )))
+            } else {
+                Ok(Some(format!(
+                    "({alias}.v_long = {param} AND {alias}.value_type_tag = {tag})",
+                    tag = type_tag::LONG
+                )))
+            }
         }
         PatternValuePlace::IdentOrKeyword(kw) => {
             let ident_str = keyword_to_ident(kw);
@@ -2398,9 +2479,9 @@ fn build_sql_from_datalog_enriched(
     }
 
     // Build the base query (skip if we only have OR clauses)
-    let (base_sql, base_var_to_alias) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
+    let (base_sql, base_var_to_alias, base_var_to_type) = if pattern_clauses.is_empty() && !or_joins.is_empty() {
         // No base patterns, only OR clauses - will be handled below
-        (String::new(), HashMap::new())
+        (String::new(), HashMap::new(), HashMap::new())
     } else {
         build_extended_pattern_query(
             &pattern_clauses,
@@ -2640,7 +2721,7 @@ fn build_sql_from_datalog_enriched(
             let mut combined_not_joins: Vec<&edn::query::NotJoin> = not_joins.clone();
             combined_not_joins.extend(arm_not_joins);
 
-            let (arm_sql, _arm_var_to_alias) = build_extended_pattern_query(
+            let (arm_sql, _arm_var_to_alias, _arm_var_to_type) = build_extended_pattern_query(
                 &combined_patterns,
                 &combined_not_joins,
                 &combined_predicates,
@@ -2690,7 +2771,12 @@ fn build_sql_from_datalog_enriched(
     } else {
         Some(&base_var_to_alias)
     };
-    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref);
+    let var_type_ref = if has_union {
+        None
+    } else {
+        Some(&base_var_to_type)
+    };
+    let query_sql = append_order_by(query_sql, &parsed.order, find_vars, var_alias_ref, var_type_ref);
 
     // If no explicit ORDER BY was specified and we have fulltext joins with score
     // bindings, automatically order by relevance score descending. This ensures
@@ -3002,11 +3088,15 @@ fn build_fulltext_join(
 
     let attr_param = builder.bind_text(attr_ident);
 
+    // Fulltext resolves CURRENT values: search the current-state projection
+    // (mentat.current_text), not the append-only log. The log keeps the old
+    // assertion (added=true) after a replace, so searching it would match
+    // stale text. current_text holds only the live value and has no `added`
+    // column.
     let mut where_parts = Vec::new();
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
 
     let mut score_expr: Option<String> = None;
@@ -3074,7 +3164,7 @@ fn build_fulltext_join(
     }
 
     // Query datoms_text_new directly -- no fulltext table join needed.
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3164,7 +3254,6 @@ fn build_fuzzy_match_join(
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
     // The %~~ operator and tre_pattern() function are provided by the
     // pg_tre extension. Cast k to int4 since tre_pattern's two-arg variant
@@ -3193,7 +3282,7 @@ fn build_fuzzy_match_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3288,11 +3377,15 @@ fn build_similar_to_join(
     let needle_param = builder.bind_text(needle);
     let threshold_param = builder.bind_double(threshold);
 
+    // Search the current-state projection (mentat.current_text): trigram
+    // similarity should match only LIVE values, not strings replaced or
+    // retracted in the append-only log. The partial trgm index built by
+    // mentat.create_trgm_index now lives on current_text too. No `added`
+    // column on the projection.
     let mut where_parts = Vec::new();
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
     // similarity() is provided by pg_trgm. The expression returns float in
     // [0.0, 1.0]; we filter and (optionally) project it as the score.
@@ -3326,7 +3419,7 @@ fn build_similar_to_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3404,7 +3497,6 @@ fn build_rum_fulltext_join(
     where_parts.push(format!(
         "{dt_alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param})"
     ));
-    where_parts.push(format!("{dt_alias}.added = true"));
     where_parts.push(format!("{dt_alias}.store_id = {store_id_param}"));
 
     let mut score_expr: Option<String> = None;
@@ -3461,7 +3553,7 @@ fn build_rum_fulltext_join(
         }
     }
 
-    let from_fragment = format!("mentat.datoms_text_new AS {dt_alias}");
+    let from_fragment = format!("mentat.current_text AS {dt_alias}");
 
     Ok(FtsJoin {
         from_fragment,
@@ -3853,9 +3945,8 @@ fn build_infer_near_join(
     // scan with a sort.
     let from_fragment = format!(
         "(SELECT e, (v <~> ({needle_param})::TEXT) AS infer_dist \
-         FROM mentat.datoms_text_new \
+         FROM mentat.current_text \
          WHERE a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {attr_param}) \
-           AND added = true \
            AND store_id = {store_id_param} \
          ORDER BY v <~> ({needle_param})::TEXT \
          LIMIT {k_param}) AS {dt_alias}"
@@ -4669,20 +4760,56 @@ fn append_order_by(
     order: &Option<Vec<Order>>,
     find_vars: &[String],
     var_to_alias: Option<&HashMap<String, (String, &'static str)>>,
+    var_to_type: Option<&HashMap<String, Option<String>>>,
 ) -> String {
     if let Some(ref orders) = order {
         if orders.is_empty() {
             return sql;
         }
 
-        // Check if any ordered variable is a numeric column (e, a, tx)
-        let has_numeric_order = var_to_alias.map_or(false, |vta| {
-            orders.iter().any(|Order(_, var)| {
-                let var_name = format!("{}", var);
-                vta.get(var_name.as_str())
-                    .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx")
-            })
-        });
+        // Determine whether an ordered variable needs a numeric cast. Two
+        // cases need it:
+        //   * the variable is bound to a numeric meta-column (e, a, tx), or
+        //   * the variable is bound to a value column ("v") whose attribute
+        //     value type is numeric/orderable-as-number (long, ref, double,
+        //     instant) -- those are projected as TEXT, so a bare ORDER BY
+        //     sorts them lexicographically ("10" < "2"). Cast to BIGINT /
+        //     DOUBLE PRECISION / TIMESTAMPTZ so ordering is numeric/temporal.
+        let numeric_cast_for = |var_name: &str| -> Option<&'static str> {
+            // Meta-columns e/a/tx -> BIGINT.
+            if let Some(vta) = var_to_alias {
+                if let Some((_, col)) = vta.get(var_name) {
+                    if *col == "e" || *col == "a" || *col == "tx" {
+                        return Some("BIGINT");
+                    }
+                    if *col == "v" {
+                        // Value column: cast based on the attribute's type.
+                        // Only types whose decoded TEXT form is a plain,
+                        // castable scalar qualify: long/ref decode to integer
+                        // text, instant to an ISO timestamp. double decodes to
+                        // an internal 'd:<bits>' form (for exact round-trip)
+                        // that is NOT castable, so it is intentionally left as
+                        // lexicographic ordering rather than erroring -- correct
+                        // numeric ordering for doubles needs the raw column and
+                        // is a separate fix.
+                        if let Some(vtt) = var_to_type {
+                            if let Some(Some(ty)) = vtt.get(var_name) {
+                                return match ty.as_str() {
+                                    "long" | "ref" => Some("BIGINT"),
+                                    "instant" => Some("TIMESTAMPTZ"),
+                                    _ => None,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let has_numeric_order = orders
+            .iter()
+            .any(|Order(_, var)| numeric_cast_for(&format!("{}", var)).is_some());
 
         let mut order_parts = Vec::new();
         for Order(direction, var) in orders {
@@ -4693,12 +4820,8 @@ fn append_order_by(
                     Direction::Descending => "DESC",
                 };
                 if has_numeric_order {
-                    // Use column alias from the subquery wrapper
-                    let is_numeric = var_to_alias
-                        .and_then(|vta| vta.get(var_name.as_str()))
-                        .map_or(false, |(_, col)| *col == "e" || *col == "a" || *col == "tx");
-                    if is_numeric {
-                        order_parts.push(format!("_c{}::BIGINT {}", col_pos + 1, dir));
+                    if let Some(cast_ty) = numeric_cast_for(&var_name) {
+                        order_parts.push(format!("_c{}::{} {}", col_pos + 1, cast_ty, dir));
                     } else {
                         order_parts.push(format!("_c{} {}", col_pos + 1, dir));
                     }
@@ -4984,7 +5107,11 @@ fn build_extended_pattern_query(
     get_else_clauses: &[GetElseClause],
     missing_clauses: &[MissingClause],
 ) -> Result<
-    (String, HashMap<String, (String, &'static str)>),
+    (
+        String,
+        HashMap<String, (String, &'static str)>,
+        HashMap<String, Option<String>>,
+    ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
     // Track variable bindings to datom table aliases
@@ -5063,6 +5190,19 @@ fn build_extended_pattern_query(
         match &pattern.attribute {
             PatternNonValuePlace::Ident(kw) => {
                 let ident_str = keyword_to_ident(kw);
+                // Fail loud: a query against an unregistered attribute is a
+                // mistake, not an empty result. Resolving the ident in a
+                // subquery would silently yield NULL (matching nothing).
+                let store_name = store_name_from_prefix(schema_prefix);
+                let cache = crate::cache::get_cache_for_store(store_name);
+                if cache.resolve_ident(&ident_str).is_none() {
+                    return Err(format!(
+                        ":db.error/unknown-attribute Attribute {} is not registered in the \
+                         schema. Define it with a :db/ident schema assertion before querying it.",
+                        ident_str
+                    )
+                    .into());
+                }
                 let param = builder.bind_text(ident_str);
                 where_clauses.push(format!(
                     "{alias}.a = (SELECT entid FROM {schema_prefix}schema WHERE ident = {param})"
@@ -5124,7 +5264,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                 }
             }
             _ => {
-                if let Some(constraint) = bind_constant_value(&alias, &pattern.value, builder)? {
+                if let Some(constraint) = bind_constant_value(
+                    &alias, &pattern.value, builder, pattern_value_type.as_deref(),
+                )? {
                     where_clauses.push(constraint);
                 }
             }
@@ -5248,14 +5390,22 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             PushdownConditions { added_true, attribute_entid }
         };
 
+        // Read from the current-state projection for current-time queries
+        // (no as-of / since / history): it holds only live datoms, so it
+        // needs no `added` filter or latest-tx-wins resolution. Temporal
+        // queries must read the append-only log.
+        let use_projection = temporal.as_of.is_none()
+            && temporal.since.is_none()
+            && !temporal.history;
+
         // Use the typed single-table FROM fragment or fall back to UNION ALL
         if let Some(info) = &typed_info {
             joins.push(build_typed_datoms_from_fragment_with_pushdown(
-                &alias, store_id_param, info, Some(&pushdown),
+                &alias, store_id_param, info, Some(&pushdown), use_projection,
             ));
             crate::monitoring::record_schema_aware_hit();
         } else {
-            joins.push(build_datoms_from_fragment(&alias, store_id_param));
+            joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
             crate::monitoring::record_union_all_fallback();
         }
     }
@@ -5466,7 +5616,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             }
             continue;
         }
-        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, builder)?;
+        let pred_sql = build_predicate_clause(pred, &var_to_alias, &var_to_type, input_bindings, builder)?;
         where_clauses.push(pred_sql);
     }
 
@@ -5487,6 +5637,41 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             if let Some(Element::Aggregate(agg)) = elem {
                 let agg_sql = build_aggregate_select(agg, &var_to_alias, &extra_var_bindings)?;
                 select_exprs.push(agg_sql);
+            }
+        } else if let Some(Element::Pull(pull)) = elem {
+            // (pull ?e [:attr ...]) in :find -- emit a correlated call to the
+            // pull machinery for each matched entity. The entity variable
+            // must be bound by :where (resolved via var_to_alias to its `e`
+            // column). The pull pattern is serialized back to EDN text.
+            let pull_var = format!("{}", pull.var);
+            let entity_expr = match var_to_alias.get(pull_var.as_str()) {
+                Some((alias, "e")) => format!("{alias}.e"),
+                Some((alias, "v")) => format!("({})::BIGINT", build_numeric_value_decode_expr(alias)),
+                Some((alias, col)) => format!("{alias}.{col}"),
+                None => {
+                    return Err(format!(
+                        ":db.error/unbound-variable pull entity variable {} is not bound by \
+                         any :where clause.",
+                        pull_var
+                    )
+                    .into());
+                }
+            };
+            // Serialize the pull pattern: [:attr1 :attr2 ...] (or [*]).
+            let mut pat = String::from("[");
+            for (i, p) in pull.patterns.iter().enumerate() {
+                if i > 0 {
+                    pat.push(' ');
+                }
+                pat.push_str(&format!("{}", p));
+            }
+            pat.push(']');
+            let pat_param = builder.bind_text(pat);
+            // mentat_pull(pattern TEXT, entity_id BIGINT) -> jsonb; cast to
+            // text so it flows through the TEXT result-column path.
+            select_exprs.push(format!("mentat_pull({pat_param}, {entity_expr})::TEXT"));
+            if has_aggregates {
+                group_by_exprs.push(format!("{}", col_idx + 1));
             }
         } else if let Some(expr) = extra_var_bindings.get(var_display) {
             // Computed variable (from FTS or arithmetic binding)
@@ -5511,7 +5696,17 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
                     group_by_exprs.push(format!("{}", col_idx + 1));
                 }
             } else {
-                select_exprs.push("NULL::TEXT".to_string());
+                // Fail loud: a :find variable that is bound by no :where clause
+                // (pattern, binding, or :in input) is a query mistake. Emitting
+                // NULL silently returns a column of nulls instead of surfacing
+                // the error.
+                return Err(format!(
+                    ":db.error/unbound-variable :find variable {} is not bound by any \
+                     :where clause or :in input. Every :find variable must appear in a \
+                     data pattern, a binding function, or the :in clause.",
+                    inner_var
+                )
+                .into());
             }
         }
     }
@@ -5559,7 +5754,7 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         sql.push_str(&format!(" GROUP BY {}", group_by_exprs.join(", ")));
     }
 
-    Ok((sql, var_to_alias))
+    Ok((sql, var_to_alias, var_to_type))
 }
 
 /// Get the Element at the given index from a FindSpec.
@@ -5845,7 +6040,9 @@ fn build_not_exists_subquery(
                     PatternNonValuePlace::Placeholder => {}
                 }
 
-                // Value position
+                // Value position. Resolve the attribute's value type first so
+                // an integer constant against a ref attribute binds v_ref/REF.
+                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
                 match &p.value {
                     PatternValuePlace::Variable(v) => {
                         let var_name = format!("{}", v);
@@ -5870,14 +6067,15 @@ fn build_not_exists_subquery(
                         }
                     }
                     _ => {
-                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
+                        if let Some(constraint) = bind_constant_value(
+                            &alias, &p.value, builder, not_pattern_value_type.as_deref(),
+                        )? {
                             sub_where.push(constraint);
                         }
                     }
                 }
 
                 // Schema-aware: resolve type early for FROM, NOT EXISTS, and predicates
-                let not_pattern_value_type = resolve_pattern_value_type(&p.attribute, schema_prefix);
                 let typed_info = not_pattern_value_type.as_ref()
                     .and_then(|vt| value_type_to_table_info(vt));
 
@@ -5955,9 +6153,12 @@ fn build_not_exists_subquery(
                 if let Some(info) = &typed_info {
                     sub_joins.push(build_typed_datoms_from_fragment_with_pushdown(
                         &alias, store_id_param, info, Some(&not_pushdown),
+                        temporal.as_of.is_none()
+                            && temporal.since.is_none()
+                            && !temporal.history,
                     ));
                 } else {
-                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                    sub_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
                 }
 
                 // Track locally-bound variables for predicates within this NOT clause.
@@ -5988,7 +6189,13 @@ fn build_not_exists_subquery(
                 // Predicates inside NOT add WHERE conditions to the subquery.
                 // Variables referenced by the predicate must be bound either by
                 // patterns within this NOT clause or by the outer query.
-                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, builder)?;
+                // NOT-clause predicates resolve their vars from the NOT-local
+                // and outer pattern bindings. :in scalar inputs used only
+                // inside a NOT predicate are not threaded here (rare; an empty
+                // map preserves the prior behavior — such a var surfaces the
+                // usual unbound-var error).
+                let no_inputs: HashMap<String, serde_json::Value> = HashMap::new();
+                let pred_sql = build_predicate_clause(pred, &not_var_to_alias, &not_var_to_type, &no_inputs, builder)?;
                 sub_where.push(pred_sql);
             }
             _ => {
@@ -6020,6 +6227,7 @@ fn build_predicate_clause(
     pred: &Predicate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
     var_to_type: &HashMap<String, Option<String>>,
+    input_bindings: &HashMap<String, serde_json::Value>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let op = pred.operator.0.as_str();
@@ -6033,8 +6241,8 @@ fn build_predicate_clause(
                 op, pred.args.len(), op
             ).into());
         }
-        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
-        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
+        let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
+        let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
         let sql_op = if op == "like" { "LIKE" } else { "ILIKE" };
         return Ok(format!("({} {} {})", left, sql_op, right));
     }
@@ -6073,8 +6281,8 @@ fn build_predicate_clause(
         }
     }
 
-    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, builder)?;
-    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, builder)?;
+    let left = pred_arg_to_sql(&pred.args[0], var_to_alias, var_to_type, input_bindings, builder)?;
+    let right = pred_arg_to_sql(&pred.args[1], var_to_alias, var_to_type, input_bindings, builder)?;
 
     Ok(format!("({} {} {})", left, sql_op, right))
 }
@@ -6134,6 +6342,7 @@ fn pred_arg_to_sql(
     arg: &FnArg,
     var_to_alias: &HashMap<String, (String, &'static str)>,
     var_to_type: &HashMap<String, Option<String>>,
+    input_bindings: &HashMap<String, serde_json::Value>,
     builder: &mut SqlBuilder<'_>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match arg {
@@ -6183,10 +6392,32 @@ fn pred_arg_to_sql(
                 } else {
                     Ok(format!("{}.{}", alias, col))
                 }
+            } else if let Some(val) = input_bindings.get(var_name.as_str()) {
+                // Not bound by a pattern, but supplied via the :in clause as a
+                // scalar input (e.g. [:find ... :in ?min-age :where ...
+                // [(>= ?age ?min-age)]]). Bind the input value directly as a
+                // parameter so predicate-only input vars work.
+                if let Some(i) = val.as_i64() {
+                    Ok(builder.bind_bigint(i))
+                } else if let Some(f) = val.as_f64() {
+                    Ok(builder.bind_double(f))
+                } else if let Some(b) = val.as_bool() {
+                    Ok(if b { "1".to_string() } else { "0".to_string() })
+                } else if let Some(s) = val.as_str() {
+                    Ok(builder.bind_text(s.to_string()))
+                } else {
+                    Err(format!(
+                        ":db.error/unsupported-pred-arg :in input '{}' has an unsupported \
+                         JSON type for use in a predicate.",
+                        var_name
+                    )
+                    .into())
+                }
             } else {
                 Err(format!(
                     ":db.error/unbound-var Unbound variable '{}' in predicate. \
-                     Every variable used in a predicate must first appear in a :where pattern. \
+                     Every variable used in a predicate must first appear in a :where pattern \
+                     or be supplied via the :in clause. \
                      Add a pattern like [?e :some-attr {}] to bind it.",
                     var_name, var_name
                 ).into())
@@ -6692,7 +6923,9 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                         }
                     }
                     _ => {
-                        if let Some(constraint) = bind_constant_value(&alias, &p.value, builder)? {
+                        if let Some(constraint) = bind_constant_value(
+                            &alias, &p.value, builder, rule_pattern_value_type.as_deref(),
+                        )? {
                             where_parts.push(constraint);
                         }
                     }
@@ -6776,9 +7009,12 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes"
                 if let Some(info) = &typed_info {
                     pattern_joins.push(build_typed_datoms_from_fragment_with_pushdown(
                         &alias, store_id_param, info, Some(&rule_pushdown),
+                        temporal.as_of.is_none()
+                            && temporal.since.is_none()
+                            && !temporal.history,
                     ));
                 } else {
-                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param));
+                    pattern_joins.push(build_datoms_from_fragment(&alias, store_id_param, temporal.as_of.is_none() && temporal.since.is_none() && !temporal.history));
                 }
             }
             WhereClause::RuleExpr(ri) if ri.name.0.as_str() == rule_name => {

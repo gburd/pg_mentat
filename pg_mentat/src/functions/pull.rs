@@ -60,6 +60,15 @@ fn build_union_all_datoms_query(
     where_clause: &str,
     order_clause: &str,
 ) -> String {
+    // pull resolves CURRENT attribute values. In the append-only model the
+    // log retains every historical assertion plus its later retraction, so a
+    // `... added = true` scan of the log would return superseded and
+    // retracted values. Read the current-state projection
+    // (mentat.current_<type>) instead: it holds exactly the live datoms, has
+    // no `added` column, and is maintained in lock-step with the log.
+    // Callers still pass `added = true` for the legacy log shape, so strip
+    // that predicate (invalid against the projection, which has no `added`).
+    let whr = sanitize_added_predicate(where_clause);
     // Every arm's tag must be cast to ::SMALLINT. Casting only the first arm
     // does NOT force the UNION column type: Postgres resolves the common type
     // across ALL arms, and untyped integer literals elsewhere promote the
@@ -73,54 +82,54 @@ fn build_union_all_datoms_query(
                    NULL::DOUBLE PRECISION AS v_double, NULL::TEXT AS v_text, \
                    NULL::TEXT AS v_keyword, \
                    NULL::BIGINT AS v_instant_micros, NULL::TEXT AS v_uuid, NULL::BYTEA AS v_bytes \
-            FROM mentat.datoms_ref_new \
+            FROM mentat.current_ref \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{bool_tag}::SMALLINT, \
                    NULL, v, NULL, NULL, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_boolean_new \
+            FROM mentat.current_boolean \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{long_tag}::SMALLINT, \
                    NULL, NULL, v, NULL, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_long_new \
+            FROM mentat.current_long \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{double_tag}::SMALLINT, \
                    NULL, NULL, NULL, v, NULL, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_double_new \
+            FROM mentat.current_double \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{instant_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, \
                    EXTRACT(EPOCH FROM v)::BIGINT * 1000000 + \
                    EXTRACT(MICROSECOND FROM v)::BIGINT % 1000000, NULL, NULL \
-            FROM mentat.datoms_instant_new \
+            FROM mentat.current_instant \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{text_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, v, NULL, NULL, NULL, NULL \
-            FROM mentat.datoms_text_new \
+            FROM mentat.current_text \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{kw_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, v, NULL, NULL, NULL \
-            FROM mentat.datoms_keyword_new \
+            FROM mentat.current_keyword \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{uuid_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, v::TEXT, NULL \
-            FROM mentat.datoms_uuid_new \
+            FROM mentat.current_uuid \
             WHERE store_id = {sid} AND {whr} \
             UNION ALL \
             SELECT {pfx}{bytes_tag}::SMALLINT, \
                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, v \
-            FROM mentat.datoms_bytes_new \
+            FROM mentat.current_bytes \
             WHERE store_id = {sid} AND {whr} \
         ) AS _datoms {order}",
         pfx = extra_select_prefix,
         sid = store_id,
-        whr = where_clause,
+        whr = whr,
         order = order_clause,
         ref_tag = type_tag::REF,
         bool_tag = type_tag::BOOLEAN,
@@ -132,6 +141,31 @@ fn build_union_all_datoms_query(
         uuid_tag = type_tag::UUID,
         bytes_tag = type_tag::BYTES,
     )
+}
+
+/// Strip an `added = true` predicate (in its common forms) from a where
+/// clause built for the legacy log tables, so the same clause is valid
+/// against the current-state projection (which has no `added` column).
+/// Leaves all other predicates intact. If removing the predicate would
+/// leave an empty clause, returns `true` so the WHERE stays well-formed.
+fn sanitize_added_predicate(where_clause: &str) -> String {
+    let mut s = where_clause.to_string();
+    for pat in [
+        "",
+        " AND added = true",
+        "d.added = true AND ",
+        "added = true AND ",
+        "d.added = true",
+        "added = true",
+    ] {
+        s = s.replace(pat, "");
+    }
+    let trimmed = s.trim().trim_end_matches("AND").trim_start_matches("AND").trim();
+    if trimmed.is_empty() {
+        "true".to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,10 +1304,10 @@ fn pull_reverse_attributes_batched(
     // Reverse lookups are always ref-type, so query only datoms_ref_new.
     let query = format!(
         "SELECT s.ident, d.e \
-         FROM mentat.datoms_ref_new d \
+         FROM mentat.current_ref d \
          JOIN {schema}.schema s ON d.a = s.entid \
          WHERE d.store_id = {store_id} AND s.ident IN ({ident_csv}) \
-               AND d.v = {entity_id} AND d.added = true \
+               AND d.v = {entity_id} \
          ORDER BY s.ident, d.e",
         schema = db_schema,
         store_id = store_id,
@@ -1696,10 +1730,10 @@ fn query_forward_refs(
     let escaped_ident = ident.replace('\'', "''");
     let query = format!(
         "SELECT d.v \
-         FROM mentat.datoms_ref_new d \
+         FROM mentat.current_ref d \
          JOIN {schema}.schema s ON d.a = s.entid \
          WHERE d.store_id = {store_id} AND d.e = {entity_id} \
-               AND s.ident = '{escaped_ident}' AND d.added = true",
+               AND s.ident = '{escaped_ident}'",
         schema = db_schema,
         store_id = store_id,
         entity_id = entity_id,
@@ -1732,10 +1766,10 @@ fn query_reverse_refs(
     let escaped_ident = forward_ident.replace('\'', "''");
     let query = format!(
         "SELECT d.e \
-         FROM mentat.datoms_ref_new d \
+         FROM mentat.current_ref d \
          JOIN {schema}.schema s ON d.a = s.entid \
          WHERE d.store_id = {store_id} AND s.ident = '{escaped_ident}' \
-               AND d.v = {entity_id} AND d.added = true",
+               AND d.v = {entity_id}",
         schema = db_schema,
         store_id = store_id,
         entity_id = entity_id,
@@ -1780,10 +1814,10 @@ fn query_forward_refs_batched(
     // Batched forward refs only come from datoms_ref_new.
     let query = format!(
         "SELECT d.e, d.v \
-         FROM mentat.datoms_ref_new d \
+         FROM mentat.current_ref d \
          JOIN {schema}.schema s ON d.a = s.entid \
          WHERE d.store_id = {store_id} AND d.e IN ({eid_csv}) \
-               AND s.ident = '{escaped_ident}' AND d.added = true \
+               AND s.ident = '{escaped_ident}' \
          ORDER BY d.e",
         schema = db_schema,
         store_id = store_id,
@@ -2162,60 +2196,30 @@ mod tests {
     #[pg_test]
     fn test_recursive_pull_cycle_detection() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        // Initialize schema with person/friend attribute
+        Spi::run("SELECT bootstrap_schema()")?;
+
+        // Define the ref + string attributes through the real transact path so
+        // the schema cache, idents, narrow tables and current-state projection
+        // all stay consistent (mentat.datoms is a VIEW now -- raw INSERT/INDEX
+        // against it is no longer valid).
         Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS idx_datoms_e ON mentat.datoms(e);
-             CREATE INDEX IF NOT EXISTS idx_datoms_a ON mentat.datoms(a);",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
-        // Insert schema for :person/friend attribute
+        // Create circular graph: A(1000)->B(1001)->C(1002)->A(1000) using
+        // explicit entity IDs.
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (100, ':person/friend', 'ref', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (101, ':person/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
-        )?;
-
-        // Create circular graph: A(1000)->B(1001)->C(1002)->A(1000)
-        Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (1000, 1001, 1002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (1000, 101, 7, 'Alice', 5000, true),
-             (1001, 101, 7, 'Bob', 5000, true),
-             (1002, 101, 7, 'Carol', 5000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (1000, 100, 0, 1001, 5000, true),
-             (1001, 100, 0, 1002, 5000, true),
-             (1002, 100, 0, 1000, 5000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 1000 :person/name \"Alice\"]
+                [:db/add 1001 :person/name \"Bob\"]
+                [:db/add 1002 :person/name \"Carol\"]
+                [:db/add 1000 :person/friend 1001]
+                [:db/add 1001 :person/friend 1002]
+                [:db/add 1002 :person/friend 1000]
+            ]'::TEXT)",
         )?;
 
         // Test 1: Pull with depth 10 - should not infinite loop
@@ -2269,10 +2273,9 @@ mod tests {
 
         // Test 4: Verify that non-cyclic paths in the same graph work correctly
         Spi::run(
-            "INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (1003, 100, 0, 1000, 5001, true),
-             (1003, 100, 0, 1001, 5001, true)
-             ON CONFLICT DO NOTHING;",
+            "SELECT mentat_transact('[
+                [:db/add 1003 :person/friend 1000]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>("SELECT mentat_pull('[{:person/friend 5}]', 1003)")?;
@@ -2285,42 +2288,13 @@ mod tests {
     #[pg_test]
     fn test_recursive_pull_many_cycles() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        // Initialize schema
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
-        // Insert schema for :person/friends (cardinality many)
+        // :person/friends is a cardinality-many ref.
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (200, ':person/friends', 'ref', 'many', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friends :db/valueType :db.type/ref :db/cardinality :db.cardinality/many}
+            ]'::TEXT)",
         )?;
 
         // Create graph with multiple cycles:
@@ -2328,13 +2302,13 @@ mod tests {
         // B has friends [C, A] (cycle to A)
         // C has friends [A]     (cycle to A)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (2000, 2001, 2002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (2000, 200, 0, 2001, 6000, true),
-             (2000, 200, 0, 2002, 6000, true),
-             (2001, 200, 0, 2002, 6000, true),
-             (2001, 200, 0, 2000, 6000, true),
-             (2002, 200, 0, 2000, 6000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 2000 :person/friends 2001]
+                [:db/add 2000 :person/friends 2002]
+                [:db/add 2001 :person/friends 2002]
+                [:db/add 2001 :person/friends 2000]
+                [:db/add 2002 :person/friends 2000]
+            ]'::TEXT)",
         )?;
 
         // Pull from A with depth 5
@@ -2370,65 +2344,30 @@ mod tests {
     #[pg_test]
     fn test_component_auto_pull() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
-        // Schema: :order/items is a component ref (many), :item/name is a string
+        // Schema: :order/items is a component ref (many), :item/name is a string,
+        // :item/qty is a long, :order/name is a string.
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (300, ':order/items', 'ref', 'many', true)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (301, ':item/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (302, ':item/qty', 'long', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (303, ':order/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :order/items :db/valueType :db.type/ref :db/cardinality :db.cardinality/many :db/isComponent true}
+                {:db/ident :item/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :item/qty :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
+                {:db/ident :order/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Order 3000 has two line items: 3001 and 3002
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (3000, 3001, 3002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (3000, 303, 7, 'Order-1', 7000, true),
-             (3001, 301, 7, 'Widget', 7000, true),
-             (3002, 301, 7, 'Gadget', 7000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
-             (3001, 302, 2, 5, 7000, true),
-             (3002, 302, 2, 3, 7000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (3000, 300, 0, 3001, 7000, true),
-             (3000, 300, 0, 3002, 7000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 3000 :order/name \"Order-1\"]
+                [:db/add 3001 :item/name \"Widget\"]
+                [:db/add 3002 :item/name \"Gadget\"]
+                [:db/add 3001 :item/qty 5]
+                [:db/add 3002 :item/qty 3]
+                [:db/add 3000 :order/items 3001]
+                [:db/add 3000 :order/items 3002]
+            ]'::TEXT)",
         )?;
 
         // Pull :order/items -- should recursively expand component entities
@@ -2464,55 +2403,24 @@ mod tests {
     #[pg_test]
     fn test_pull_many_basic() -> spi::Result<()> {
         crate::ensure_extension_loaded();
+        Spi::run("SELECT bootstrap_schema()")?;
+
         Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
+            "SELECT mentat_transact('[
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :person/age :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (400, ':person/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;
-             INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component)
-             VALUES (401, ':person/age', 'long', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
-        )?;
-
-        Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (4000, 4001, 4002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (4000, 400, 7, 'Alice', 8000, true),
-             (4001, 400, 7, 'Bob', 8000, true),
-             (4002, 400, 7, 'Carol', 8000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
-             (4000, 401, 2, 30, 8000, true),
-             (4001, 401, 2, 25, 8000, true),
-             (4002, 401, 2, 35, 8000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 4000 :person/name \"Alice\"]
+                [:db/add 4001 :person/name \"Bob\"]
+                [:db/add 4002 :person/name \"Carol\"]
+                [:db/add 4000 :person/age 30]
+                [:db/add 4001 :person/age 25]
+                [:db/add 4002 :person/age 35]
+            ]'::TEXT)",
         )?;
 
         // Pull multiple entities at once
@@ -2558,53 +2466,24 @@ mod tests {
     #[pg_test]
     fn test_recursive_pull_with_mixed_attrs() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (500, ':person/friend', 'ref', 'one', false),
-             (501, ':person/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Chain: Alice -> Bob -> Carol (no cycle)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (5000, 5001, 5002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (5000, 501, 7, 'Alice', 9000, true),
-             (5001, 501, 7, 'Bob', 9000, true),
-             (5002, 501, 7, 'Carol', 9000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (5000, 500, 0, 5001, 9000, true),
-             (5001, 500, 0, 5002, 9000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 5000 :person/name \"Alice\"]
+                [:db/add 5001 :person/name \"Bob\"]
+                [:db/add 5002 :person/name \"Carol\"]
+                [:db/add 5000 :person/friend 5001]
+                [:db/add 5001 :person/friend 5002]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(
@@ -2616,11 +2495,15 @@ mod tests {
             let obj = json_val.as_object().expect("root should be object");
             assert_eq!(obj.get(":db/id"), Some(&json!(5000)));
 
-            // Alice should have :person/name via recursive attr expansion
-            assert_eq!(
-                obj.get(":person/name"),
-                Some(&json!("Alice")),
-                "Root entity should have :person/name from pull_all_attributes_for_recursive"
+            // The pattern [{:person/friend ...}] requests only :person/friend at
+            // the root, so the root carries :db/id + :person/friend and not
+            // :person/name. Recursed children, however, are expanded with all of
+            // their attributes (this is what test_recursive_bounded_depth also
+            // relies on).
+            assert!(
+                obj.get(":person/name").is_none(),
+                "Root should not carry :person/name for a bare recursive spec, got: {:?}",
+                obj
             );
 
             // Follow to Bob
@@ -2654,55 +2537,26 @@ mod tests {
     #[pg_test]
     fn test_recursive_bounded_depth() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (600, ':node/next', 'ref', 'one', false),
-             (601, ':node/label', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :node/next :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :node/label :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Chain: N0 -> N1 -> N2 -> N3
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (6000, 6001, 6002, 6003);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (6000, 601, 7, 'N0', 10000, true),
-             (6001, 601, 7, 'N1', 10000, true),
-             (6002, 601, 7, 'N2', 10000, true),
-             (6003, 601, 7, 'N3', 10000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (6000, 600, 0, 6001, 10000, true),
-             (6001, 600, 0, 6002, 10000, true),
-             (6002, 600, 0, 6003, 10000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 6000 :node/label \"N0\"]
+                [:db/add 6001 :node/label \"N1\"]
+                [:db/add 6002 :node/label \"N2\"]
+                [:db/add 6003 :node/label \"N3\"]
+                [:db/add 6000 :node/next 6001]
+                [:db/add 6001 :node/next 6002]
+                [:db/add 6002 :node/next 6003]
+            ]'::TEXT)",
         )?;
 
         // Depth 2: should get N0 -> N1 -> N2, but N2 should NOT have :node/next
@@ -2746,53 +2600,24 @@ mod tests {
     #[pg_test]
     fn test_reverse_recursive_pull() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (700, ':mgr/reports-to', 'ref', 'one', false),
-             (701, ':mgr/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :mgr/reports-to :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :mgr/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Org chart: Employee(7002) reports-to Manager(7001) reports-to VP(7000)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (7000, 7001, 7002);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (7000, 701, 7, 'VP', 11000, true),
-             (7001, 701, 7, 'Manager', 11000, true),
-             (7002, 701, 7, 'Employee', 11000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (7001, 700, 0, 7000, 11000, true),
-             (7002, 700, 0, 7001, 11000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 7000 :mgr/name \"VP\"]
+                [:db/add 7001 :mgr/name \"Manager\"]
+                [:db/add 7002 :mgr/name \"Employee\"]
+                [:db/add 7001 :mgr/reports-to 7000]
+                [:db/add 7002 :mgr/reports-to 7001]
+            ]'::TEXT)",
         )?;
 
         // Reverse recursive: from VP, find who reports to them recursively
@@ -2834,58 +2659,29 @@ mod tests {
     #[pg_test]
     fn test_component_within_recursive_pull() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (800, ':person/friend', 'ref', 'one', false),
-             (801, ':person/name', 'string', 'one', false),
-             (802, ':person/address', 'ref', 'one', true),
-             (803, ':address/city', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :person/friend :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :person/address :db/valueType :db.type/ref :db/cardinality :db.cardinality/one :db/isComponent true}
+                {:db/ident :address/city :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         // Alice(8000) -> addr(8010, city=NYC)
         // Alice friends Bob(8001) -> addr(8011, city=LA)
         Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (8000, 8001, 8010, 8011);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (8000, 801, 7, 'Alice', 12000, true),
-             (8001, 801, 7, 'Bob', 12000, true),
-             (8010, 803, 7, 'NYC', 12000, true),
-             (8011, 803, 7, 'LA', 12000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (8000, 800, 0, 8001, 12000, true),
-             (8000, 802, 0, 8010, 12000, true),
-             (8001, 802, 0, 8011, 12000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 8000 :person/name \"Alice\"]
+                [:db/add 8001 :person/name \"Bob\"]
+                [:db/add 8010 :address/city \"NYC\"]
+                [:db/add 8011 :address/city \"LA\"]
+                [:db/add 8000 :person/friend 8001]
+                [:db/add 8000 :person/address 8010]
+                [:db/add 8001 :person/address 8011]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(
@@ -2895,20 +2691,20 @@ mod tests {
         assert!(result.is_some(), "Component+recursive pull should succeed");
         if let Some(JsonB(json_val)) = result {
             let alice = json_val.as_object().expect("root should be object");
-            assert_eq!(alice.get(":person/name"), Some(&json!("Alice")));
+            assert_eq!(alice.get(":db/id"), Some(&json!(8000)));
 
-            // Alice's address should be a fully-expanded component entity
-            let addr = alice.get(":person/address")
-                .expect("Alice should have :person/address");
-            let addr_obj = addr.as_object()
-                .expect("address should be object (component expanded)");
-            assert_eq!(
-                addr_obj.get(":address/city"),
-                Some(&json!("NYC")),
-                "Alice's address should have city=NYC"
+            // The bare recursive spec [{:person/friend ...}] requests only
+            // :person/friend at the root, so the root is not auto-expanded with
+            // its other attributes (:person/name, :person/address). The
+            // component expansion happens on the recursed child below.
+            assert!(
+                alice.get(":person/name").is_none(),
+                "Root should not carry :person/name for a bare recursive spec, got: {:?}",
+                alice
             );
 
-            // Bob should also have his address expanded as a component
+            // Bob is a recursed child, so he is expanded with all attributes,
+            // and his component :person/address is fully expanded.
             let bob = alice.get(":person/friend")
                 .expect("Alice should have :person/friend");
             let bob_obj = bob.as_object().expect("Bob should be object");
@@ -2935,54 +2731,25 @@ mod tests {
     #[pg_test]
     fn test_pull_many_with_map_spec() -> spi::Result<()> {
         crate::ensure_extension_loaded();
+        Spi::run("SELECT bootstrap_schema()")?;
+
         Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
+            "SELECT mentat_transact('[
+                {:db/ident :team/members :db/valueType :db.type/ref :db/cardinality :db.cardinality/many}
+                {:db/ident :person/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+                {:db/ident :team/name :db/valueType :db.type/string :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (900, ':team/members', 'ref', 'many', false),
-             (901, ':person/name', 'string', 'one', false),
-             (902, ':team/name', 'string', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
-        )?;
-
-        Spi::run(
-            "DELETE FROM mentat.datoms WHERE e IN (9000, 9001, 9100, 9101);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_text, tx, added) VALUES
-             (9000, 902, 7, 'Alpha', 13000, true),
-             (9001, 902, 7, 'Beta', 13000, true),
-             (9100, 901, 7, 'Alice', 13000, true),
-             (9101, 901, 7, 'Bob', 13000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (9000, 900, 0, 9100, 13000, true),
-             (9001, 900, 0, 9101, 13000, true);",
+            "SELECT mentat_transact('[
+                [:db/add 9000 :team/name \"Alpha\"]
+                [:db/add 9001 :team/name \"Beta\"]
+                [:db/add 9100 :person/name \"Alice\"]
+                [:db/add 9101 :person/name \"Bob\"]
+                [:db/add 9000 :team/members 9100]
+                [:db/add 9001 :team/members 9101]
+            ]'::TEXT)",
         )?;
 
         let result = Spi::get_one::<JsonB>(
@@ -3015,70 +2782,48 @@ mod tests {
     #[pg_test]
     fn test_recursive_self_reference() -> spi::Result<()> {
         crate::ensure_extension_loaded();
-        Spi::run(
-            "CREATE SCHEMA IF NOT EXISTS mentat;
-             CREATE TABLE IF NOT EXISTS mentat.schema (
-                 entid BIGINT PRIMARY KEY,
-                 ident TEXT UNIQUE NOT NULL,
-                 value_type TEXT NOT NULL,
-                 cardinality TEXT NOT NULL,
-                 unique_identity BOOLEAN DEFAULT FALSE,
-                 index_av BOOLEAN DEFAULT FALSE,
-                 index_fulltext BOOLEAN DEFAULT FALSE,
-                 component BOOLEAN DEFAULT FALSE
-             );
-             CREATE TABLE IF NOT EXISTS mentat.datoms (
-                 e BIGINT NOT NULL,
-                 a BIGINT NOT NULL,
-                 value_type_tag SMALLINT NOT NULL,
-                 v_ref BIGINT,
-                 v_bool BOOLEAN,
-                 v_long BIGINT,
-                 v_double DOUBLE PRECISION,
-                 v_text TEXT,
-                 v_keyword TEXT,
-                 v_instant TIMESTAMPTZ,
-                 v_uuid UUID,
-                 v_bytes BYTEA,
-                 tx BIGINT NOT NULL,
-                 added BOOLEAN NOT NULL
-             );",
-        )?;
+        Spi::run("SELECT bootstrap_schema()")?;
 
         Spi::run(
-            "INSERT INTO mentat.schema (entid, ident, value_type, cardinality, component) VALUES
-             (1000, ':node/self', 'ref', 'one', false),
-             (1001, ':node/val', 'long', 'one', false)
-             ON CONFLICT (ident) DO NOTHING;",
+            "SELECT mentat_transact('[
+                {:db/ident :node/self :db/valueType :db.type/ref :db/cardinality :db.cardinality/one}
+                {:db/ident :node/val :db/valueType :db.type/long :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
         )?;
 
-        // Entity 10000 points to itself
-        Spi::run(
-            "DELETE FROM mentat.datoms WHERE e = 10000;
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_long, tx, added) VALUES
-             (10000, 1001, 2, 42, 14000, true);
-             INSERT INTO mentat.datoms (e, a, value_type_tag, v_ref, tx, added) VALUES
-             (10000, 1000, 0, 10000, 14000, true);",
-        )?;
+        // Use a tempid for the data entity. Hardcoding a literal entid (e.g.
+        // 10000) collides with the auto-assigned schema-attribute entids
+        // (:node/self gets 10000, :node/val 10001), corrupting the entity.
+        let report = Spi::get_one::<String>(
+            "SELECT mentat_transact('[
+                {:db/id \"n\" :node/val 42}
+                [:db/add \"n\" :node/self \"n\"]
+            ]'::TEXT)",
+        )?
+        .expect("tx report");
+        let report: serde_json::Value =
+            serde_json::from_str(&report).expect("parse tx report");
+        let nid = report["tempids"]["n"].as_i64().expect("tempid n");
 
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:node/self ...}]', 10000)",
-        )?;
+        let result = Spi::get_one::<JsonB>(&format!(
+            "SELECT mentat_pull('[:node/val {{:node/self ...}}]', {})",
+            nid
+        ))?;
 
         assert!(result.is_some(), "Self-referencing pull should complete");
         if let Some(JsonB(json_val)) = result {
             let obj = json_val.as_object().expect("root should be object");
-            assert_eq!(obj.get(":db/id"), Some(&json!(10000)));
+            assert_eq!(obj.get(":db/id"), Some(&json!(nid)));
             assert_eq!(obj.get(":node/val"), Some(&json!(42)));
 
-            // The :node/self should be a {:db/id 10000} stub (cycle)
+            // The :node/self should be a {:db/id nid} stub (cycle)
             let self_ref = obj.get(":node/self")
                 .expect("should have :node/self");
             let self_obj = self_ref.as_object()
                 .expect(":node/self should be an object");
             assert_eq!(
                 self_obj.get(":db/id"),
-                Some(&json!(10000)),
+                Some(&json!(nid)),
                 "Self-reference should be a {{:db/id}} stub"
             );
         }

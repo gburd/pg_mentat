@@ -64,7 +64,7 @@ mod tests {
         let mut ops = Vec::new();
         for i in 0..200 {
             ops.push(format!(
-                "{{:db/id \"e{i}\" :ss/name \"ent-{i}\" :ss/val {i} :ss/dbl {d} :ss/flag {f} :ss/kw :type-{k}}}",
+                "{{:db/id \"e{i}\" :ss/name \"ent-{i}\" :ss/val {i} :ss/dbl {d:?} :ss/flag {f} :ss/kw :type-{k}}}",
                 i = i, d = (i as f64) * 0.7, f = if i % 2 == 0 { "true" } else { "false" }, k = i % 5
             ));
         }
@@ -257,9 +257,10 @@ mod tests {
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", retract_ops.join("\n"))).expect("batch retract");
 
-        // All should be retracted
+        // Append-only log retains the original assertions after
+        // retractEntity; verify liveness via the current-state projection.
         let count = Spi::get_one::<i64>(
-            "SELECT COUNT(DISTINCT e) FROM mentat.datoms WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':ss/name') AND v_text LIKE 'doomed-%' AND added = true",
+            "SELECT COUNT(DISTINCT e) FROM mentat.current_text WHERE a = (SELECT entid FROM mentat.idents WHERE ident = ':ss/name') AND v LIKE 'doomed-%'",
         ).expect("q").expect("NULL");
         assert_eq!(count, 0, "All 100 entities should be retracted");
     }

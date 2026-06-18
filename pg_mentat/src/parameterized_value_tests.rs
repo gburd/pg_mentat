@@ -438,7 +438,9 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&r).expect("parse");
         let eid = j["tempids"]["e"].as_i64().expect("eid");
         for i in 0..8 {
-            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :pv/dbls {}]]'::TEXT)", eid, (i as f64) * 1.1)).expect("add");
+            // {:?} formats integral f64 with a decimal point (0 -> "0.0") so EDN
+            // parses it as a double rather than an integer (type-check failure).
+            Spi::run(&format!("SELECT mentat_transact('[[:db/add {} :pv/dbls {:?}]]'::TEXT)", eid, (i as f64) * 1.1)).expect("add");
         }
         let q = Spi::get_one::<String>(&format!(
             "SELECT mentat_query('[:find [?v ...] :where [{} :pv/dbls ?v]]'::TEXT, '{{}}'::jsonb)::TEXT", eid

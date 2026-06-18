@@ -467,8 +467,12 @@ mod tests {
             "mentat_test_sub",
             "[:find ?name :where [?e :person/name ?name] [(= ?name \"O'Brien\")]]",
         );
-        // Single quotes should be doubled for PL/pgSQL embedding
-        assert!(sql.contains("O''''Brien"));
+        // Single quotes are doubled once for the mentat_query('...') string
+        // literal embedded inside the $$-quoted function body. The function
+        // body is dollar-quoted, so the quotes inside it are literal -- there
+        // is no second nesting level, hence one level of doubling (O''Brien),
+        // not two (O''''Brien).
+        assert!(sql.contains("O''Brien"));
     }
 
     #[test]

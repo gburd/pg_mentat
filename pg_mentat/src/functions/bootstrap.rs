@@ -180,5 +180,15 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         ON CONFLICT DO NOTHING;
         ",
     )?;
+
+    // Seed the current-state projection with the bootstrap datoms. These are
+    // written directly to the datom tables above (bypassing the transact
+    // path's maintain_current_projection), so the projection must be seeded
+    // here or it will disagree with the log for the built-in attributes.
+    // rebuild_current_projection is idempotent and correct-by-construction
+    // (latest-tx-wins over the log), so it is safe to call after CREATE
+    // EXTENSION's bootstrap and after any re-bootstrap.
+    Spi::run("SELECT mentat.rebuild_current_projection(0)")?;
+
     Ok(())
 }

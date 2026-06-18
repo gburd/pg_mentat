@@ -21,63 +21,63 @@ CREATE TABLE IF NOT EXISTS mentat.datoms_ref_new (
     tx       BIGINT  NOT NULL,
     added    BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_long_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v BIGINT NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_text_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v TEXT NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 85, toast_tuple_target = 8160);
+) WITH (fillfactor = 100, toast_tuple_target = 8160);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_double_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v DOUBLE PRECISION NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_instant_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v TIMESTAMPTZ NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_keyword_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v TEXT NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_uuid_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v UUID NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_bytes_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v BYTEA NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 85, toast_tuple_target = 8160);
+) WITH (fillfactor = 100, toast_tuple_target = 8160);
 
 CREATE TABLE IF NOT EXISTS mentat.datoms_boolean_new (
     store_id BIGINT NOT NULL DEFAULT 0,
     e  BIGINT NOT NULL, a BIGINT NOT NULL, v BOOLEAN NOT NULL,
     tx BIGINT NOT NULL, added BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (store_id, e, a, v, tx)
-) WITH (fillfactor = 90);
+) WITH (fillfactor = 100);
 
 -- ---------------------------------------------------------------------------
 -- Covering indexes. Each table gets EAVT, AEVT, TX; VAET only where reverse

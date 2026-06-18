@@ -267,7 +267,8 @@ mod tests {
         setup(); setup_card_schema();
         let mut ops = vec!["[:db/add \"e\" :cd/name \"dbls\"]".to_string()];
         for i in 0..8 {
-            ops.push(format!("[:db/add \"e\" :cd/dbl-many {}]", (i as f64) * 0.5));
+            // {:?} keeps the decimal point (0 -> "0.0") so EDN reads a double.
+            ops.push(format!("[:db/add \"e\" :cd/dbl-many {:?}]", (i as f64) * 0.5));
         }
         Spi::run(&format!("SELECT mentat_transact('[{}]'::TEXT)", ops.join("\n"))).expect("add");
         let q = Spi::get_one::<String>(
