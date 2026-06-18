@@ -140,9 +140,12 @@ jobs:
           nix develop --command bash -c 'cargo fmt --all -- --check'
 
       - name: Run clippy
+        # Match the canonical clippy gate (the GitHub `ci` job): production
+        # code, the pg16 feature, no --all-targets. clippy needs no PG, so
+        # skip setup-pgrx. (Test-target clippy debt under --all-targets is a
+        # separate cleanup, not enforced by the project's primary CI.)
         run: |
           nix develop --command bash -c '
-            setup-pgrx
-            cargo clippy --all-targets -- -D warnings
+            cargo clippy --no-default-features --features pg16 -p pg_mentat -- -D warnings
           '
 

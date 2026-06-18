@@ -122,8 +122,8 @@
             setup-pgrx() {
               echo "Installing cargo-pgrx 0.17..."
               cargo install --locked cargo-pgrx --version '~0.17'
-              echo "Initializing pgrx with system PostgreSQL 16..."
-              cargo pgrx init --pg16="${postgresql}/bin/pg_config"
+              echo "Initializing pgrx with the dev-shell PostgreSQL 16..."
+              cargo pgrx init --pg16="$(command -v pg_config)"
               echo "pgrx setup complete."
             }
 
@@ -134,12 +134,12 @@
 
             # Helper: build extension in release mode
             build-extension() {
-              (cd pg_mentat && cargo pgrx package --pg-config="${postgresql}/bin/pg_config")
+              (cd pg_mentat && cargo pgrx package --pg-config="$(command -v pg_config)")
             }
 
             # Helper: install extension to local PostgreSQL
             install-extension() {
-              (cd pg_mentat && cargo pgrx install --release --pg-config="${postgresql}/bin/pg_config")
+              (cd pg_mentat && cargo pgrx install --release --pg-config="$(command -v pg_config)")
             }
 
             # Helper: start a local PostgreSQL instance
