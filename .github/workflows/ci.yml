@@ -162,7 +162,9 @@ jobs:
   cargo-test:
     name: cargo pgrx test pg16
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # pgrx init --pg16 download builds PostgreSQL from source (~5-6 min) on
+    # top of the full #[pg_test] suite (~5 min), so 15 min is too tight.
+    timeout-minutes: 35
 
     steps:
       - uses: actions/checkout@v4

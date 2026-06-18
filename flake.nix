@@ -108,6 +108,13 @@
             ${pkgs.lib.concatStringsSep "\n"
               (pkgs.lib.mapAttrsToList (name: value: "export ${name}=\"${toString value}\"") devEnv)}
 
+            # CARGO_HOME / PGDATA from devEnv resolve to the nix-store copy of
+            # the flake source, which is read-only -- cargo install then fails
+            # with EACCES. Repoint them at the real working directory at shell
+            # entry so they are writable (CI checks out into a writable dir).
+            export CARGO_HOME="$PWD/.cargo"
+            export PGDATA="$PWD/.postgres-data"
+
             # Create cargo home directory
             mkdir -p "$CARGO_HOME"
 
