@@ -1137,6 +1137,12 @@ pub(crate) fn mentat_query_internal(
         // automatically.
         apply_optimizer_hints(client, &complexity);
 
+        // Pull columns return a JSON object as text; parse those as JSON so
+        // they nest as real objects in the result rather than as a string.
+        let pull_cols: Vec<bool> = (0..find_vars.len())
+            .map(|i| matches!(get_find_element(&parsed_query.find_spec, i), Some(Element::Pull(_))))
+            .collect();
+
         let mut rows_json = Vec::new();
         let row_limit = if !has_explicit_limit && max_rows > 0 {
             max_rows as usize
@@ -1167,7 +1173,15 @@ pub(crate) fn mentat_query_internal(
                 let col_idx = (idx + 1) as usize;
 
                 if let Ok(Some(val)) = row.get::<String>(col_idx) {
-                    row_values.push(decode_text_result(&val));
+                    if pull_cols.get(idx).copied().unwrap_or(false) {
+                        // Parse pull JSON text into a nested object/array.
+                        match serde_json::from_str::<serde_json::Value>(&val) {
+                            Ok(v) => row_values.push(v),
+                            Err(_) => row_values.push(json!(val)),
+                        }
+                    } else {
+                        row_values.push(decode_text_result(&val));
+                    }
                 } else {
                     row_values.push(json!(null));
                 }
