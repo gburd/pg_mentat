@@ -129,7 +129,7 @@ mod tests {
 
         // Get all tx IDs for this entity
         let txs = Spi::get_one::<String>(&format!(
-            "SELECT json_agg(DISTINCT tx ORDER BY tx) FROM mentat.datoms WHERE e = {}", eid
+            "SELECT json_agg(DISTINCT tx ORDER BY tx)::text FROM mentat.datoms WHERE e = {}", eid
         ));
         if let Ok(Some(result)) = txs {
             let arr: Vec<i64> = serde_json::from_str(&result).unwrap_or_default();
