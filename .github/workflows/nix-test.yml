@@ -46,7 +46,7 @@ jobs:
             setup-pgrx
 
             echo "=== Running tests ==="
-            test-pg16 --nocapture
+            test-pg16
           '
 
       - name: Generate test report

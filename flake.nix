@@ -131,9 +131,11 @@
               echo "pgrx setup complete."
             }
 
-            # Helper: run tests against PostgreSQL 16
+            # Helper: run tests against PostgreSQL 16. cargo pgrx test takes
+            # only [PG_VERSION] [TESTNAME] + options (no libtest `--`
+            # passthrough), so an optional name filter is the only argument.
             test-pg16() {
-              (cd pg_mentat && cargo pgrx test pg16 --no-schema -- --test-threads=1 "$@")
+              (cd pg_mentat && cargo pgrx test pg16 --no-schema "$@")
             }
 
             # Helper: build extension in release mode
