@@ -132,10 +132,10 @@
             }
 
             # Helper: run tests against PostgreSQL 16. cargo pgrx test takes
-            # only [PG_VERSION] [TESTNAME] + options (no libtest `--`
-            # passthrough), so an optional name filter is the only argument.
+            # only [PG_VERSION] [TESTNAME] + options; let it regenerate the
+            # schema (the canonical GitHub ci job does the same).
             test-pg16() {
-              (cd pg_mentat && cargo pgrx test pg16 --no-schema "$@")
+              (cd pg_mentat && cargo pgrx test --no-default-features --features pg16 pg16 "$@")
             }
 
             # Helper: build extension in release mode
