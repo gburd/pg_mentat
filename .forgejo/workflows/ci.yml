@@ -162,7 +162,10 @@ jobs:
         run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
 
       - name: pgrx init
-        run: cargo pgrx init --pg16 "$(which pg_config)"
+        # pgrx-managed PG (user-owned ~/.pgrx); a system pg_config puts the
+        # lib dir under root ownership and `cargo pgrx test` fails to copy
+        # the .so there.
+        run: cargo pgrx init --pg16 download
 
       - name: cargo pgrx test
         working-directory: pg_mentat

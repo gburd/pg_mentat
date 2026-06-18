@@ -3988,16 +3988,16 @@ fn build_infer_near_join(
 /// to a Datalog variable from the relation binding `[[?a ?b ...]]`:
 ///
 /// * `(infer-walk "prompt" top [model])`
-///     SQL: `SELECT layer, feature, gate_score, concept FROM walk(\$1, \$2)`
-///     Binding: `[[?layer ?feature ?score ?concept]]` (4 columns).
+///   SQL: `SELECT layer, feature, gate_score, concept FROM walk(\$1, \$2)`
+///   Binding: `[[?layer ?feature ?score ?concept]]` (4 columns).
 ///
 /// * `(infer-describe "entity" [model])`
-///     SQL: `SELECT relation, target, gate_score, layer FROM describe(\$1)`
-///     Binding: `[[?relation ?target ?score ?layer]]` (4 columns).
+///   SQL: `SELECT relation, target, gate_score, layer FROM describe(\$1)`
+///   Binding: `[[?relation ?target ?score ?layer]]` (4 columns).
 ///
 /// * `(infer-predict "prompt" top [model])`
-///     SQL: `SELECT token, probability, rank FROM infer(\$1, \$2)`
-///     Binding: `[[?token ?probability ?rank]]` (3 columns).
+///   SQL: `SELECT token, probability, rank FROM infer(\$1, \$2)`
+///   Binding: `[[?token ?probability ?rank]]` (3 columns).
 ///
 /// pg_infer is the optional dependency. Without it, the SQL fails at
 /// execution with the standard PG "function does not exist" error.
@@ -4373,7 +4373,9 @@ fn build_postgis_join(
         }
         "geom-within" => {
             let radius = arg4.expect("arity-checked");
-            if !(radius > 0.0) {
+            // Reject non-positive AND NaN: a plain `radius <= 0.0` would accept
+            // NaN (NaN compares false), so test for a finite positive value.
+            if !radius.is_finite() || radius <= 0.0 {
                 return Err(format!(
                     ":db.error/fn-arg geom-within radius must be > 0, got {}.",
                     radius

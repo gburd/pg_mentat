@@ -192,8 +192,12 @@ jobs:
       - name: Install cargo-pgrx ${{ env.PGRX_VERSION }}
         run: cargo install --locked cargo-pgrx --version "${PGRX_VERSION}"
 
-      - name: pgrx init (system PG16)
-        run: cargo pgrx init --pg16 "$(which pg_config)"
+      - name: pgrx init (pgrx-managed PG16)
+        # Let pgrx download & build its own PostgreSQL under ~/.pgrx (user
+        # owned). Pointing at the system pg_config puts the lib dir under
+        # /usr/lib/postgresql/16 (root owned), so `cargo pgrx test` fails to
+        # copy the .so there with EACCES.
+        run: cargo pgrx init --pg16 download
 
       - name: cargo pgrx test pg16
         working-directory: pg_mentat

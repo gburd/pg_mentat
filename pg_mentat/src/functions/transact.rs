@@ -2182,11 +2182,12 @@ fn parse_typed_value_from_tag(
 
 /// Decide what a cardinality-one assertion of `new_v` for `(e, a)` implies
 /// against the current value held in the projection:
-///   * `Skip`         -- new_v equals the current value (idempotent no-op).
-///   * `Insert`       -- no current value exists; just assert new_v.
-///   * `Replace(old)` -- a different current value exists; the caller must
-///                       append a retraction datom `(e, a, old, tx, false)`
-///                       before the new assertion.
+///
+/// * `Skip`         -- new_v equals the current value (idempotent no-op).
+/// * `Insert`       -- no current value exists; just assert new_v.
+/// * `Replace(old)` -- a different current value exists; the caller must
+///   append a retraction datom `(e, a, old, tx, false)` before the new
+///   assertion.
 ///
 /// Append-only model (1.5.0): this NO LONGER flips the existing log row's
 /// `added` flag. The datom log is immutable. The current value is read from

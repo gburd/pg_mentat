@@ -21,7 +21,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-    sh -s -- -y --default-toolchain 1.88.0
+    sh -s -- -y --default-toolchain 1.90.0
 
 # Install cargo-pgrx matching the version in pg_mentat/Cargo.toml
 RUN cargo install --locked cargo-pgrx --version '~0.17'
@@ -41,13 +41,15 @@ RUN cargo pgrx install --release --pg-config /usr/bin/pg_config
 # ---------------------------------------------------------------------------
 FROM postgres:16-bookworm
 
-# Copy the compiled extension files from the builder
+# Copy the compiled extension files from the builder. The base install SQL
+# is generated per-version by pgrx (pg_mentat--<version>.sql); glob it so the
+# image tracks the current version instead of a pinned filename.
 COPY --from=builder /usr/lib/postgresql/16/lib/pg_mentat.so \
                     /usr/lib/postgresql/16/lib/pg_mentat.so
 COPY --from=builder /usr/share/postgresql/16/extension/pg_mentat.control \
                     /usr/share/postgresql/16/extension/pg_mentat.control
-COPY --from=builder /usr/share/postgresql/16/extension/pg_mentat--0.1.0.sql \
-                    /usr/share/postgresql/16/extension/pg_mentat--0.1.0.sql
+COPY --from=builder /usr/share/postgresql/16/extension/pg_mentat--*.sql \
+                    /usr/share/postgresql/16/extension/
 
 # Copy demo initialization script (runs on first container start)
 COPY demo.sql /docker-entrypoint-initdb.d/00_demo.sql
