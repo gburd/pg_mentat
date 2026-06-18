@@ -72,20 +72,45 @@ internal representation of history is not.
   cannot list a key twice.
 - `is_duplicate_cardinality_many` reads the projection (presence ==
   live) rather than an `added=true` log scan.
+- `pull`, `(fulltext)`, and the extension-search where-fns
+  (`(fuzzy-match)`/pg_tre, `(similar-to)`/pg_trgm, `(rum-fulltext)`/rum,
+  `(infer-near)`/pg_infer) read the current-state projection, so they
+  no longer return values that were replaced or retracted. The
+  extension index helpers (`create_trgm_index`, `create_rum_fulltext_index`,
+  …) now build on `mentat.current_text` rather than the log table.
+- Reverse-reference (`:ns/_attr`) and recursive-reference pull
+  traversals read the projection instead of the append-only log.
+
+### Fixed — query/transaction correctness (fail-loud)
+
+- `(pull ?e [...])` inside a `:find` clause is now implemented; it
+  previously produced a NULL column. The result nests as a JSON object.
+- The `mentat.edn` type's text input parsed nothing (returned NULL for
+  all valid EDN); it now round-trips raw EDN via an explicit I/O impl.
+- A scalar supplied through `:in` and used only in a predicate (e.g.
+  `[(>= ?age ?min)]`) was rejected as unbound; it now binds correctly.
+- An unknown transaction op, a malformed assertion, an incomplete
+  schema-attribute definition, an unbound `:find` variable, and an
+  unknown attribute in a query now all fail loud with a
+  `:db.error/*` message instead of silently returning wrong or empty
+  results. A bare `:db/ident` (naming a non-attribute entity, e.g. an
+  enum value) is no longer mis-flagged as an incomplete attribute.
 
 ### Tests
 
 - `current_projection_tests` (8), `no_history_tests` (6) — all green.
 - `history_tests::test_hi_many_retract_history` (failing on 1.4.0)
   now passes.
-- Full-suite diff vs the prior release: **zero new failures**; one
-  additional pre-existing failure fixed
-  (`concurrency_tests::multi_partition_interleaved_allocation`).
-- Known pre-existing test debt (108 failures across ~30 suites,
-  predating 1.5.0 — obsolete `idx_datoms_*` introspection from the
-  storage redesign, plus scattered functional-test rot) is **not**
-  addressed here and is tracked separately. The test suite is not yet
-  a green release gate; that cleanup is a dedicated follow-up.
+- **Full suite is green: 1829 passed, 0 failed.** The pre-existing
+  test debt (108 failures across ~30 suites — obsolete `idx_datoms_*`
+  introspection from the storage redesign plus scattered functional
+  rot) has been cleared, partly by retargeting stale tests to the
+  narrow-table / projection model and partly by the fail-loud fixes
+  above (several failures were correct tests guarding real bugs).
+- The `1.4.0 → 1.5.0` in-place upgrade is qualified end to end:
+  install 1.4.0, load data, `ALTER EXTENSION … UPDATE TO '1.5.0'`,
+  then `verify_current_projection(0) = 0` and current-time queries
+  return results identical to pre-upgrade.
 
 ### Upgrading
 
