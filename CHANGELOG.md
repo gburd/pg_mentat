@@ -5,7 +5,60 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
-## [1.5.0] - 2026-06-17
+## [1.5.1] - 2026-06-18
+
+### CI / maintenance release
+
+No schema, SQL-object, or query/transaction behavior changes relative to
+1.5.0; the recompiled extension is functionally identical. This release
+greens the CI pipeline and refreshes tooling.
+
+### Changed
+
+- CI Rust toolchain pinned to `1.90.0` (was `1.88.0`). pgrx 0.17 uses
+  `NonNull::from_mut`, stable since 1.89, so 1.88 failed to compile pgrx.
+- `cargo fmt --all` applied across the workspace (the CI format check had
+  drifted on ~115 files).
+- `tokio-postgres` → 0.7.18 and `postgres-protocol` → 0.6.12 in the
+  `mentatd` client, closing RUSTSEC-2026-0178/0179/0180 (DoS). These are
+  not in the PostgreSQL extension's runtime.
+- Added per-crate `license = "Apache-2.0"` to `mentat_core` and
+  `core_traits`.
+
+### Fixed (CI)
+
+- 1.90 clippy lints in production code (`doc_overindented_list_items`,
+  `neg_cmp_op_on_partial_ord`; the latter keeps NaN rejection in the
+  `geom-within` radius check).
+- GitHub `docs` workflow: version-pinned the mdBook download URL; enabled
+  GitHub Pages on the mirror.
+- Container workflow: build `Dockerfile` (not the nonexistent
+  `Containerfile`), added the `demo.sql` the image references, glob the
+  versioned base SQL, and test by querying the running image (the lean
+  runtime image has no Rust toolchain).
+- `cargo pgrx test` jobs (GitHub and Nix): install into a writable
+  pgrx-managed PostgreSQL rather than a root-owned system / read-only
+  nix-store one, which had caused every test to abort.
+- Security-audit job: added `deny.toml` (license allow-list + advisory
+  triage) and `--ignore` for the four advisories with no clean fix
+  (transitive via pgrx / prometheus).
+- Optional-extension test suites (pgvector, rum, fuzzystrmatch, pg_trgm):
+  route the speculative `CREATE EXTENSION` through a subtransaction helper
+  so a missing third-party extension skips cleanly instead of poisoning
+  the test transaction.
+- Nix flake: `export -f` the dev-shell helpers; writable `CARGO_HOME` /
+  `PGDATA`; provide `pg_config` via `postgresql.pg_config`; add
+  readline/zlib/icu `.dev` outputs for from-source PG builds.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.1';
+```
+
+The migration is a no-op (no schema change); it exists only so the
+`ALTER EXTENSION` command succeeds.
+
 
 ### The "Append-Only Datom Log" release
 

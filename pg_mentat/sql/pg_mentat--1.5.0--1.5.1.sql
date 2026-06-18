@@ -1,0 +1,11 @@
+-- pg_mentat 1.5.0 -> 1.5.1 upgrade.
+--
+-- 1.5.1 is a CI / maintenance release: no schema, no SQL-object, and no
+-- query/transaction behavior changes relative to 1.5.0. It bumps the CI
+-- toolchain to Rust 1.90, fixes the GitHub and Nix CI workflows, applies
+-- rustfmt across the workspace, and bumps tokio-postgres / postgres-protocol
+-- in the (non-extension) mentatd client to close DoS advisories.
+--
+-- This migration intentionally does nothing; it exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.5.1'` succeeds. The recompiled
+-- extension module is functionally identical to 1.5.0.
