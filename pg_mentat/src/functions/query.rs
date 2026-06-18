@@ -1823,7 +1823,9 @@ fn element_to_var_name(elem: &Element) -> Option<String> {
             })
         }
         Element::Corresponding(v) => Some(format!("{}", v)),
-        Element::Pull(_) => None,
+        // The pull's entity variable must be tracked/bound by :where so the
+        // SELECT can pull for each matched entity.
+        Element::Pull(pull) => Some(format!("{}", pull.var)),
     }
 }
 
@@ -5621,6 +5623,41 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
             if let Some(Element::Aggregate(agg)) = elem {
                 let agg_sql = build_aggregate_select(agg, &var_to_alias, &extra_var_bindings)?;
                 select_exprs.push(agg_sql);
+            }
+        } else if let Some(Element::Pull(pull)) = elem {
+            // (pull ?e [:attr ...]) in :find -- emit a correlated call to the
+            // pull machinery for each matched entity. The entity variable
+            // must be bound by :where (resolved via var_to_alias to its `e`
+            // column). The pull pattern is serialized back to EDN text.
+            let pull_var = format!("{}", pull.var);
+            let entity_expr = match var_to_alias.get(pull_var.as_str()) {
+                Some((alias, "e")) => format!("{alias}.e"),
+                Some((alias, "v")) => format!("({})::BIGINT", build_numeric_value_decode_expr(alias)),
+                Some((alias, col)) => format!("{alias}.{col}"),
+                None => {
+                    return Err(format!(
+                        ":db.error/unbound-variable pull entity variable {} is not bound by \
+                         any :where clause.",
+                        pull_var
+                    )
+                    .into());
+                }
+            };
+            // Serialize the pull pattern: [:attr1 :attr2 ...] (or [*]).
+            let mut pat = String::from("[");
+            for (i, p) in pull.patterns.iter().enumerate() {
+                if i > 0 {
+                    pat.push(' ');
+                }
+                pat.push_str(&format!("{}", p));
+            }
+            pat.push(']');
+            let pat_param = builder.bind_text(pat);
+            // mentat_pull(pattern TEXT, entity_id BIGINT) -> jsonb; cast to
+            // text so it flows through the TEXT result-column path.
+            select_exprs.push(format!("mentat_pull({pat_param}, {entity_expr})::TEXT"));
+            if has_aggregates {
+                group_by_exprs.push(format!("{}", col_idx + 1));
             }
         } else if let Some(expr) = extra_var_bindings.get(var_display) {
             // Computed variable (from FTS or arithmetic binding)

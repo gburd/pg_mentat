@@ -157,7 +157,7 @@ mod tests {
         .expect("second call")
         .expect("NULL");
         assert_eq!(n1, n2, "deterministic index name");
-        assert!(n1.starts_with("datoms_text_trgm_"), "name: {}", n1);
+        assert!(n1.starts_with("current_text_trgm_"), "name: {}", n1);
 
         // Index actually exists.
         let exists = Spi::get_one::<bool>(&format!(
