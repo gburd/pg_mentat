@@ -81,7 +81,7 @@ mod tests {
         if !has_fuzzystrmatch() {
             // Try to install it; contrib lives in $libdir, almost always
             // present alongside core PG.
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
         }
         if !has_fuzzystrmatch() {
             return; // contrib not available in this build — skip
@@ -112,7 +112,7 @@ mod tests {
     fn pg_test_fz_soundex_groups_homophones() {
         setup();
         if !has_fuzzystrmatch() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
         }
         if !has_fuzzystrmatch() {
             return;
@@ -150,7 +150,7 @@ mod tests {
     fn pg_test_fz_metaphone_basic() {
         setup();
         if !has_fuzzystrmatch() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
         }
         if !has_fuzzystrmatch() {
             return;
@@ -215,7 +215,7 @@ mod tests {
     fn pg_test_fz_levenshtein_chained_with_arithmetic() {
         setup();
         if !has_fuzzystrmatch() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS fuzzystrmatch");
         }
         if !has_fuzzystrmatch() {
             return;

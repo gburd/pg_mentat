@@ -74,7 +74,7 @@ mod tests {
     fn pg_test_trgm_similar_to_basic() {
         setup();
         if !has_pg_trgm() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS pg_trgm");
         }
         if !has_pg_trgm() {
             return;
@@ -110,7 +110,7 @@ mod tests {
     fn pg_test_trgm_strict_threshold() {
         setup();
         if !has_pg_trgm() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS pg_trgm");
         }
         if !has_pg_trgm() {
             return;
@@ -136,7 +136,7 @@ mod tests {
     fn pg_test_trgm_create_index_idempotent() {
         setup();
         if !has_pg_trgm() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS pg_trgm");
         }
         if !has_pg_trgm() {
             return;
@@ -208,7 +208,7 @@ mod tests {
     fn pg_test_trgm_create_index_unknown_attr() {
         setup();
         if !has_pg_trgm() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS pg_trgm");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS pg_trgm");
         }
         if !has_pg_trgm() {
             return;

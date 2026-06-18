@@ -120,7 +120,7 @@ mod tests {
     fn pg_test_pgv_vector_near_top_k_with_join() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -160,7 +160,7 @@ mod tests {
     fn pg_test_pgv_vector_near_l2_distance() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -186,7 +186,7 @@ mod tests {
     fn pg_test_pgv_attach_idempotent() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -212,7 +212,7 @@ mod tests {
     fn pg_test_pgv_set_then_del() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -254,7 +254,7 @@ mod tests {
     fn pg_test_pgv_unknown_distance_op() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -275,7 +275,7 @@ mod tests {
     fn pg_test_pgv_unknown_attr_compile() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;
@@ -295,7 +295,7 @@ mod tests {
     fn pg_test_pgv_hnsw_index_idempotent() {
         setup();
         if !has_pgvector() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS vector");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS vector");
         }
         if !has_pgvector() {
             return;

@@ -100,7 +100,7 @@ mod tests {
     fn pg_test_rum_fulltext_with_index_returns_score() {
         setup();
         if !has_rum() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS rum");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS rum");
         }
         if !has_rum() {
             return;
@@ -142,7 +142,7 @@ mod tests {
     fn pg_test_rum_index_idempotent() {
         setup();
         if !has_rum() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS rum");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS rum");
         }
         if !has_rum() {
             return;
@@ -187,7 +187,7 @@ mod tests {
     fn pg_test_rum_create_index_unknown_attr() {
         setup();
         if !has_rum() {
-            let _ = Spi::run("CREATE EXTENSION IF NOT EXISTS rum");
+            let _ = capture_error("CREATE EXTENSION IF NOT EXISTS rum");
         }
         if !has_rum() {
             return;
