@@ -527,18 +527,3 @@ mod tests {
         .is_err());
     }
 }
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pg_schema]
-mod tests {
-    use super::*;
-
-    #[pg_test]
-    fn test_recursive_queries_compile() {
-        crate::ensure_extension_loaded();
-        // Verify the exported functions compile and are accessible.
-        // Full integration tests require a populated database with schema
-        // and hierarchy data.
-        assert!(true);
-    }
-}
