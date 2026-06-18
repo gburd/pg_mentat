@@ -45,10 +45,15 @@
           openssl
           openssl.dev
 
-          # Other dependencies
+          # Other dependencies (include .dev outputs so a from-source
+          # PostgreSQL build via `cargo pgrx init --pg16 download` finds the
+          # readline/zlib/icu headers).
           zlib
+          zlib.dev
           readline
+          readline.dev
           icu
+          icu.dev
           gettext  # NLS support
 
           # Build essentials

@@ -43,10 +43,18 @@ jobs:
             echo "LIBCLANG_PATH=$LIBCLANG_PATH"
 
             echo "=== Installing cargo-pgrx ==="
-            setup-pgrx
+            cargo install --locked cargo-pgrx --version "~0.17"
+
+            # cargo pgrx test installs the extension into
+            # \$(pg_config --sharedir)/extension. The nix-store PostgreSQL is
+            # read-only there, so init a pgrx-managed PostgreSQL (writable
+            # under ~/.pgrx) for the test run instead of the nix pg_config.
+            # The dev shell already provides the PG build deps.
+            echo "=== Initializing a writable pgrx-managed PG16 ==="
+            cargo pgrx init --pg16 download
 
             echo "=== Running tests ==="
-            test-pg16
+            (cd pg_mentat && cargo pgrx test --no-default-features --features pg16 pg16)
           '
 
       - name: Generate test report
