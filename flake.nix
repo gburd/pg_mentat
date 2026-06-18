@@ -163,6 +163,10 @@
             echo "  install-extension   Install to local PostgreSQL"
             echo "  start-postgres      Start a local PostgreSQL instance"
             echo ""
+
+            # Export the helper functions so they are available in
+            # `nix develop --command bash -c '...'` child shells (used by CI).
+            export -f setup-pgrx test-pg16 build-extension install-extension start-postgres
           '';
         };
 
