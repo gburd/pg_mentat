@@ -2791,32 +2791,39 @@ mod tests {
             ]'::TEXT)",
         )?;
 
-        // Entity 10000 points to itself
-        Spi::run(
+        // Use a tempid for the data entity. Hardcoding a literal entid (e.g.
+        // 10000) collides with the auto-assigned schema-attribute entids
+        // (:node/self gets 10000, :node/val 10001), corrupting the entity.
+        let report = Spi::get_one::<String>(
             "SELECT mentat_transact('[
-                [:db/add 10000 :node/val 42]
-                [:db/add 10000 :node/self 10000]
+                {:db/id \"n\" :node/val 42}
+                [:db/add \"n\" :node/self \"n\"]
             ]'::TEXT)",
-        )?;
+        )?
+        .expect("tx report");
+        let report: serde_json::Value =
+            serde_json::from_str(&report).expect("parse tx report");
+        let nid = report["tempids"]["n"].as_i64().expect("tempid n");
 
-        let result = Spi::get_one::<JsonB>(
-            "SELECT mentat_pull('[{:node/self ...}]', 10000)",
-        )?;
+        let result = Spi::get_one::<JsonB>(&format!(
+            "SELECT mentat_pull('[:node/val {{:node/self ...}}]', {})",
+            nid
+        ))?;
 
         assert!(result.is_some(), "Self-referencing pull should complete");
         if let Some(JsonB(json_val)) = result {
             let obj = json_val.as_object().expect("root should be object");
-            assert_eq!(obj.get(":db/id"), Some(&json!(10000)));
+            assert_eq!(obj.get(":db/id"), Some(&json!(nid)));
             assert_eq!(obj.get(":node/val"), Some(&json!(42)));
 
-            // The :node/self should be a {:db/id 10000} stub (cycle)
+            // The :node/self should be a {:db/id nid} stub (cycle)
             let self_ref = obj.get(":node/self")
                 .expect("should have :node/self");
             let self_obj = self_ref.as_object()
                 .expect(":node/self should be an object");
             assert_eq!(
                 self_obj.get(":db/id"),
-                Some(&json!(10000)),
+                Some(&json!(nid)),
                 "Self-reference should be a {{:db/id}} stub"
             );
         }
