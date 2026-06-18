@@ -64,7 +64,7 @@ mod tests {
         let mut ops = Vec::new();
         for i in 0..200 {
             ops.push(format!(
-                "{{:db/id \"e{i}\" :ss/name \"ent-{i}\" :ss/val {i} :ss/dbl {d} :ss/flag {f} :ss/kw :type-{k}}}",
+                "{{:db/id \"e{i}\" :ss/name \"ent-{i}\" :ss/val {i} :ss/dbl {d:?} :ss/flag {f} :ss/kw :type-{k}}}",
                 i = i, d = (i as f64) * 0.7, f = if i % 2 == 0 { "true" } else { "false" }, k = i % 5
             ));
         }

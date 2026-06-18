@@ -1659,26 +1659,51 @@ fn install_schema_attributes(
     schema: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for (&entid, builder) in builders {
-        // Any entity present in `builders` asserted at least one schema-defining
-        // keyword (:db/ident, :db/valueType, :db/cardinality, ...), so it is
-        // unambiguously an attempt to define a schema attribute. Fail loud on an
-        // incomplete definition rather than silently skipping it: a partial
-        // schema attribute that is never installed but whose present fields are
-        // written as plain datoms is a silently-wrong state.
+        // An entity is an ATTRIBUTE definition only if it asserts :db/valueType
+        // or :db/cardinality. A bare :db/ident with neither is just naming an
+        // entity (e.g. an enum value like :status/open, or a partition) -- a
+        // legitimate Datomic pattern, NOT an incomplete attribute. For those
+        // we install the ident mapping and move on. For a genuine attribute
+        // definition we fail loud on a missing piece rather than silently
+        // skipping it.
+        let is_attribute_definition =
+            builder.value_type.is_some() || builder.cardinality.is_some();
+
         let ident = match &builder.ident {
             Some(i) => i.clone(),
             None => {
-                return Err(MentatError::InvalidTransaction {
-                    message: format!(
-                        "incomplete schema attribute definition (entity {}): \
-                         missing :db/ident. A schema attribute requires \
-                         :db/ident, :db/valueType, and :db/cardinality.",
-                        entid
-                    ),
+                if is_attribute_definition {
+                    return Err(MentatError::InvalidTransaction {
+                        message: format!(
+                            "incomplete schema attribute definition (entity {}): \
+                             missing :db/ident. A schema attribute requires \
+                             :db/ident, :db/valueType, and :db/cardinality.",
+                            entid
+                        ),
+                    }
+                    .into());
                 }
-                .into());
+                // No ident and not an attribute def -> nothing to install.
+                continue;
             }
         };
+
+        // A bare :db/ident (no valueType/cardinality): install the ident-only
+        // mapping for the named entity and skip attribute-column handling.
+        if !is_attribute_definition {
+            Spi::run_with_args(
+                &format!(
+                    "INSERT INTO {}.idents (ident, entid) VALUES ($1, $2) \
+                     ON CONFLICT (ident) DO UPDATE SET entid = EXCLUDED.entid",
+                    schema
+                ),
+                &[
+                    DatumWithOid::from(ident.as_str()),
+                    DatumWithOid::from(entid),
+                ],
+            )?;
+            continue;
+        }
 
         let value_type = match &builder.value_type {
             Some(vt) => vt.clone(),

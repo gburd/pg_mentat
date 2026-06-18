@@ -137,21 +137,22 @@ mod tests {
     fn test_eh_query_unbound_variable() {
         setup(); setup_eh_schema();
         Spi::run("SELECT mentat_transact('[[:db/add \"e\" :eh/name \"test\"]]'::TEXT)").expect("data");
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?n :where [_ :eh/name ?x]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // ?n in find but not bound in where - should error or return empty
-        assert!(result.is_ok() || result.is_err());
+        // ?n appears in :find but is bound by no :where clause -> fail-loud
+        // (:db.error/unbound-variable). Route through the subtransaction
+        // helper so the error doesn't poison the test transaction.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?n :where [_ :eh/name ?x]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
     fn test_eh_query_unknown_attribute() {
         setup(); setup_eh_schema();
-        let result = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find ?v . :where [_ :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // Unknown attribute - should error or return null
-        assert!(result.is_ok() || result.is_err());
+        // :nonexistent/attr is not registered -> fail-loud
+        // (:db.error/unknown-attribute), not a silent empty result.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find ?v . :where [_ :nonexistent/attr ?v]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
@@ -421,11 +422,12 @@ mod tests {
     #[pg_test]
     fn test_eh_query_empty_db() {
         setup();
-        let q = Spi::get_one::<String>(
-            "SELECT mentat_query('[:find [?n ...] :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT",
-        );
-        // No schema defined yet for :eh/name
-        assert!(q.is_ok() || q.is_err());
+        // No schema defined yet for :eh/name -> querying an unregistered
+        // attribute is fail-loud (:db.error/unknown-attribute). Route
+        // through the subtransaction helper.
+        assert!(raises_error(
+            "SELECT mentat_query('[:find [?n ...] :where [_ :eh/name ?n]]'::TEXT, '{}'::jsonb)::TEXT"
+        ));
     }
 
     #[pg_test]
