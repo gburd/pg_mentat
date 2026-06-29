@@ -5,6 +5,22 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
+/// Run a single-column `SELECT` through *read-only* SPI and return the first
+/// `i64`, or `None`.
+///
+/// Why this exists instead of `Spi::get_one`: `Spi::get_one` routes through
+/// `Spi::connect_mut` -> `SpiClient::update` -> `Spi::mark_mutable` ->
+/// `pg_sys::GetCurrentTransactionId()`, which *assigns* an XID and raises
+/// "cannot assign TransactionIds during recovery" on a hot-standby. The cache
+/// generation check runs on every query, so the entire read path was tainted.
+/// `client.select` executes with `SPI_execute(..., read_only = true, ...)` and
+/// never marks the transaction mutable, so it is standby-safe.
+fn select_one_i64(sql: &str) -> Option<i64> {
+    Spi::connect(|client| client.select(sql, Some(1), &[])?.first().get_one::<i64>())
+        .ok()
+        .flatten()
+}
+
 thread_local! {
     /// When `true`, `SchemaCache::ensure_fresh` skips the remote
     /// `cache_generation` round-trip for the duration of one
@@ -30,12 +46,10 @@ pub fn begin_tx_cache_bypass(store_name: &str) {
     if cache.warmed.load(Ordering::Acquire) {
         // Cache is warm — do exactly one generation check to detect changes
         // from other backends before we arm the bypass.
-        let remote_gen = Spi::get_one::<i64>(&format!(
+        let remote_gen = select_one_i64(&format!(
             "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
             store_name
         ))
-        .ok()
-        .flatten()
         .unwrap_or(1);
         if remote_gen > cache.local_gen.load(Ordering::Acquire) {
             cache.invalidate();
@@ -201,12 +215,10 @@ impl SchemaCache {
         });
 
         // Record the current generation so we can detect future bumps
-        let gen = Spi::get_one::<i64>(&format!(
+        let gen = select_one_i64(&format!(
             "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
             self.store_name
         ))
-        .ok()
-        .flatten()
         .unwrap_or(1);
         self.local_gen.store(gen, Ordering::Release);
 
@@ -232,12 +244,10 @@ impl SchemaCache {
         // Check remote generation (cheap: 1-row table, always in shared_buffers).
         // If the remote gen exceeds our local gen, another backend modified the
         // schema and we must reload.
-        let remote_gen = Spi::get_one::<i64>(&format!(
+        let remote_gen = select_one_i64(&format!(
             "SELECT gen FROM mentat.cache_generation WHERE store_name = '{}'",
             self.store_name
         ))
-        .ok()
-        .flatten()
         .unwrap_or(1);
 
         if remote_gen > self.local_gen.load(Ordering::Acquire) {

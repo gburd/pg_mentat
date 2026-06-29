@@ -117,6 +117,23 @@ fn execute_cached_query<'a>(
 
 use crate::types::constants::type_tag;
 
+/// Run a single-column `SELECT` through *read-only* SPI and return the first
+/// `i64`, or `None`.
+///
+/// Why this exists instead of `Spi::get_one_with_args`: that helper routes
+/// through `Spi::connect_mut` -> `SpiClient::update` -> `Spi::mark_mutable` ->
+/// `pg_sys::GetCurrentTransactionId()`, which *assigns* an XID and raises
+/// "cannot assign TransactionIds during recovery" on a hot-standby. Every
+/// query resolves its store_id (and, for lookup refs, resolves entities), so
+/// those reads tainted the whole Datalog read path. `client.select` runs
+/// `SPI_execute_with_args(..., read_only = true, ...)` and never marks the
+/// transaction mutable, so it is standby-safe.
+fn select_one_i64_ro(sql: &str, args: &[DatumWithOid<'_>]) -> Option<i64> {
+    Spi::connect(|client| client.select(sql, Some(1), args)?.first().get_one::<i64>())
+        .ok()
+        .flatten()
+}
+
 /// State accumulated during SQL generation: the parameterized query string
 /// and the bound parameter values for safe execution via SPI.
 struct SqlBuilder<'a> {
@@ -189,10 +206,10 @@ fn resolve_store_id(schema_prefix: &str) -> Result<i64, Box<dyn std::error::Erro
         .into());
     };
 
-    let store_id: Option<i64> = Spi::get_one_with_args(
+    let store_id: Option<i64> = select_one_i64_ro(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
-    )?;
+    );
 
     store_id.ok_or_else(|| {
         Box::new(MentatError::InvalidQuery {
@@ -1063,7 +1080,7 @@ fn lookup_ref_query(
     match value {
         serde_json::Value::String(s) => {
             if let Some(stripped) = s.strip_prefix(':') {
-                Spi::get_one_with_args::<i64>(
+                select_one_i64_ro(
                     "SELECT e FROM mentat.datoms_keyword_new \
                      WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
                     &[
@@ -1072,10 +1089,8 @@ fn lookup_ref_query(
                         DatumWithOid::from(stripped),
                     ],
                 )
-                .ok()
-                .flatten()
             } else {
-                Spi::get_one_with_args::<i64>(
+                select_one_i64_ro(
                     "SELECT e FROM mentat.datoms_text_new \
                      WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
                     &[
@@ -1084,13 +1099,11 @@ fn lookup_ref_query(
                         DatumWithOid::from(s.as_str()),
                     ],
                 )
-                .ok()
-                .flatten()
             }
         }
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Spi::get_one_with_args::<i64>(
+                select_one_i64_ro(
                     "SELECT e FROM mentat.datoms_long_new \
                      WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
                     &[
@@ -1099,10 +1112,8 @@ fn lookup_ref_query(
                         DatumWithOid::from(i),
                     ],
                 )
-                .ok()
-                .flatten()
             } else if let Some(f) = n.as_f64() {
-                Spi::get_one_with_args::<i64>(
+                select_one_i64_ro(
                     "SELECT e FROM mentat.datoms_double_new \
                      WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
                     &[
@@ -1111,13 +1122,11 @@ fn lookup_ref_query(
                         DatumWithOid::from(f),
                     ],
                 )
-                .ok()
-                .flatten()
             } else {
                 None
             }
         }
-        serde_json::Value::Bool(b) => Spi::get_one_with_args::<i64>(
+        serde_json::Value::Bool(b) => select_one_i64_ro(
             "SELECT e FROM mentat.datoms_boolean_new \
                  WHERE store_id = $1 AND a = $2 AND v = $3 AND added = true LIMIT 1",
             &[
@@ -1125,9 +1134,7 @@ fn lookup_ref_query(
                 DatumWithOid::from(attr_entid),
                 DatumWithOid::from(*b),
             ],
-        )
-        .ok()
-        .flatten(),
+        ),
         _ => None,
     }
 }
