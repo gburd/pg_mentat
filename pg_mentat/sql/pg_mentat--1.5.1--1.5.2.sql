@@ -1,0 +1,15 @@
+-- pg_mentat 1.5.1 -> 1.5.2 upgrade.
+--
+-- 1.5.2 makes the Datalog read query path (mentat_query / mentat.q / the view
+-- helpers) safe to run on a PostgreSQL hot-standby (read-only replica). The
+-- read path previously used pgrx's mutable SPI (Spi::connect_mut + .update()
+-- for SET LOCAL resource hints), which calls Spi::mark_mutable() ->
+-- GetCurrentTransactionId() and fails on a standby with "cannot assign
+-- TransactionIds during recovery". It now uses read-only SPI (Spi::connect +
+-- .select() for the SET LOCALs), so Datalog queries run on either host.
+--
+-- This is a compiled-module change only: no schema change, no SQL-object
+-- signature change (mentat.q and friends keep the same wrappers). This
+-- migration intentionally does nothing; it exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.5.2'` succeeds and the recompiled
+-- module is picked up. No REINDEX, no data migration.
