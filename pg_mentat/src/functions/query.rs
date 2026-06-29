@@ -672,8 +672,16 @@ struct ComplexityInfo {
 
 /// Apply SET LOCAL optimizer hints and resource limits before executing a Mentat query.
 ///
-/// Uses `Spi::run` to issue SET LOCAL statements in the current
-/// transaction.  These settings revert automatically at transaction end.
+/// Issues SET LOCAL statements via the read-only SPI client (`client.select`).
+/// These settings revert automatically at transaction end.
+///
+/// The SET LOCAL statements are run through `.select()` rather than `.update()`
+/// on purpose: `.update()` calls `Spi::mark_mutable()` →
+/// `GetCurrentTransactionId()`, which assigns an XID and raises
+/// "cannot assign TransactionIds during recovery" on a hot-standby. `.select()`
+/// never marks the transaction mutable, and a bare `SET LOCAL` is a utility
+/// statement that executes fine read-only (it returns no tuples). This keeps
+/// the whole Datalog query path standby-safe.
 ///
 /// Resource limits applied:
 /// - `statement_timeout`: prevents runaway queries (mentat.query_timeout_ms)
@@ -683,21 +691,21 @@ struct ComplexityInfo {
 ///
 /// Note: Recursive CTE depth is controlled via the LIMIT clause in the CTE
 /// output (see recursive_queries.rs), governed by `mentat.max_recursion_depth`.
-fn apply_optimizer_hints(client: &mut pgrx::spi::SpiClient<'_>, complexity: &QueryComplexity) {
+fn apply_optimizer_hints(client: &pgrx::spi::SpiClient<'_>, complexity: &QueryComplexity) {
     // --- Resource limits (always applied, regardless of optimizer hints setting) ---
 
     // Statement timeout: prevents runaway queries
     let timeout_ms = crate::planner::query_timeout_ms();
     if timeout_ms > 0 {
         let timeout_sql = format!("SET LOCAL statement_timeout = '{}'", timeout_ms);
-        let _ = client.update(&timeout_sql, None, &[]);
+        let _ = client.select(&timeout_sql, None, &[]);
     }
 
     // Temp file limit: prevents disk exhaustion from large sorts/hash joins
     let temp_limit = crate::planner::temp_file_limit();
     if temp_limit.chars().all(|c| c.is_ascii_alphanumeric()) {
         let temp_sql = format!("SET LOCAL temp_file_limit = '{}'", temp_limit);
-        let _ = client.update(&temp_sql, None, &[]);
+        let _ = client.select(&temp_sql, None, &[]);
     }
 
     // --- Optimizer hints (only when enabled) ---
@@ -709,7 +717,7 @@ fn apply_optimizer_hints(client: &mut pgrx::spi::SpiClient<'_>, complexity: &Que
     // For any Mentat query that touches the datoms table, discourage
     // sequential scans so the planner prefers the covering indexes
     // (EAVT, AEVT, AVET, VAET).
-    let _ = client.update("SET LOCAL enable_seqscan = off", None, &[]);
+    let _ = client.select("SET LOCAL enable_seqscan = off", None, &[]);
 
     // For complex queries, bump work_mem to allow larger in-memory
     // sorts and hash tables.
@@ -719,7 +727,7 @@ fn apply_optimizer_hints(client: &mut pgrx::spi::SpiClient<'_>, complexity: &Que
         // (digits optionally followed by a unit suffix).
         if work_mem.chars().all(|c| c.is_ascii_alphanumeric()) {
             let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
-            let _ = client.update(&set_sql, None, &[]);
+            let _ = client.select(&set_sql, None, &[]);
         }
     }
 }
@@ -1192,7 +1200,11 @@ pub(crate) fn mentat_query_internal(
     timer.set_sql(&sql_query);
 
     let params = builder.params;
-    let results = Spi::connect_mut(|client| {
+    // Read-only SPI connection: the Datalog query path only reads mentat.datoms
+    // and issues SET LOCAL hints, neither of which mutates data. Using
+    // `Spi::connect` (not `connect_mut`) keeps the transaction immutable so no
+    // XID is assigned -- required to run on a hot-standby in recovery.
+    let results = Spi::connect(|client| {
         // Apply optimizer hints and resource limits (SET LOCAL) before
         // executing the query. These are transaction-local and revert
         // automatically.
@@ -1682,7 +1694,8 @@ fn mentat_query_view_internal(
     }
 
     let params = builder.params;
-    let rows = Spi::connect_mut(|client| {
+    // Read-only SPI connection (standby-safe): see mentat_query_internal above.
+    let rows = Spi::connect(|client| {
         apply_optimizer_hints(client, &complexity);
 
         let mut result_rows: Vec<QueryViewRow> = Vec::new();
