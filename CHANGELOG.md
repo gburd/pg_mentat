@@ -5,6 +5,59 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.3] - 2026-06-29
+
+### Fixed
+
+Completes and corrects the hot-standby read path begun in 1.5.2. No schema
+or SQL-object change; compiled-module only.
+
+- **Restored `mentat.q` / `mentat_query` on the primary.** 1.5.2 routed the
+  query path through read-only SPI, which flips the transaction read-only
+  before `apply_optimizer_hints` runs; its `SET LOCAL` resource hints
+  (issued through SPI) were then rejected with "SET is not allowed in a
+  non-volatile function", breaking every Datalog query. The resource-limit
+  GUCs (`statement_timeout`, `temp_file_limit`, `enable_seqscan`,
+  `work_mem`) are now set via `pg_sys::set_config_option` with
+  `GUC_ACTION_LOCAL` instead of a SQL `SET`, which is permitted in a
+  read-only / recovery transaction and reverts at transaction end.
+- **Completed standby coverage of the read path.** The remaining read-side
+  store-id / lookup resolutions now use read-only SPI, so they run on a
+  hot-standby too: `mentat.pull`, `mentat.entity`, `:as-of` / `:since`
+  time-travel queries, `mentat.lookup_by_ident`, and the `has_<ext>()`
+  extension-detection helpers. Write paths (transactions, excision,
+  entid allocation, cache-generation bump) keep mutable SPI; they cannot
+  run on a standby regardless.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.3';
+```
+
+No-op migration (no schema change); it exists only so the `ALTER EXTENSION`
+command succeeds and the recompiled module is picked up.
+
+## [1.5.2] - 2026-06-29
+
+### Changed
+
+Makes the Datalog read query path (`mentat_query` / `mentat.q` / the view
+helpers) run on a PostgreSQL hot-standby (read-only replica). The read path
+previously used pgrx's mutable SPI (`Spi::connect_mut`), which assigns a
+transaction id and fails on a standby with "cannot assign TransactionIds
+during recovery". It now uses read-only SPI.
+
+Compiled-module only: no schema or SQL-object change. (Note: 1.5.2's
+resource-hint handling broke `mentat.q` on the primary; fixed in 1.5.3 —
+prefer 1.5.3.)
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.2';
+```
+
 ## [1.5.1] - 2026-06-18
 
 ### CI / maintenance release

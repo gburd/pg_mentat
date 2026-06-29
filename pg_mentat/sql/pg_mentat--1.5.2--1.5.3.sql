@@ -1,0 +1,26 @@
+-- pg_mentat 1.5.2 -> 1.5.3 upgrade.
+--
+-- 1.5.3 completes and corrects the hot-standby read path started in 1.5.2.
+--
+-- 1.5.2 left two problems:
+--   1. Several read-side store_id / lookup resolutions (pull, mentat.entity,
+--      :as-of / :since time travel, lookup_by_ident, has_<ext>) still used
+--      mutable SPI, so those reads still failed on a standby.
+--   2. Routing the main query path through read-only SPI made the transaction
+--      read-only before apply_optimizer_hints ran its `SET LOCAL` resource
+--      hints; a SQL `SET` under read-only SPI is rejected ("SET is not allowed
+--      in a non-volatile function"), which broke mentat.q / mentat_query on
+--      the PRIMARY as well.
+--
+-- 1.5.3 routes the remaining reads through read-only SPI and sets the
+-- resource-limit GUCs (statement_timeout, temp_file_limit, enable_seqscan,
+-- work_mem) via pg_sys::set_config_option (GUC_ACTION_LOCAL) instead of a SQL
+-- SET, which is permitted in a read-only / recovery transaction and reverts at
+-- transaction end. Result: the full Datalog read path (q, pull, entity,
+-- time-travel, lookup) runs on both primary and standby, and the primary is no
+-- longer broken.
+--
+-- This is a compiled-module change only: no schema change, no SQL-object
+-- signature change. This migration intentionally does nothing; it exists so
+-- that `ALTER EXTENSION pg_mentat UPDATE TO '1.5.3'` succeeds and the
+-- recompiled module is picked up. No REINDEX, no data migration.
