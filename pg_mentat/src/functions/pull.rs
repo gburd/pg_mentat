@@ -26,10 +26,10 @@ fn get_store_id_from_schema(schema: &str) -> Result<i64, PullError> {
         .into());
     };
 
-    let store_id: Option<i64> = Spi::get_one_with_args(
+    let store_id: Option<i64> = crate::functions::query::select_one_i64_ro(
         "SELECT store_id FROM mentat.stores WHERE store_name = $1",
         &[DatumWithOid::from(store_name)],
-    )?;
+    );
 
     store_id.ok_or_else(|| {
         MentatError::InvalidStoreName {

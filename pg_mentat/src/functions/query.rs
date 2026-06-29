@@ -127,8 +127,9 @@ use crate::types::constants::type_tag;
 /// query resolves its store_id (and, for lookup refs, resolves entities), so
 /// those reads tainted the whole Datalog read path. `client.select` runs
 /// `SPI_execute_with_args(..., read_only = true, ...)` and never marks the
-/// transaction mutable, so it is standby-safe.
-fn select_one_i64_ro(sql: &str, args: &[DatumWithOid<'_>]) -> Option<i64> {
+/// transaction mutable, so it is standby-safe. Shared by the pull, entity,
+/// and time-travel read paths, which resolve store_id the same way.
+pub(crate) fn select_one_i64_ro(sql: &str, args: &[DatumWithOid<'_>]) -> Option<i64> {
     Spi::connect(|client| client.select(sql, Some(1), args)?.first().get_one::<i64>())
         .ok()
         .flatten()
@@ -687,18 +688,19 @@ struct ComplexityInfo {
     union_all: bool,
 }
 
-/// Apply SET LOCAL optimizer hints and resource limits before executing a Mentat query.
+/// Apply optimizer hints and resource limits before executing a Mentat query.
 ///
-/// Issues SET LOCAL statements via the read-only SPI client (`client.select`).
-/// These settings revert automatically at transaction end.
-///
-/// The SET LOCAL statements are run through `.select()` rather than `.update()`
-/// on purpose: `.update()` calls `Spi::mark_mutable()` →
-/// `GetCurrentTransactionId()`, which assigns an XID and raises
-/// "cannot assign TransactionIds during recovery" on a hot-standby. `.select()`
-/// never marks the transaction mutable, and a bare `SET LOCAL` is a utility
-/// statement that executes fine read-only (it returns no tuples). This keeps
-/// the whole Datalog query path standby-safe.
+/// Sets transaction-local GUCs (`SET LOCAL` semantics) via
+/// `pg_sys::set_config_option` with `GUC_ACTION_LOCAL`, NOT via a SQL
+/// `SET LOCAL` statement. The reason: a SQL `SET` executed through SPI is
+/// rejected with "SET is not allowed in a non-volatile function" once the
+/// query path runs under read-only SPI (which it now does so Datalog reads
+/// work on a hot-standby, where `Spi::update`/`mark_mutable` would assign an
+/// XID and fail with "cannot assign TransactionIds during recovery").
+/// `set_config_option` changes the GUC directly in C, which is permitted in
+/// a read-only/recovery transaction and reverts automatically at
+/// transaction end. This keeps the whole Datalog query path standby-safe
+/// without breaking the resource limits.
 ///
 /// Resource limits applied:
 /// - `statement_timeout`: prevents runaway queries (mentat.query_timeout_ms)
@@ -708,21 +710,45 @@ struct ComplexityInfo {
 ///
 /// Note: Recursive CTE depth is controlled via the LIMIT clause in the CTE
 /// output (see recursive_queries.rs), governed by `mentat.max_recursion_depth`.
-fn apply_optimizer_hints(client: &pgrx::spi::SpiClient<'_>, complexity: &QueryComplexity) {
+fn set_local_guc(name: &str, value: &str) {
+    let Ok(c_name) = std::ffi::CString::new(name) else {
+        return;
+    };
+    let Ok(c_value) = std::ffi::CString::new(value) else {
+        return;
+    };
+    // SAFETY: name/value are valid NUL-terminated C strings for the duration
+    // of the call. set_config_option with GUC_ACTION_LOCAL is the C-level
+    // equivalent of `SET LOCAL` and is safe in a read-only / recovery
+    // transaction. elevel 0 (no error throw) so an unknown/invalid GUC is a
+    // no-op rather than aborting the query.
+    unsafe {
+        pgrx::pg_sys::set_config_option(
+            c_name.as_ptr(),
+            c_value.as_ptr(),
+            pgrx::pg_sys::GucContext::PGC_USERSET,
+            pgrx::pg_sys::GucSource::PGC_S_SESSION,
+            pgrx::pg_sys::GucAction::GUC_ACTION_LOCAL,
+            true,
+            0,
+            false,
+        );
+    }
+}
+
+fn apply_optimizer_hints(_client: &pgrx::spi::SpiClient<'_>, complexity: &QueryComplexity) {
     // --- Resource limits (always applied, regardless of optimizer hints setting) ---
 
     // Statement timeout: prevents runaway queries
     let timeout_ms = crate::planner::query_timeout_ms();
     if timeout_ms > 0 {
-        let timeout_sql = format!("SET LOCAL statement_timeout = '{}'", timeout_ms);
-        let _ = client.select(&timeout_sql, None, &[]);
+        set_local_guc("statement_timeout", &timeout_ms.to_string());
     }
 
     // Temp file limit: prevents disk exhaustion from large sorts/hash joins
     let temp_limit = crate::planner::temp_file_limit();
     if temp_limit.chars().all(|c| c.is_ascii_alphanumeric()) {
-        let temp_sql = format!("SET LOCAL temp_file_limit = '{}'", temp_limit);
-        let _ = client.select(&temp_sql, None, &[]);
+        set_local_guc("temp_file_limit", &temp_limit);
     }
 
     // --- Optimizer hints (only when enabled) ---
@@ -734,7 +760,7 @@ fn apply_optimizer_hints(client: &pgrx::spi::SpiClient<'_>, complexity: &QueryCo
     // For any Mentat query that touches the datoms table, discourage
     // sequential scans so the planner prefers the covering indexes
     // (EAVT, AEVT, AVET, VAET).
-    let _ = client.select("SET LOCAL enable_seqscan = off", None, &[]);
+    set_local_guc("enable_seqscan", "off");
 
     // For complex queries, bump work_mem to allow larger in-memory
     // sorts and hash tables.
@@ -743,8 +769,7 @@ fn apply_optimizer_hints(client: &pgrx::spi::SpiClient<'_>, complexity: &QueryCo
         // Defensive: only pass values that look like a memory size
         // (digits optionally followed by a unit suffix).
         if work_mem.chars().all(|c| c.is_ascii_alphanumeric()) {
-            let set_sql = format!("SET LOCAL work_mem = '{}'", work_mem);
-            let _ = client.select(&set_sql, None, &[]);
+            set_local_guc("work_mem", &work_mem);
         }
     }
 }

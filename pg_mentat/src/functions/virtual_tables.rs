@@ -20,7 +20,12 @@ fn extension_available(ext_name: &str) -> bool {
         "SELECT 1 FROM pg_extension WHERE extname = '{}'",
         ext_name.replace('\'', "''")
     );
-    Spi::get_one::<i64>(&query).ok().flatten().is_some()
+    Spi::connect(|client| {
+        client
+            .select(&query, Some(1), &[])
+            .map(|t| t.first().get_one::<i64>().ok().flatten().is_some())
+    })
+    .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
