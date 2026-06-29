@@ -26,15 +26,13 @@ fn lookup_by_ident(attr_ident: &str, value: &str) -> Option<i64> {
     let attr_id = crate::cache::get_cache().resolve_ident(attr_ident)?;
 
     // Query datoms for the entity with this value (string type tag = 7)
-    let result = crate::functions::query::select_one_i64_ro(
+    crate::functions::query::select_one_i64_ro(
         "SELECT e FROM mentat.datoms WHERE a = $1 AND v_text = $2 AND value_type_tag = 7 AND added = true LIMIT 1",
         &[
             DatumWithOid::from(attr_id),
             DatumWithOid::from(value),
         ],
-    );
-
-    result
+    )
 }
 
 /// Get all attribute idents for an entity
