@@ -1,6 +1,6 @@
 [package]
 name = "pg_mentat"
-version = "1.5.3"
+version = "1.5.4"
 edition = "2021"
 authors = ["Greg Burd <greg@burd.me>"]
 license = "Apache-2.0"

@@ -5,6 +5,23 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.4] - 2026-06-29
+
+### Fixed
+
+- `clippy::let_and_return` in `lookup_by_ident` (the 1.5.3 read-only-SPI
+  conversion left a redundant `let result = ...; result`). The 1.5.3 tag's
+  `clippy -D warnings` CI job failed on this; the test suites and builds
+  passed. CI-only — the compiled module is functionally identical to 1.5.3.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.4';
+```
+
+No-op migration (no schema change).
+
 ## [1.5.3] - 2026-06-29
 
 ### Fixed

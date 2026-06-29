@@ -1,0 +1,10 @@
+-- pg_mentat 1.5.3 -> 1.5.4 upgrade.
+--
+-- 1.5.4 is a one-line lint fix on top of 1.5.3 (clippy::let_and_return in
+-- lookup_by_ident). No schema change, no SQL-object change, no
+-- query/transaction behavior change; the compiled module is functionally
+-- identical to 1.5.3.
+--
+-- This migration intentionally does nothing; it exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.5.4'` succeeds and the recompiled
+-- module is picked up.
