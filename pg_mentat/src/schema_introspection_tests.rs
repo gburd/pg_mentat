@@ -329,8 +329,7 @@ mod tests {
     fn test_si_all_value_tables_have_vaet_index() {
         setup();
         for ty in [
-            "ref", "long", "text", "double", "instant", "keyword", "uuid",
-            "bytes", "boolean",
+            "ref", "long", "text", "double", "instant", "keyword", "uuid", "bytes", "boolean",
         ] {
             let idx = format!("idx_datoms_{}_new_vaet", ty);
             let exists = Spi::get_one::<bool>(&format!(
