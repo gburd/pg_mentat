@@ -95,29 +95,44 @@ CREATE INDEX IF NOT EXISTS idx_datoms_ref_new_vaet
 CREATE INDEX IF NOT EXISTS idx_datoms_ref_new_tx
     ON mentat.datoms_ref_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
--- long: no VAET (range queries by value are uncommon; AVET covers the rest)
+-- long: VAET added so the transact/lookup-ref resolution probe
+-- (SELECT e WHERE store_id=? AND a=? AND v=?) is an index lookup, not an
+-- AEVT scan + value filter. Cheap for low-fanout attrs, essential for
+-- high-fanout ones. (Range queries by value remain uncommon; this index
+-- serves equality resolution, which fires on every resolvable value.)
 CREATE INDEX IF NOT EXISTS idx_datoms_long_new_eavt
     ON mentat.datoms_long_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_long_new_aevt
     ON mentat.datoms_long_new (store_id, a, e, tx) INCLUDE (v) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_long_new_vaet
+    ON mentat.datoms_long_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_long_new_tx
     ON mentat.datoms_long_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
--- text: no VAET (too wide); GIN fulltext index instead
+-- text: VAET added for the equality resolution probe (the value is already in
+-- the primary key (store_id, e, a, v, tx), so a value that fits the PK btree
+-- fits this index too -- no new width risk). The GIN index below still serves
+-- full-text search; this btree serves exact (a, v) -> e resolution, which
+-- ran as an AEVT scan + filter before and was pathological on high-fanout
+-- attributes (millions of rows per (store_id, a)).
 CREATE INDEX IF NOT EXISTS idx_datoms_text_new_eavt
     ON mentat.datoms_text_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_text_new_aevt
     ON mentat.datoms_text_new (store_id, a, e, tx) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_text_new_vaet
+    ON mentat.datoms_text_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_text_new_tx
     ON mentat.datoms_text_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_text_new_fts
     ON mentat.datoms_text_new USING gin(to_tsvector('english', v)) WHERE added;
 
--- double, instant: standard three-way coverage
+-- double, instant: standard three-way coverage + VAET for equality resolution
 CREATE INDEX IF NOT EXISTS idx_datoms_double_new_eavt
     ON mentat.datoms_double_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_double_new_aevt
     ON mentat.datoms_double_new (store_id, a, e, tx) INCLUDE (v) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_double_new_vaet
+    ON mentat.datoms_double_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_double_new_tx
     ON mentat.datoms_double_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
@@ -125,6 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_eavt
     ON mentat.datoms_instant_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_aevt
     ON mentat.datoms_instant_new (store_id, a, e, tx) INCLUDE (v) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_vaet
+    ON mentat.datoms_instant_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_instant_new_tx
     ON mentat.datoms_instant_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
@@ -138,11 +155,14 @@ CREATE INDEX IF NOT EXISTS idx_datoms_keyword_new_vaet
 CREATE INDEX IF NOT EXISTS idx_datoms_keyword_new_tx
     ON mentat.datoms_keyword_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
--- uuid, bytes, boolean
+-- uuid, bytes, boolean: VAET added for equality resolution. bytes keeps v in
+-- its PK like text, so the same "fits PK => fits index" width argument holds.
 CREATE INDEX IF NOT EXISTS idx_datoms_uuid_new_eavt
     ON mentat.datoms_uuid_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_uuid_new_aevt
     ON mentat.datoms_uuid_new (store_id, a, e, tx) INCLUDE (v) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_uuid_new_vaet
+    ON mentat.datoms_uuid_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_uuid_new_tx
     ON mentat.datoms_uuid_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 
@@ -150,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_datoms_bytes_new_eavt
     ON mentat.datoms_bytes_new (store_id, e, a, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_bytes_new_aevt
     ON mentat.datoms_bytes_new (store_id, a, e, tx) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_bytes_new_vaet
+    ON mentat.datoms_bytes_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_bytes_new_tx
     ON mentat.datoms_bytes_new (store_id, tx DESC) INCLUDE (e, a) WHERE added;
 
@@ -157,6 +179,8 @@ CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_eavt
     ON mentat.datoms_boolean_new (store_id, e, a, tx) INCLUDE (v) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_aevt
     ON mentat.datoms_boolean_new (store_id, a, e, tx) INCLUDE (v) WHERE added;
+CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_vaet
+    ON mentat.datoms_boolean_new (store_id, v, a, e, tx) WHERE added;
 CREATE INDEX IF NOT EXISTS idx_datoms_boolean_new_tx
     ON mentat.datoms_boolean_new (store_id, tx DESC) INCLUDE (e, a, v) WHERE added;
 

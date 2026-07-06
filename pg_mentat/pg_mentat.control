@@ -5,7 +5,7 @@
 # here — it collides with the generated CREATE SCHEMA and produces
 # `ERROR: schema mentat is not a member of extension "pg_mentat"`.
 comment = 'Datomic-compatible Datalog query engine for PostgreSQL'
-default_version = '1.5.4'
+default_version = '1.5.5'
 module_pathname = '$libdir/pg_mentat'
 relocatable = false
 superuser = false

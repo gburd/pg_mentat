@@ -5,6 +5,47 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.5] - 2026-07-06
+
+### Fixed
+
+- **VAET index on all value tables.** The transact / lookup-ref resolution
+  probe `SELECT e ... WHERE store_id=? AND a=? AND v=?` (resolve an entity
+  id from a known attribute+value) fires once per resolvable ref/upsert
+  value inside `mentat.t`, on every value type. Only `datoms_ref_new` and
+  `datoms_keyword_new` shipped a VAET index `(store_id, v, a, e, tx)`; the
+  other seven value tables (`text`, `long`, `double`, `instant`, `uuid`,
+  `bytes`, `boolean`) resolved this by scanning the AEVT index on
+  `(store_id, a)` and filtering by `v`. On a high-fanout attribute (millions
+  of rows per `(store_id, a)`) that scan is pathological. A production
+  operator measured ~30x on a 1.1M-row attribute; the probe runs inside
+  `mentat.t`, so it directly dominated write-path latency. All nine value
+  tables now carry the VAET index. The value column is already part of each
+  table's primary key, so there is no new index-row-width risk for text or
+  bytes. (Reported with measurements by the agora / pg.ddx.io operator.)
+- Added a `schema_introspection` regression test asserting every value table
+  has its VAET index, so the gap cannot silently return.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.5';
+```
+
+The migration creates the seven missing VAET indexes with
+`CREATE INDEX IF NOT EXISTS`. **`ALTER EXTENSION` runs in a transaction, so
+these cannot be `CONCURRENTLY`** and a plain `CREATE INDEX` takes a write-
+blocking `SHARE` lock for the build. On installs with large existing value
+tables under heavy ingest, build the indexes `CONCURRENTLY` out-of-band
+first (then the migration's `IF NOT EXISTS` builds are no-ops):
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_datoms_text_new_vaet
+    ON mentat.datoms_text_new (store_id, v, a, e, tx) WHERE added;
+-- repeat for long/double/instant/uuid/bytes/boolean as your data warrants
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.5';
+```
+
 ## [1.5.4] - 2026-06-29
 
 ### Fixed

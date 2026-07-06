@@ -317,4 +317,30 @@ mod tests {
         assert!(s2.len() >= s1.len());
         assert!(s2.contains("si.grow/new"));
     }
+
+    /// Every narrow value table must carry a VAET index
+    /// (store_id, v, a, e[, tx]) so the transact / lookup-ref resolution probe
+    /// `SELECT e WHERE store_id=? AND a=? AND v=?` is an index lookup rather
+    /// than an AEVT scan + value filter. A production operator hit a ~30x
+    /// slowdown on a high-fanout attribute because seven of the nine value
+    /// tables shipped without this index; this guards against that gap
+    /// silently returning.
+    #[pg_test]
+    fn test_si_all_value_tables_have_vaet_index() {
+        setup();
+        for ty in [
+            "ref", "long", "text", "double", "instant", "keyword", "uuid",
+            "bytes", "boolean",
+        ] {
+            let idx = format!("idx_datoms_{}_new_vaet", ty);
+            let exists = Spi::get_one::<bool>(&format!(
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes \
+                 WHERE schemaname = 'mentat' AND indexname = '{}')",
+                idx
+            ))
+            .expect("index existence query")
+            .expect("NULL");
+            assert!(exists, "missing value-lookup (VAET) index {}", idx);
+        }
+    }
 }
