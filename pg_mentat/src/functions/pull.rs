@@ -2921,9 +2921,11 @@ mod tests {
             ]'::TEXT)",
         )?;
 
-        // Use a tempid for the data entity. Hardcoding a literal entid (e.g.
-        // 10000) collides with the auto-assigned schema-attribute entids
-        // (:node/self gets 10000, :node/val 10001), corrupting the entity.
+        // Use a tempid for the data entity. Hardcoding a literal entid that
+        // falls in the user-allocation band collides with the auto-assigned
+        // schema-attribute entids (mentat.t allocates attributes from
+        // partition_user_seq, which starts at 1000000). A tempid avoids the
+        // collision by using whatever the allocator returns.
         let report = Spi::get_one::<String>(
             "SELECT mentat_transact('[
                 {:db/id \"n\" :node/val 42}

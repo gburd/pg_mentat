@@ -104,25 +104,25 @@ mod tests {
         );
         assert_eq!(tx_ids.len(), tx_unique.len(), "tx partition IDs not unique");
 
-        // IDs should be in their respective partition ranges
+        // IDs should be in their respective partition ranges (new layout).
         for id in &db_ids {
             assert!(
-                *id >= 0 && *id < 10000,
-                "db.part/db ID {} outside range [0, 10000)",
+                *id >= 0 && *id < 1000000,
+                "db.part/db ID {} outside range [0, 1000000)",
                 id
             );
         }
         for id in &user_ids {
             assert!(
-                *id >= 10000 && *id < 1000000,
-                "db.part/user ID {} outside range [10000, 1000000)",
+                *id >= 1000000 && *id < 1000000000000,
+                "db.part/user ID {} outside range [1000000, 1000000000000)",
                 id
             );
         }
         for id in &tx_ids {
             assert!(
-                *id >= 1000000 && *id < 2000000,
-                "db.part/tx ID {} outside range [1000000, 2000000)",
+                *id >= 1000000000000 && *id < 2000000000000,
+                "db.part/tx ID {} outside range [1000000000000, 2000000000000)",
                 id
             );
         }
@@ -273,11 +273,17 @@ mod tests {
             );
         }
 
-        // All tx IDs should be in the tx partition range
+        // All tx IDs should be in the tx partition range (new layout), except
+        // the genesis/bootstrap transaction (tx=1000000), which is a fixed
+        // sentinel that precedes the allocated tx band [1e12, 2e12) and is
+        // stamped on the bootstrap datoms.
         for tx in &tx_ids {
+            if *tx == 1000000 {
+                continue; // genesis sentinel
+            }
             assert!(
-                *tx >= 1000000 && *tx < 2000000,
-                "Transaction ID {} outside tx partition range [1000000, 2000000)",
+                *tx >= 1000000000000 && *tx < 2000000000000,
+                "Transaction ID {} outside tx partition range [1000000000000, 2000000000000)",
                 tx
             );
         }

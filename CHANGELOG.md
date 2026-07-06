@@ -5,6 +5,50 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.6] - 2026-07-06
+
+### Fixed
+
+- **Entity-id partition sequences are now bounded, and the tx band is no
+  longer a time bomb.** The three partition sequences
+  (`partition_db_seq`, `partition_user_seq`, `partition_tx_seq`) shipped
+  with only `START WITH` and no `MAXVALUE`, so an exhausted partition
+  silently issued ids that collided with the next partition's space -- a
+  latent entid-space-corruption hazard. Worse, the tx band was
+  `[1000000, 2000000)`: one tx id is consumed per `mentat.t`, so a
+  write-heavy store (e.g. ~33k tx/day) exhausted it in weeks and then
+  `mentat.t` began issuing ids outside its band.
+
+  Fresh installs use a new, disjoint, generous layout, and every partition
+  sequence is bounded to its band with `MINVALUE`/`MAXVALUE` so exhaustion
+  fails loud (`nextval: reached maximum value of sequence`) instead of
+  colliding:
+  | partition | band | sequence bound |
+  |---|---|---|
+  | `db.part/db`   | `[0, 1e6)`     | `MAXVALUE 999999` |
+  | `db.part/user` | `[1e6, 1e12)`  | `MAXVALUE 999999999999` |
+  | `db.part/tx`   | `[1e12, 2e12)` | `MAXVALUE 1999999999999` |
+
+  This also fixes the intermittent `concurrency_tests` failures
+  (`multi_partition_interleaved_allocation`,
+  `allocate_entid_uniqueness_per_partition`): the bands are now disjoint by
+  construction, and the concurrency test setup resets the sequences so the
+  shared-instance / non-transactional-sequence drift between pgrx tests can
+  no longer perturb the assertions.
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.6';
+```
+
+Existing stores cannot be re-banded in place (their user ids already sit
+directly below the old tx band), so the migration does the safe subset:
+it bounds `db`/`user` at their existing band ceilings (fail-loud on
+exhaustion) and raises the `tx` ceiling far upward (to 1e12), removing the
+exhaustion time bomb without moving any live id. No id is relocated; data
+is untouched. Fresh installs get the full new layout.
+
 ## [1.5.5] - 2026-07-06
 
 ### Fixed

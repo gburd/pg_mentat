@@ -174,16 +174,23 @@ extension_sql!(
         FOR EACH ROW EXECUTE FUNCTION mentat.fulltext_update_trigger();
 
     INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-        ('db.part/db', 0, 10000, 100, FALSE),
-        ('db.part/user', 10000, 1000000, 10000, FALSE),
-        ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+        ('db.part/db',   0,             1000000,       100,            FALSE),
+        ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+        ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
     ON CONFLICT (name) DO NOTHING;
 
     -- Sequences for lock-free entity ID allocation (replaces UPDATE-based locking)
-    -- CACHE 100 pre-allocates IDs per connection for high concurrency
-    CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq START WITH 100 CACHE 10;
-    CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq START WITH 10000 CACHE 100;
-    CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq START WITH 1000001 CACHE 100;
+    -- CACHE 100 pre-allocates IDs per connection for high concurrency.
+    -- MINVALUE/MAXVALUE bound each sequence to its partition band so an
+    -- exhausted partition fails loud rather than silently issuing ids that
+    -- collide with the next partition's space. Bands are disjoint, monotonic,
+    -- and large (BIGINT) so exhaustion is not a practical concern.
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq
+        START WITH 100 MINVALUE 100 MAXVALUE 999999 CACHE 10;
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq
+        START WITH 1000000 MINVALUE 1000000 MAXVALUE 999999999999 CACHE 100;
+    CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq
+        START WITH 1000000000001 MINVALUE 1000000000000 MAXVALUE 1999999999999 CACHE 100;
 
     INSERT INTO mentat.transactions (tx, tx_instant)
     VALUES (1000000, '2025-01-01T00:00:00Z')

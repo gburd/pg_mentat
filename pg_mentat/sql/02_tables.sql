@@ -158,6 +158,21 @@ CREATE TABLE mentat.transaction_attrs (
 
 -- Sequences for lock-free entity ID allocation (replaces UPDATE-based locking)
 -- CACHE pre-allocates IDs per backend connection for high concurrency without row locks.
-CREATE SEQUENCE mentat.partition_db_seq START WITH 100 CACHE 10;
-CREATE SEQUENCE mentat.partition_user_seq START WITH 10000 CACHE 100;
-CREATE SEQUENCE mentat.partition_tx_seq START WITH 1000001 CACHE 100;
+--
+-- Each sequence is bounded to its partition's band (see the mentat.partitions
+-- rows in 06_bootstrap_data.sql) with MINVALUE/MAXVALUE. Bounding matters for
+-- correctness, not just tidiness: without an upper bound an exhausted
+-- partition silently issues ids that collide with the NEXT partition's space.
+-- With MAXVALUE, exhaustion fails loud ("nextval: reached maximum value of
+-- sequence") instead of corrupting the entid space. The bands are disjoint and
+-- monotonic, and each is large enough (BIGINT) that exhaustion is not a
+-- practical concern:
+--   db.part/db   [0,          1e6)   schema / bootstrap entities
+--   db.part/user [1e6,        1e12)  data entities
+--   db.part/tx   [1e12,       2e12)  transactions (one per mentat.t)
+CREATE SEQUENCE mentat.partition_db_seq
+    START WITH 100      MINVALUE 100        MAXVALUE 999999               CACHE 10;
+CREATE SEQUENCE mentat.partition_user_seq
+    START WITH 1000000  MINVALUE 1000000    MAXVALUE 999999999999         CACHE 100;
+CREATE SEQUENCE mentat.partition_tx_seq
+    START WITH 1000000000001 MINVALUE 1000000000000 MAXVALUE 1999999999999 CACHE 100;

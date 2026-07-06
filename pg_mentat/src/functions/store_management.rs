@@ -207,13 +207,13 @@ pub fn create_store(
         );
 
         INSERT INTO {schema}.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-            ('db.part/db', 0, 10000, 100, FALSE),
-            ('db.part/user', 10000, 1000000, 10000, FALSE),
-            ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+            ('db.part/db',   0,             1000000,       100,            FALSE),
+            ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+            ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
         ON CONFLICT (name) DO NOTHING;
 
         INSERT INTO {schema}.transactions (tx, tx_instant)
-        VALUES (1000000, '2025-01-01T00:00:00Z')
+        VALUES (1000000000000, '2025-01-01T00:00:00Z')
         ON CONFLICT (tx) DO NOTHING;
 
         CREATE TABLE IF NOT EXISTS {schema}.fulltext (
@@ -221,8 +221,13 @@ pub fn create_store(
             text_value TEXT NOT NULL
         );
 
-        CREATE SEQUENCE IF NOT EXISTS {schema}.partition_user_seq START WITH 10000 CACHE 100;
-        CREATE SEQUENCE IF NOT EXISTS {schema}.partition_tx_seq START WITH 1000001 CACHE 100;
+        -- Bounded per-band sequences (see 02_tables.sql / lib.rs for rationale).
+        CREATE SEQUENCE IF NOT EXISTS {schema}.partition_db_seq
+            START WITH 100 MINVALUE 100 MAXVALUE 999999 CACHE 10;
+        CREATE SEQUENCE IF NOT EXISTS {schema}.partition_user_seq
+            START WITH 1000000 MINVALUE 1000000 MAXVALUE 999999999999 CACHE 100;
+        CREATE SEQUENCE IF NOT EXISTS {schema}.partition_tx_seq
+            START WITH 1000000000001 MINVALUE 1000000000000 MAXVALUE 1999999999999 CACHE 100;
         ",
         schema = quoted_schema
     ))?;

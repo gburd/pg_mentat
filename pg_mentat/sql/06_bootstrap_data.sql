@@ -5,9 +5,9 @@
 -- Based on mentat's default partition map
 -- Note: next_entid is kept for metadata but actual allocation uses sequences.
 INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-    ('db.part/db', 0, 10000, 100, FALSE),
-    ('db.part/user', 10000, 1000000, 10000, FALSE),
-    ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+    ('db.part/db',   0,             1000000,       100,            FALSE),
+    ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+    ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
 ON CONFLICT (name) DO NOTHING;
 
 -- Core schema attributes
@@ -63,6 +63,8 @@ SELECT ident, entid FROM mentat.schema
 WHERE entid < 100
 ON CONFLICT (ident) DO NOTHING;
 
--- Advance sequences past bootstrap-allocated IDs.
--- db.part/db bootstrap uses entids up to 92, so advance to 100.
-SELECT setval('mentat.partition_db_seq', 100, false);
+-- The partition sequences are created at their band floor by the
+-- CREATE SEQUENCE ... START WITH statements (02_tables.sql / lib.rs), and the
+-- bootstrap schema entids (10-92) are explicit, below the db sequence floor of
+-- 100. No setval is needed here, and a setval would be harmful if this ran on
+-- a store whose sequences had already advanced (it would rewind them).

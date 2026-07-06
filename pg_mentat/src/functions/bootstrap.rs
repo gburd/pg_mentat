@@ -61,15 +61,20 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         WHERE entid < 100
         ON CONFLICT (ident) DO NOTHING;
 
-        -- Initialize default partitions
+        -- Initialize default partitions (new disjoint layout; sequences are
+        -- created + bounded by the extension_sql! bootstrap in lib.rs).
         INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
-            ('db.part/db', 0, 10000, 100, FALSE),
-            ('db.part/user', 10000, 1000000, 10000, FALSE),
-            ('db.part/tx', 1000000, 2000000, 1000001, FALSE)
+            ('db.part/db',   0,             1000000,       100,            FALSE),
+            ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+            ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
         ON CONFLICT (name) DO NOTHING;
 
-        -- Advance sequences past bootstrap-allocated IDs.
-        SELECT setval('mentat.partition_db_seq', 100, false);
+        -- NOTE: do NOT setval the partition sequences here. bootstrap_schema()
+        -- is idempotent and re-callable (every test setup calls it), so a
+        -- setval would REWIND a shared sequence mid-workload and hand out
+        -- duplicate entids. The sequences are created at their correct band
+        -- floor by the extension_sql! bootstrap (lib.rs) / 02_tables.sql and
+        -- only ever advance via nextval.
 
         -- Bootstrap datoms: EAV facts describing each bootstrap entity.
         -- a=10 is :db/ident (keyword type_tag=8, stored in v_keyword)
