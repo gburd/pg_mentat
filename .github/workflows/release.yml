@@ -35,6 +35,14 @@ jobs:
 
       - name: Install PostgreSQL ${{ matrix.pg_version }}
         run: |
+          # The default runner apt repos only carry one PG major; add PGDG so
+          # pg15/16/17 are all installable.
+          sudo apt-get install -y --no-install-recommends curl ca-certificates gnupg lsb-release
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
               postgresql-${{ matrix.pg_version }} \
@@ -74,28 +82,27 @@ jobs:
 
       - name: Create release tarball
         run: |
-          PACKAGE_DIR="pg_mentat/target/release/pg_mentat-pg${{ matrix.pg_version }}"
-          # pgrx package outputs to target/release/pg_mentat-pg<ver>
-          # Find the actual output directory
-          PGRX_OUT=$(find pg_mentat/target -type d -name "pg_mentat-pg${{ matrix.pg_version }}" 2>/dev/null | head -1)
-          if [ -z "$PGRX_OUT" ]; then
-            # Fallback: pgrx 0.17 uses a different layout
-            PGRX_OUT=$(find pg_mentat/target -path "*/release/*" -name "*.so" -exec dirname {} \; | head -1)
-          fi
-
-          # Assemble the tarball contents
+          # cargo pgrx package writes to the WORKSPACE target dir, which is at
+          # the repo root (target/), not pg_mentat/target/, even though the
+          # package command runs with working-directory: pg_mentat.
           STAGING="pg_mentat-pg${{ matrix.pg_version }}"
           mkdir -p "${STAGING}"
 
-          # Copy extension files from pgrx package output
-          find pg_mentat/target -name "pg_mentat.so" -path "*release*" -exec cp {} "${STAGING}/" \;
-          find pg_mentat/target -name "pg_mentat.control" -exec cp {} "${STAGING}/" \; 2>/dev/null || \
-            cp pg_mentat/pg_mentat.control "${STAGING}/"
-          find pg_mentat/target -name "pg_mentat--*.sql" -exec cp {} "${STAGING}/" \; 2>/dev/null || true
+          # Copy the compiled extension files from the pgrx package output.
+          find target -name "pg_mentat.so" -path "*release*" -exec cp {} "${STAGING}/" \;
+          find target -name "pg_mentat--*.sql" -exec cp {} "${STAGING}/" \; 2>/dev/null || true
+          find target -name "pg_mentat.control" -exec cp {} "${STAGING}/" \; 2>/dev/null || true
 
-          # Include the control file from source if not found in target
+          # Fall back to the source control file if the packaged one wasn't found.
           if [ ! -f "${STAGING}/pg_mentat.control" ]; then
             cp pg_mentat/pg_mentat.control "${STAGING}/"
+          fi
+
+          # Fail loud if the shared library is missing (empty tarball is useless).
+          if [ ! -f "${STAGING}/pg_mentat.so" ]; then
+            echo "ERROR: pg_mentat.so not found under target/ after packaging" >&2
+            find target -name 'pg_mentat.so' 2>/dev/null || true
+            exit 1
           fi
 
           tar czf "pg_mentat-pg${{ matrix.pg_version }}.tar.gz" "${STAGING}"
