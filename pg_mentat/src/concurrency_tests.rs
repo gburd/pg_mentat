@@ -114,8 +114,8 @@ mod tests {
         }
         for id in &user_ids {
             assert!(
-                *id >= 1000000 && *id < 1000000000000,
-                "db.part/user ID {} outside range [1000000, 1000000000000)",
+                *id >= 1000001 && *id < 1000000000000,
+                "db.part/user ID {} outside range [1000001, 1000000000000)",
                 id
             );
         }

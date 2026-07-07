@@ -65,7 +65,7 @@ pub fn bootstrap_schema() -> Result<(), Box<dyn std::error::Error + Send + Sync>
         -- created + bounded by the extension_sql! bootstrap in lib.rs).
         INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
             ('db.part/db',   0,             1000000,       100,            FALSE),
-            ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+            ('db.part/user', 1000001,       1000000000000, 1000001,        FALSE),
             ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
         ON CONFLICT (name) DO NOTHING;
 

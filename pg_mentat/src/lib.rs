@@ -175,7 +175,7 @@ extension_sql!(
 
     INSERT INTO mentat.partitions (name, start_entid, end_entid, next_entid, allow_excision) VALUES
         ('db.part/db',   0,             1000000,       100,            FALSE),
-        ('db.part/user', 1000000,       1000000000000, 1000000,        FALSE),
+        ('db.part/user', 1000001,       1000000000000, 1000001,        FALSE),
         ('db.part/tx',   1000000000000, 2000000000000, 1000000000001,  FALSE)
     ON CONFLICT (name) DO NOTHING;
 
@@ -188,7 +188,7 @@ extension_sql!(
     CREATE SEQUENCE IF NOT EXISTS mentat.partition_db_seq
         START WITH 100 MINVALUE 100 MAXVALUE 999999 CACHE 10;
     CREATE SEQUENCE IF NOT EXISTS mentat.partition_user_seq
-        START WITH 1000000 MINVALUE 1000000 MAXVALUE 999999999999 CACHE 100;
+        START WITH 1000001 MINVALUE 1000001 MAXVALUE 999999999999 CACHE 100;
     CREATE SEQUENCE IF NOT EXISTS mentat.partition_tx_seq
         START WITH 1000000000001 MINVALUE 1000000000000 MAXVALUE 1999999999999 CACHE 100;
 
@@ -727,6 +727,8 @@ mod comprehensive_upsert_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod concurrency_tests;
 #[cfg(any(test, feature = "pg_test"))]
+mod entid_collision_tests;
+#[cfg(any(test, feature = "pg_test"))]
 mod cross_entity_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod current_projection_tests;
@@ -1133,6 +1135,17 @@ extension_sql_file!(
     "../sql/24_current_projection.sql",
     name = "current_projection",
     requires = ["narrow_storage"],
+);
+
+// Entity-id partition-collision diagnostics + opt-in repair
+// (mentat.entid_collision_report / _count / repair_entid_collisions). For
+// stores created before the partition sequences were bounded, whose sequences
+// overflowed their bands into a shared id space. See
+// sql/25_entid_collision_repair.sql.
+extension_sql_file!(
+    "../sql/25_entid_collision_repair.sql",
+    name = "entid_collision_repair",
+    requires = ["narrow_storage", "current_projection"],
 );
 
 // Short-name SQL aliases (mentat.q, mentat.t, mentat.pull, etc.)

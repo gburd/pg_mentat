@@ -5,6 +5,64 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.5.7] - 2026-07-07
+
+### Fixed
+
+**The 1.5.6 upgrade migration was unsafe for stores whose sequences had
+already overflowed their bands, and it could not remediate the resulting
+entid collisions.** A production operator on 1.5.5 correctly held the 1.5.6
+bump after finding their `partition_user_seq` (70M) and `partition_tx_seq`
+(26.9M) long ago overflowed the old `[1e4,1e6)` / `[1e6,2e6)` bands (the
+sequences were unbounded to bigint-max, so they never failed loud), with
+1,568 realized entid collisions — entids used as BOTH a transaction and a
+user/schema entity.
+
+- **Unsafe migration.** The 1.5.5→1.5.6 migration did
+  `ALTER SEQUENCE … MAXVALUE <fixed ceiling>`, which **errors and aborts the
+  whole `ALTER EXTENSION`** when the sequence's `last_value` already exceeds
+  that ceiling (`RESTART value (N) cannot be greater than MAXVALUE (m)`).
+  1.5.7 ships a **direct `1.5.5→1.5.7` upgrade edge** (PostgreSQL picks the
+  shortest path, bypassing the broken 1.5.6 step) and a `1.5.6→1.5.7` edge.
+  Both bound each sequence to `GREATEST(intended_ceiling, current_head)` —
+  **never below the live head** — so an overflowed store keeps an
+  effectively-unbounded ceiling (no break) while in-band stores still get the
+  fail-loud ceiling. A `NOTICE` flags any partition left unbounded.
+- **Collision diagnostics + repair.** New `mentat.entid_collision_report()`,
+  `mentat.entid_collision_count()`, and (opt-in, dry-run by default)
+  `mentat.repair_entid_collisions(dry_run, store)`. The repair renumbers the
+  colliding **non-tx** entities into fresh user-band ids — rewriting `e`,
+  `a`, and incoming ref `v` across the nine log tables + nine current
+  projection tables, and the schema/idents catalogs — while the transaction
+  keeps its id (its id anchors the `tx` column and basis-t / `:as-of`
+  monotonicity, so it must not move). Verify with `entid_collision_count() = 0`.
+- **New-layout genesis overlap.** 1.5.6's new user band started at exactly
+  `1000000`, the same value as the genesis-transaction sentinel, so the
+  first user entity on a fresh store collided with the genesis tx. The user
+  band now starts at `1000001`, leaving `1000000` as the lone genesis
+  sentinel. (Fresh 1.5.7 installs report zero collisions; a store created
+  fresh on 1.5.6 has this one benign collision, which `repair_entid_collisions`
+  clears.)
+
+### Upgrading
+
+```sql
+ALTER EXTENSION pg_mentat UPDATE TO '1.5.7';
+```
+
+Safe on any sequence position (never lowers a MAXVALUE below the live head).
+After upgrading, check for pre-existing partition overlap and repair if
+needed:
+
+```sql
+SELECT mentat.entid_collision_count();              -- 0 == healthy
+SELECT * FROM mentat.entid_collision_report();      -- inspect collisions
+SELECT mentat.repair_entid_collisions(true);        -- dry run (count only)
+-- back up first, then, inside your own transaction:
+SELECT mentat.repair_entid_collisions(false);       -- perform the repair
+SELECT mentat.entid_collision_count();              -- confirm 0
+```
+
 ## [1.5.6] - 2026-07-06
 
 ### Fixed

@@ -128,7 +128,7 @@ pub fn mentat_query_stats() -> Result<JsonB, Box<dyn std::error::Error + Send + 
         let mut partitions = serde_json::Map::new();
         let seq_info = [
             ("db.part/db", "mentat.partition_db_seq", 0i64),
-            ("db.part/user", "mentat.partition_user_seq", 1000000i64),
+            ("db.part/user", "mentat.partition_user_seq", 1000001i64),
             ("db.part/tx", "mentat.partition_tx_seq", 1000000000000i64),
         ];
         for (name, seq_name, start_entid) in &seq_info {
