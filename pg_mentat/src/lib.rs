@@ -727,8 +727,6 @@ mod comprehensive_upsert_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod concurrency_tests;
 #[cfg(any(test, feature = "pg_test"))]
-mod entid_collision_tests;
-#[cfg(any(test, feature = "pg_test"))]
 mod cross_entity_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod current_projection_tests;
@@ -738,6 +736,8 @@ mod data_integrity_tests;
 mod datalog_feature_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod edge_case_query_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod entid_collision_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod entity_lifecycle_tests;
 #[cfg(any(test, feature = "pg_test"))]

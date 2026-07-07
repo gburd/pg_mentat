@@ -129,6 +129,10 @@ mod tests {
         )
         .expect("q")
         .expect("NULL");
-        assert!(found.contains("needle"), "moved entity data must survive: {}", found);
+        assert!(
+            found.contains("needle"),
+            "moved entity data must survive: {}",
+            found
+        );
     }
 }
