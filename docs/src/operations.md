@@ -305,3 +305,101 @@ costs that actually hurt in production are:
 
 Adding indexes beyond the shipped set will not move these numbers and
 will slow `t()` further (every index is maintained on write).
+
+## 5. Reading from a hot standby (read replica)
+
+The Datalog read path (`mentat.q`, `mentat.pull`, `mentat.entity`,
+`:as-of` / `:since` time-travel, `mentat.lookup_by_ident`, and the
+`mentat.has_<ext>()` extension detectors) runs on a PostgreSQL hot standby
+(streaming-replication read replica). As of 1.5.3–1.5.4 these paths use
+read-only SPI and set their resource-limit GUCs via `set_config_option`
+rather than a SQL `SET`, so they never try to assign a transaction id
+during recovery.
+
+What this means operationally:
+
+- Serve read APIs from the replica. A query such as
+  `SELECT mentat.q('[:find ?e :where [?e :db/ident :db/ident]]')` runs on
+  the standby with no error.
+- Writes (`mentat.t`, excision, entid allocation, schema changes) are
+  primary-only by nature — they take a mutable transaction and cannot run
+  on a standby. That is expected; route writes to the primary.
+
+No configuration is required; it works whenever the extension is installed
+on both hosts (as it must be for replication).
+
+## 6. Entity-id partitions and collision repair
+
+pg_mentat allocates entity ids from three disjoint, bounded per-partition
+sequences:
+
+| partition | band | source sequence |
+|---|---|---|
+| `db.part/db`   | `[0, 1e6)`       | `partition_db_seq`   (schema / bootstrap) |
+| `db.part/user` | `[1000001, 1e12)`| `partition_user_seq` (data entities)      |
+| `db.part/tx`   | `[1e12, 2e12)`   | `partition_tx_seq`   (transactions)       |
+
+Since 1.5.6 each sequence carries a `MAXVALUE` at its band ceiling, so an
+exhausted partition **fails loud** (`nextval: reached maximum value of
+sequence`) instead of silently issuing ids that collide with the next
+partition's space. `db.part/tx` consumes one id per `mentat.t`; its band
+(`~1e12` ids) is effectively unbounded at any realistic write rate.
+
+### Pre-1.5.6 stores: overflow and collisions
+
+Stores created before the bands were bounded ran their sequences
+**unbounded to bigint-max**. A long-lived, write-heavy store can therefore
+have overflowed the old `[1e4,1e6)` user band and `[1e6,2e6)` tx band into
+one another, producing entids used as BOTH a transaction and a user/schema
+entity — one integer, two logical entities, so `mentat.entity(E)` returns
+the union of both.
+
+Check for this after upgrading:
+
+```sql
+SELECT mentat.entid_collision_count();          -- 0 == healthy
+SELECT * FROM mentat.entid_collision_report();   -- one row per colliding entid
+```
+
+`entid_collision_report()` lists each colliding entid, how many non-tx
+datoms it carries, whether it is used as an attribute, and its incoming ref
+count.
+
+### Repairing collisions
+
+`mentat.repair_entid_collisions(dry_run BOOLEAN DEFAULT true, store BIGINT
+DEFAULT 0)` renumbers the colliding **non-transaction** entities into fresh
+user-band ids — rewriting `e`, `a`, and incoming ref `v` across the nine
+log tables and nine current-projection tables, plus the schema/idents
+catalogs. The **transaction keeps its id**: a tx id is woven through every
+datom's `tx` column and anchors `basis-t` / `:as-of` monotonicity, so it
+must not move.
+
+The repair is destructive. It defaults to a dry run. The safe procedure:
+
+```sql
+-- 1. See how many would be remapped, changing nothing:
+SELECT mentat.repair_entid_collisions(true);
+
+-- 2. Back up the database.
+
+-- 3. In your own transaction, perform the repair:
+BEGIN;
+SELECT mentat.repair_entid_collisions(false);
+SELECT mentat.entid_collision_count();   -- confirm 0 before COMMIT
+COMMIT;
+```
+
+On a store with many collisions the repair rewrites every datom of each
+colliding entity, so run it in a maintenance window and expect it to scale
+with the number of affected datoms, not with total store size.
+
+### The 1.5.6 upgrade caveat (fixed in 1.5.7)
+
+The 1.5.5→1.5.6 migration bounded the sequences with a fixed `MAXVALUE`,
+which **aborts** if a sequence has already run past that ceiling
+(`RESTART value cannot be greater than MAXVALUE`). Upgrade **directly to
+1.5.7 or later**: it ships a direct `1.5.5→1.5.7` path that bounds each
+sequence to `GREATEST(intended_ceiling, current_head)` — never below the
+live head — so an overflowed store keeps working. Do not stop at 1.5.6 on
+a store whose sequences may have overflowed.
