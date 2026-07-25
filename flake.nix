@@ -107,6 +107,82 @@
           PGDATA = "${toString ./.}/.postgres-data";
         };
 
+        # Build the installable extension against a specific PostgreSQL major.
+        # Produces a PGXS-style layout (mirrors pg_fts):
+        #   $out/lib/pg_mentat.so
+        #   $out/share/postgresql/extension/pg_mentat.control
+        #   $out/share/postgresql/extension/pg_mentat--<ver>.sql (+ upgrade sql)
+        #
+        # pgFeature is the pgrx cargo feature ("pg16"/"pg17"/"pg18"); pgPkg is the
+        # matching nixpkgs postgresql derivation. We seed a writable PGRX_HOME
+        # config so `cargo pgrx package` never calls the network-dependent
+        # `cargo pgrx init` (which tries to download its own PostgreSQL and
+        # write to a read-only ~/.pgrx -> EACCES in a Nix build).
+        mkPgMentatExtension = { pgPkg, pgFeature }:
+          pkgs.stdenv.mkDerivation {
+            pname = "pg_mentat-${pgFeature}";
+            version = extVersion;
+            src = ./.;
+
+            nativeBuildInputs = commonBuildInputs ++ [ pgPkg pgPkg.pg_config ];
+
+            inherit (buildEnv)
+              LIBCLANG_PATH LLVM_CONFIG_PATH BINDGEN_EXTRA_CLANG_ARGS
+              LD_LIBRARY_PATH PKG_CONFIG_PATH;
+
+            # cargo fetches crates from the network; a fully-sandboxed build
+            # would need a vendored cargoHash. Until then this derivation is
+            # impure (build with `--option sandbox relaxed` or a fixed-output
+            # vendor). It never calls `cargo pgrx init`, which was the
+            # reported blocker.
+            __noChroot = true;
+
+            buildPhase = ''
+              runHook preBuild
+              export CARGO_HOME=$(mktemp -d)
+              export PGRX_HOME=$(mktemp -d)
+              # Seed PGRX_HOME so cargo-pgrx maps the feature to this PG's
+              # pg_config WITHOUT running `cargo pgrx init`.
+              printf '[configs]\n${pgFeature} = "%s"\n' \
+                "${pgPkg.pg_config}/bin/pg_config" > "$PGRX_HOME/config.toml"
+              cargo install --locked cargo-pgrx --version '~0.17' --root "$CARGO_HOME/pgrx-tools"
+              export PATH="$CARGO_HOME/pgrx-tools/bin:$PATH"
+              (cd pg_mentat && cargo pgrx package \
+                --no-default-features --features ${pgFeature} \
+                --pg-config "${pgPkg.pg_config}/bin/pg_config" \
+                --out-dir "$PWD/pgrx-out")
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/lib $out/share/postgresql/extension
+              # cargo pgrx package (run in the pg_mentat subdir) writes a
+              # pg_config-relative tree under pg_mentat/pgrx-out/nix/store/.../;
+              # grab the .so, the generated base + upgrade SQL, and the control
+              # file from there.
+              find pg_mentat/pgrx-out -name 'pg_mentat.so'      -exec cp {} $out/lib/ \;
+              find pg_mentat/pgrx-out -name 'pg_mentat.control' -exec cp {} $out/share/postgresql/extension/ \;
+              find pg_mentat/pgrx-out -name 'pg_mentat--*.sql'  -exec cp {} $out/share/postgresql/extension/ \;
+              # Fall back to the source control file if not found in the package.
+              if [ ! -f $out/share/postgresql/extension/pg_mentat.control ]; then
+                cp pg_mentat/pg_mentat.control $out/share/postgresql/extension/
+              fi
+              test -f $out/lib/pg_mentat.so || (echo "ERROR: pg_mentat.so not produced" >&2; exit 1)
+              runHook postInstall
+            '';
+
+            meta = with pkgs.lib; {
+              description = "pg_mentat — Datomic-compatible Datalog engine for PostgreSQL (${pgFeature})";
+              homepage = "https://github.com/gburd/pg_mentat";
+              license = licenses.asl20;
+              platforms = platforms.linux;
+            };
+          };
+
+        # Extension version, kept in sync with pg_mentat/pg_mentat.control.
+        extVersion = "1.5.7";
+
       in
       {
         # Development shell
@@ -188,58 +264,26 @@
           '';
         };
 
-        # Build the pg_mentat extension
+        # Build the pg_mentat extension, one output per supported PG major.
+        # `nix build .#pg18` yields an installable {.so,.control,.sql} built
+        # against PostgreSQL 18 (PGXS layout, mirrors pg_fts). Deployers overlay
+        # $out into an official postgres:<major> image.
         packages = {
-          default = self.packages.${system}.pg_mentat;
+          default = self.packages.${system}.pg16;
 
-          # NOTE: This derivation needs network access for cargo fetches.
-          # Build with: nix build --option sandbox false
-          # Or use the dev shell for interactive builds: nix develop
-          pg_mentat = pkgs.stdenv.mkDerivation {
-            pname = "pg_mentat";
-            version = "1.2.1";
+          pg16 = mkPgMentatExtension { pgPkg = pkgs.postgresql_16; pgFeature = "pg16"; };
+          pg17 = mkPgMentatExtension { pgPkg = pkgs.postgresql_17; pgFeature = "pg17"; };
+          pg18 = mkPgMentatExtension { pgPkg = pkgs.postgresql_18; pgFeature = "pg18"; };
 
-            src = ./.;
-
-            nativeBuildInputs = commonBuildInputs ++ [ postgresql postgresql.pg_config ];
-
-            inherit (buildEnv) LIBCLANG_PATH LLVM_CONFIG_PATH LD_LIBRARY_PATH PKG_CONFIG_PATH;
-
-            # Network access required for cargo fetches
-            __noChroot = true;
-
-            buildPhase = ''
-              export CARGO_HOME=$(mktemp -d)
-              cargo install --locked cargo-pgrx --version '~0.17'
-              cargo pgrx init --pg16="${postgresql.pg_config}/bin/pg_config"
-              cd pg_mentat
-              cargo pgrx package --pg-config="${postgresql.pg_config}/bin/pg_config"
-            '';
-
-            installPhase = ''
-              mkdir -p $out/lib
-              mkdir -p $out/share/postgresql/extension
-
-              # Copy the compiled shared library
-              find target -name 'pg_mentat.so' -exec cp {} $out/lib/ \;
-
-              # Copy SQL files and control file
-              cp pg_mentat/sql/*.sql $out/share/postgresql/extension/ || true
-              cp pg_mentat/pg_mentat.control $out/share/postgresql/extension/
-            '';
-
-            meta = with pkgs.lib; {
-              description = "Mentat Datalog database for PostgreSQL";
-              homepage = "https://github.com/gburd/pg_mentat";
-              license = licenses.asl20;
-              platforms = platforms.linux;
-            };
-          };
+          # Back-compat alias for the previous single output name.
+          pg_mentat = self.packages.${system}.pg16;
         };
 
-        # Checks for CI/CD -- validate the build compiles
+        # Checks for CI/CD -- validate the extension builds against each major.
         checks = {
-          build = self.packages.${system}.pg_mentat;
+          pg16 = self.packages.${system}.pg16;
+          pg17 = self.packages.${system}.pg17;
+          pg18 = self.packages.${system}.pg18;
         };
       }
     );

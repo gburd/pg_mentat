@@ -74,10 +74,48 @@ psql -h localhost -U postgres -c "CREATE EXTENSION pg_mentat;"
 
 ### Nix
 
+Develop interactively:
+
 ```bash
 nix develop
 cargo pgrx run pg16
 ```
+
+Build an **installable extension** for a specific PostgreSQL major (16, 17, or
+18) as a Nix package. The output is a PGXS-style tree with the compiled
+library and SQL, and the `.so` links only against libc, so it drops into an
+official `postgres:<major>` image:
+
+```bash
+nix build github:gburd/pg_mentat#pg18   # or #pg17, #pg16
+# result/
+#   lib/pg_mentat.so
+#   share/postgresql/extension/pg_mentat.control
+#   share/postgresql/extension/pg_mentat--<ver>.sql  (+ upgrade scripts)
+```
+
+> The build fetches crates from the network, so pass `--option sandbox
+> relaxed` (or `false`) if your Nix is fully sandboxed. It never runs
+> `cargo pgrx init` — it builds against the flake's PostgreSQL via
+> `--pg-config` with a seeded `PGRX_HOME`.
+
+**Deploying into a stock `postgres` image** (e.g. Kubernetes, overlaying the
+files via a ConfigMap/initContainer):
+
+```bash
+# copy result/lib/pg_mentat.so         -> $(pg_config --pkglibdir)/
+# copy result/share/postgresql/extension/pg_mentat*  -> $(pg_config --sharedir)/extension/
+```
+
+On PostgreSQL 18 you can instead point the server at the overlay without
+touching the base image dirs, using the new path GUCs:
+
+```
+dynamic_library_path   = '/opt/pg_mentat/lib:$libdir'
+extension_control_path = '/opt/pg_mentat:$system'   # control file at /opt/pg_mentat/extension/pg_mentat.control
+```
+
+Then `CREATE EXTENSION pg_mentat;`.
 
 ### From Source
 
