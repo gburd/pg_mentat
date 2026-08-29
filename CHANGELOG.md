@@ -5,6 +5,44 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-08-29
+
+### Added
+
+**Optional Datomic-in-Clojure scripting surface (`mentat.store/*`), embedding
+the pure-Rust [mino-rs](https://codeberg.org/gregburd/mino-rs) interpreter.**
+Built with `--features script`, pg_mentat exposes a new `mentat_eval(script
+TEXT) -> TEXT` SQL function that evaluates a mino (Clojure-dialect) script and
+returns its result as EDN. This mirrors the scripting layer added to the
+standalone `mentat` crate, adapted to a Postgres backend: the interpreter is a
+plain Rust-heap value built, run, and dropped within one function call, and
+every `mentat.store/*` primitive calls pg_mentat's existing engine functions
+(`transact`, `query`, `pull`, `entity`) rather than owning any connection.
+
+The `mentat.store/*` namespace implements the Datomic value-and-time model:
+
+- `open` — a conn handle (there is exactly one database).
+- `db` — an **immutable database value** (a map carrying `:basis-tx`,
+  `:as-of`, `:since`), not a connection. All reads take a db value.
+- `transact` — commits; returns a tx report (`:tx-id`, `:tempids`, `:db-after`).
+- `with` — a pure **speculative** `db -> db'` that runs the full pipeline in a
+  savepoint and rolls back (does not commit).
+- `q` / `q-once` — arbitrary Datalog. Because pg_mentat's `mentat_query`
+  accepts `asOf`/`since` inputs, **full `q` runs faithfully against a
+  historical basis** — an advantage over the standalone Mentat crate, whose
+  algebrizer has no as-of query rewrite.
+- `pull`, `entity`, `read`, `entities`, `datoms` — reads over a db value.
+- `as-of` / `since` — temporal db values.
+- Eids resolve from integers, ident keywords, or `[:attr val]` lookup-refs.
+
+JSON engine results are converted back to mino values recursively, restoring
+keyword typing and preserving nested pull maps. The feature is **off by
+default**: a default-built module pulls and costs nothing, and the
+`1.5.7 -> 1.6.0` upgrade edge is a no-op for default installs.
+
+Covered by 21 `#[pg_test]` integration tests (against a real PostgreSQL 16
+backend) and 10 pure value-conversion unit tests.
+
 ## [1.5.7] - 2026-07-07
 
 ### Fixed

@@ -1,0 +1,17 @@
+-- pg_mentat 1.5.7 -> 1.6.0 upgrade.
+--
+-- 1.6.0 adds an OPTIONAL Datomic-in-Clojure scripting surface (the
+-- `mentat.store/*` language, exposed via the `mentat_eval(TEXT)` SQL
+-- function) by embedding the pure-Rust mino-rs interpreter. It is gated
+-- behind the `script` cargo feature and is OFF by default: a default-built
+-- 1.6.0 module contains no new SQL objects relative to 1.5.7, so this edge
+-- intentionally does nothing.
+--
+-- If (and only if) 1.6.0 was built with `--features script`, the extension's
+-- generated function SQL creates `mentat_eval`; that is emitted by pgrx into
+-- the versioned install/upgrade SQL at package time, not here.
+--
+-- No schema change, no data change, no query/transaction behavior change for
+-- existing functionality. This migration exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.6.0'` succeeds and the recompiled
+-- module is picked up.

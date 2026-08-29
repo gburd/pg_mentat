@@ -87,6 +87,40 @@ SELECT mentat_entity(10000);
 | `mentat_schema()` | Return current schema as JSONB |
 | `mentat_explain(query TEXT, inputs JSONB)` | Show query execution plan and generated SQL |
 
+### Scripting API (optional `script` feature)
+
+Built with `--features script`, `pg_mentat` embeds the pure-Rust
+[mino](https://codeberg.org/gregburd/mino-rs) interpreter (a Clojure dialect)
+and exposes a `mentat.store/*` namespace — a Datomic-in-Clojure surface where a
+`db` is an immutable database *value*, not a connection.
+
+| Function | Description |
+|----------|-------------|
+| `mentat_eval(script TEXT)` | Evaluate a mino script; returns its result as EDN (`pr-str`) text |
+
+```sql
+-- Transact a schema, then query. `db` is an immutable value carrying its basis.
+SELECT mentat_eval($$
+  (mentat.store/transact (mentat.store/open)
+    [{:db/ident :person/name
+      :db/valueType :db.type/string
+      :db/cardinality :db.cardinality/one}])
+$$);
+
+SELECT mentat_eval($$
+  (mentat.store/q (mentat.store/db (mentat.store/open))
+    '[:find ?n :where [?e :person/name ?n]])
+$$);
+```
+
+The `mentat.store/*` primitives: `open` (conn handle), `db` (immutable db value
+at the current basis), `transact` (commits), `with` (speculative `db -> db'`,
+no commit), `q`/`q-once`, `pull`, `entity`, `read`, `datoms`, and `as-of` /
+`since` (temporal db values). Because `mentat_query` accepts `asOf`/`since`
+inputs, **full Datalog `q` runs against a historical basis** — an advantage over
+the standalone Mentat crate. Default off; a build without the feature pulls and
+costs nothing.
+
 ### EDN Helper Functions (mentat schema)
 
 | Function | Description |

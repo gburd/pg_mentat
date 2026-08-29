@@ -9,6 +9,8 @@ pub mod pull;
 pub mod query;
 pub mod recursive_queries;
 pub mod schema;
+#[cfg(feature = "script")]
+pub mod script;
 pub mod stats;
 pub mod store_management;
 pub mod subscriptions;

@@ -1,6 +1,6 @@
 [package]
 name = "pg_mentat"
-version = "1.5.7"
+version = "1.6.0"
 edition = "2021"
 authors = ["Greg Burd <greg@burd.me>"]
 license = "Apache-2.0"
@@ -17,6 +17,10 @@ path = "./src/bin/pgrx_embed.rs"
 
 [features]
 default = ["pg16"]
+# Optional Datomic-in-Clojure scripting surface (the `mentat.store/*` language),
+# embedding the pure-Rust mino-rs interpreter. Default off; a build without it
+# pulls nothing and pays nothing.
+script = ["dep:mino-rs"]
 pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
@@ -38,6 +42,11 @@ chrono = "0.4"
 
 lru = "0.12"
 parking_lot = "0.12"
+
+# Optional: the mino Clojure-dialect interpreter, behind the `script` feature.
+# Pure-Rust, single-threaded, no FFI/threads/global state -- safe to embed in
+# a Postgres backend (build -> eval -> drop within one function call).
+mino-rs = { git = "https://codeberg.org/gregburd/mino-rs", tag = "v0.1.0", optional = true }
 
 # Mentat dependencies
 edn = { path = "../edn", features = ["serde_support"] }
