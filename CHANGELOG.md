@@ -5,6 +5,37 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.6.1] - 2026-09-08
+
+### Fixed
+
+**`(min ?x)` / `(max ?x)` failed on every non-numeric value type.** The
+aggregate SQL builder unconditionally cast the decoded value to `::NUMERIC`,
+which is correct for `SUM`/`AVG` but wrong for `MIN`/`MAX` — those are defined
+on any *ordered* type. As a result the two aggregates worked only on `long`- and
+`ref`-valued attributes and raised a raw PostgreSQL cast error
+(`invalid input syntax for type numeric: "..."`) on instants, strings,
+keywords, booleans, doubles (hex-encoded behind a `d:` prefix), uuids, and
+bytes. Reported against 1.6.0 by pg.ddx.io, where two API endpoints used
+`(max ?at)` over an instant attribute (one returned HTTP 500; the other
+silently fell back to the current clock, masking the error).
+
+`MIN`/`MAX` now order without the numeric cast:
+
+- **long/ref** keep the numeric comparison, so `(max ?n)` returns the numeric
+  maximum (`61 > 9`), not the lexicographic one (`"9" > "61"`) — the declared
+  `:db/valueType` is known at plan time and selects this arm.
+- **every other type** orders on the decoded text, whose rendering is already
+  order-preserving by design (instants fixed-width UTC, doubles hex-encoded for
+  monotonic sort), so `(max ?at)` returns the newest instant, `(max ?t)` the
+  lexicographic-max string, etc.
+
+`SUM`/`AVG` (numeric by definition) are unchanged.
+
+Added a regression test per value type in `aggregate_tests.rs`, including a
+`"9" vs "61"` case that pins the long behaviour against future regression.
+Qualified with the full `cargo pgrx test` suite (1870 tests) green on PG 16.
+
 ## [1.6.0] - 2026-08-29
 
 ### Added

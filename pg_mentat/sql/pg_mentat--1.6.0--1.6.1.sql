@@ -1,0 +1,16 @@
+-- pg_mentat 1.6.0 -> 1.6.1 upgrade.
+--
+-- 1.6.1 fixes a bug in the (min ?x) / (max ?x) Datalog aggregates: they
+-- unconditionally cast the decoded value to ::NUMERIC, which is correct for
+-- SUM/AVG but raised a raw PostgreSQL cast error ("invalid input syntax for
+-- type numeric") for MIN/MAX over any non-numeric ordered type -- instants,
+-- strings, keywords, booleans, doubles (hex-encoded), uuids, and bytes.
+-- MIN/MAX now order on the decoded text (whose rendering is already
+-- order-preserving) for those types, while long/ref keep the numeric
+-- comparison so that e.g. 61 > 9 rather than "9" > "61".
+--
+-- The fix is entirely in the compiled query-planner module (Rust); there is
+-- no schema change and no SQL object relative to 1.6.0. This migration
+-- intentionally does nothing; it exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.6.1'` succeeds and the recompiled
+-- module is picked up.

@@ -5890,7 +5890,8 @@ AND {alias}.v_bytes IS NOT DISTINCT FROM {existing}.v_bytes",
         if is_aggregate {
             // Build aggregate expression
             if let Some(Element::Aggregate(agg)) = elem {
-                let agg_sql = build_aggregate_select(agg, &var_to_alias, &extra_var_bindings)?;
+                let agg_sql =
+                    build_aggregate_select(agg, &var_to_alias, &extra_var_bindings, &var_to_type)?;
                 select_exprs.push(agg_sql);
             }
         } else if let Some(Element::Pull(pull)) = elem {
@@ -6047,6 +6048,7 @@ fn build_aggregate_select(
     agg: &edn::query::Aggregate,
     var_to_alias: &HashMap<String, (String, &'static str)>,
     extra_var_bindings: &HashMap<String, String>,
+    var_to_type: &HashMap<String, Option<String>>,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let func_name = agg.func.0 .0.as_str();
 
@@ -6092,13 +6094,45 @@ fn build_aggregate_select(
         "NULL".to_string()
     };
 
-    // COUNT uses DISTINCT to match Datalog set semantics
+    // COUNT uses DISTINCT to match Datalog set semantics.
     if func_name == "count" {
-        Ok(format!("{}(DISTINCT {})::TEXT", sql_func, inner_expr))
-    } else {
-        // For SUM/AVG/MIN/MAX the inner expression is text, so cast to numeric first
-        Ok(format!("{}(({})::NUMERIC)::TEXT", sql_func, inner_expr))
+        return Ok(format!("{}(DISTINCT {})::TEXT", sql_func, inner_expr));
     }
+
+    // MIN/MAX are defined on any ORDERED type, not just numbers. Casting the
+    // decoded text to ::NUMERIC (correct for SUM/AVG) fails on instants,
+    // strings, keywords, booleans, uuids, bytes, and even doubles (the decode
+    // expr hex-encodes them behind a 'd:' prefix). Order without the numeric
+    // cast instead:
+    //
+    //   * long/ref: text ordering is WRONG ("9" > "61"), so keep the numeric
+    //     comparison to preserve existing correct behaviour.
+    //   * every other type: build_value_decode_expr already renders values so
+    //     that lexicographic TEXT ordering matches value ordering (instants
+    //     fixed-width UTC, doubles hex-encoded for monotonic sort), which is
+    //     the intended semantics, so order on the decoded text directly.
+    //
+    // The declared value type is known at plan time for a var bound to a typed
+    // attribute; use it to pick the arm. When the type is unknown (e.g. the
+    // var is not a plain value binding), fall back to text ordering, which is
+    // correct for all types except long/ref.
+    if func_name == "min" || func_name == "max" {
+        let numeric = var_arg
+            .as_deref()
+            .and_then(|v| var_to_type.get(v))
+            .and_then(|t| t.as_deref())
+            .map(|t| t == "long" || t == "ref")
+            .unwrap_or(false);
+        return if numeric {
+            Ok(format!("{}(({})::NUMERIC)::TEXT", sql_func, inner_expr))
+        } else {
+            Ok(format!("{}({})::TEXT", sql_func, inner_expr))
+        };
+    }
+
+    // SUM/AVG are numeric by definition; the decoded inner expression is text,
+    // so cast to numeric first.
+    Ok(format!("{}(({})::NUMERIC)::TEXT", sql_func, inner_expr))
 }
 
 /// Resolve VAR_REF:?varname placeholders in an expression to actual SQL column references.

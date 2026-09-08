@@ -838,10 +838,10 @@ mod schema_evolution_tests;
 mod schema_introspection_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod schema_operation_tests;
-#[cfg(any(test, feature = "pg_test"))]
-mod security_tests;
 #[cfg(all(feature = "script", any(test, feature = "pg_test")))]
 mod script_tests;
+#[cfg(any(test, feature = "pg_test"))]
+mod security_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod speculative_transaction_tests;
 #[cfg(any(test, feature = "pg_test"))]

@@ -194,4 +194,143 @@ mod tests {
         // Alice=88.5, Bob=72.3 => 2
         assert_eq!(scores.len(), 2);
     }
+
+    // ========================================================================
+    // (min ?x) / (max ?x) aggregate over each value type.
+    //
+    // Regression for the 1.6.0 bug where MIN/MAX unconditionally cast the
+    // decoded text to ::NUMERIC, which works only for long/ref and raised a
+    // raw PostgreSQL cast error on instant/string/keyword/boolean/double/etc.
+    // MIN/MAX are defined on any ORDERED type; the decode expr already renders
+    // values so lexicographic TEXT ordering matches value ordering, so order on
+    // the text directly -- EXCEPT long/ref, which must stay numeric ("9" > "61").
+    // ========================================================================
+
+    fn setup_mm_schema() {
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:db/ident :mm/n  :db/valueType :db.type/long    :db/cardinality :db.cardinality/one}
+                {:db/ident :mm/at :db/valueType :db.type/instant :db/cardinality :db.cardinality/one}
+                {:db/ident :mm/t  :db/valueType :db.type/string  :db/cardinality :db.cardinality/one}
+                {:db/ident :mm/s  :db/valueType :db.type/keyword :db/cardinality :db.cardinality/one}
+                {:db/ident :mm/b  :db/valueType :db.type/boolean :db/cardinality :db.cardinality/one}
+                {:db/ident :mm/d  :db/valueType :db.type/double  :db/cardinality :db.cardinality/one}
+            ]'::TEXT)",
+        ).expect("mm schema");
+        Spi::run(
+            "SELECT mentat_transact('[
+                {:mm/n 9  :mm/at #inst \"2026-08-01T00:00:37.000000Z\" :mm/t \"alpha\" :mm/s :a :mm/b false :mm/d 1.5}
+                {:mm/n 61 :mm/at #inst \"2026-09-08T12:00:00.000000Z\" :mm/t \"omega\" :mm/s :z :mm/b true  :mm/d 2.5}
+                {:mm/n 42 :mm/at #inst \"2026-01-15T06:30:00.000000Z\" :mm/t \"mid\"   :mm/s :m :mm/b false :mm/d 9.0}
+            ]'::TEXT)",
+        ).expect("mm data");
+    }
+
+    fn scalar_result(q: &str) -> serde_json::Value {
+        let raw = Spi::get_one::<String>(&format!(
+            "SELECT mentat_query('{q}'::TEXT, '{{}}'::jsonb)::TEXT"
+        ))
+        .expect("query ran")
+        .expect("non-NULL result");
+        let j: serde_json::Value = serde_json::from_str(&raw).expect("parse json");
+        j["result"].clone()
+    }
+
+    #[pg_test]
+    fn test_mm_max_long_is_numeric_not_lexicographic() {
+        setup();
+        setup_mm_schema();
+        // The whole point: 61 > 42 > 9 numerically. Lexicographic text would
+        // wrongly pick "9". Pins long behaviour against regression.
+        assert_eq!(scalar_result("[:find (max ?n) . :where [?e :mm/n ?n]]"), 61);
+        assert_eq!(scalar_result("[:find (min ?n) . :where [?e :mm/n ?n]]"), 9);
+    }
+
+    #[pg_test]
+    fn test_mm_max_min_instant() {
+        setup();
+        setup_mm_schema();
+        // Newest / oldest instant, rendered fixed-width UTC.
+        let mx = scalar_result("[:find (max ?at) . :where [?e :mm/at ?at]]");
+        assert_eq!(mx.as_str().expect("str"), "2026-09-08T12:00:00.000000Z");
+        let mn = scalar_result("[:find (min ?at) . :where [?e :mm/at ?at]]");
+        assert_eq!(mn.as_str().expect("str"), "2026-01-15T06:30:00.000000Z");
+    }
+
+    #[pg_test]
+    fn test_mm_max_min_string() {
+        setup();
+        setup_mm_schema();
+        assert_eq!(
+            scalar_result("[:find (max ?t) . :where [?e :mm/t ?t]]")
+                .as_str()
+                .expect("str"),
+            "omega"
+        );
+        assert_eq!(
+            scalar_result("[:find (min ?t) . :where [?e :mm/t ?t]]")
+                .as_str()
+                .expect("str"),
+            "alpha"
+        );
+    }
+
+    #[pg_test]
+    fn test_mm_max_min_keyword() {
+        setup();
+        setup_mm_schema();
+        assert_eq!(
+            scalar_result("[:find (max ?s) . :where [?e :mm/s ?s]]")
+                .as_str()
+                .expect("str"),
+            ":z"
+        );
+        assert_eq!(
+            scalar_result("[:find (min ?s) . :where [?e :mm/s ?s]]")
+                .as_str()
+                .expect("str"),
+            ":a"
+        );
+    }
+
+    #[pg_test]
+    fn test_mm_max_min_boolean() {
+        setup();
+        setup_mm_schema();
+        // Booleans render as text "true"/"false"; "true" > "false".
+        assert_eq!(
+            scalar_result("[:find (max ?b) . :where [?e :mm/b ?b]]"),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            scalar_result("[:find (min ?b) . :where [?e :mm/b ?b]]"),
+            serde_json::json!(false)
+        );
+    }
+
+    #[pg_test]
+    fn test_mm_max_min_double() {
+        setup();
+        setup_mm_schema();
+        // The double decode is 'd:' || hex(float8send), monotonic as text, so
+        // MAX picks 9.0 and MIN picks 1.5 and both decode back to floats.
+        let mx = scalar_result("[:find (max ?d) . :where [?e :mm/d ?d]]");
+        assert_eq!(mx.as_f64().expect("f64"), 9.0);
+        let mn = scalar_result("[:find (min ?d) . :where [?e :mm/d ?d]]");
+        assert_eq!(mn.as_f64().expect("f64"), 1.5);
+    }
+
+    #[pg_test]
+    fn test_mm_sum_avg_still_numeric_on_long() {
+        setup();
+        setup_mm_schema();
+        // The SUM/AVG numeric arm is unchanged: 9+61+42 = 112, avg = 37.33...
+        assert_eq!(
+            scalar_result("[:find (sum ?n) . :where [?e :mm/n ?n]]"),
+            112
+        );
+        let avg = scalar_result("[:find (avg ?n) . :where [?e :mm/n ?n]]");
+        let a = avg.as_f64().expect("f64");
+        assert!((a - 37.3333).abs() < 0.01, "avg was {a}");
+    }
 }
