@@ -25,6 +25,8 @@ extern crate serde;
 #[macro_use]
 extern crate serde_derive;
 
+pub mod depth;
+pub use crate::depth::{check_nesting, MAX_NESTING};
 pub mod entities;
 pub mod intern_set;
 pub use crate::intern_set::InternSet;
@@ -73,7 +75,7 @@ use crate::query::FromValue;
 
 pub type ParseError = peg::error::ParseError<peg::str::LineCol>;
 
-peg::parser!(pub grammar parse() for str {
+peg::parser!(grammar grammar() for str {
 
     pub rule nil() -> SpannedValue = "nil" { SpannedValue::Nil }
     pub rule nan() -> SpannedValue = "#f" whitespace()+ "NaN" { SpannedValue::Float(OrderedFloat(f64::NAN)) }
@@ -613,3 +615,141 @@ peg::parser!(pub grammar parse() for str {
         / v:variable() { query::Binding::BindScalar(v) }
 
 });
+
+/// The parser. Every entry point rejects input nested deeper than
+/// [`MAX_NESTING`] before the grammar runs; see [`depth`] for why.
+pub mod parse {
+    use super::*;
+    pub fn nil(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::nil(input)
+    }
+    pub fn nan(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::nan(input)
+    }
+    pub fn infinity(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::infinity(input)
+    }
+    pub fn boolean(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::boolean(input)
+    }
+    pub fn raw_bigint(input: &str) -> Result<BigInt, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_bigint(input)
+    }
+    pub fn raw_octalinteger(input: &str) -> Result<i64, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_octalinteger(input)
+    }
+    pub fn raw_hexinteger(input: &str) -> Result<i64, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_hexinteger(input)
+    }
+    pub fn raw_basedinteger(input: &str) -> Result<i64, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_basedinteger(input)
+    }
+    pub fn raw_integer(input: &str) -> Result<i64, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_integer(input)
+    }
+    pub fn raw_float(input: &str) -> Result<OrderedFloat<f64>, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_float(input)
+    }
+    pub fn bigint(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::bigint(input)
+    }
+    pub fn octalinteger(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::octalinteger(input)
+    }
+    pub fn hexinteger(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::hexinteger(input)
+    }
+    pub fn basedinteger(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::basedinteger(input)
+    }
+    pub fn integer(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::integer(input)
+    }
+    pub fn float(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::float(input)
+    }
+    pub fn raw_text(input: &str) -> Result<String, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::raw_text(input)
+    }
+    pub fn text(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::text(input)
+    }
+    pub fn uuid(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::uuid(input)
+    }
+    pub fn bytes(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::bytes(input)
+    }
+    pub fn symbol(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::symbol(input)
+    }
+    pub fn keyword(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::keyword(input)
+    }
+    pub fn list(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::list(input)
+    }
+    pub fn vector(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::vector(input)
+    }
+    pub fn set(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::set(input)
+    }
+    pub fn pair(input: &str) -> Result<(ValueAndSpan, ValueAndSpan), ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::pair(input)
+    }
+    pub fn map(input: &str) -> Result<SpannedValue, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::map(input)
+    }
+    pub fn value(input: &str) -> Result<ValueAndSpan, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::value(input)
+    }
+    pub fn op(input: &str) -> Result<OpType, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::op(input)
+    }
+    pub fn entity(input: &str) -> Result<Entity<ValueAndSpan>, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::entity(input)
+    }
+    pub fn entities(input: &str) -> Result<Vec<Entity<ValueAndSpan>>, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::entities(input)
+    }
+    pub fn where_fn(input: &str) -> Result<crate::query::WhereClause, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::where_fn(input)
+    }
+    pub fn parse_query(input: &str) -> Result<crate::query::ParsedQuery, ParseError> {
+        crate::depth::check_nesting(input, crate::depth::MAX_NESTING)?;
+        grammar::parse_query(input)
+    }
+}

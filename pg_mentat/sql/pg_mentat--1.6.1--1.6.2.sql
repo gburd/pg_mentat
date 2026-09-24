@@ -1,0 +1,22 @@
+-- pg_mentat 1.6.1 -> 1.6.2 upgrade.
+--
+-- 1.6.2 fixes three bugs, all entirely in the compiled module (Rust); there is
+-- no schema change and no SQL object relative to 1.6.1:
+--
+-- * Deeply nested EDN overflowed the parser's stack and crashed the backend
+--   (SIGSEGV), which made the postmaster restart every server process. Any
+--   role that can call mentat_query, mentat_transact, mentat_pull or
+--   mentat_pull_many, or cast text to mentat.edn, could trigger it. The EDN
+--   parser now rejects input nested deeper than 256 levels (100 for the edn
+--   type) before parsing.
+-- * mentat_query failed for every non-superuser with "permission denied to
+--   set parameter temp_file_limit" (and for superusers too on PG13/14). The
+--   per-query limits are now set with the caller's privilege and skipped when
+--   not permitted.
+-- * Instants rendered by the query value decoder (e.g. (max ?at)) were
+--   formatted in the session TimeZone but labelled `Z`, so they were wrong on
+--   any non-UTC server. They are now converted to UTC first.
+--
+-- This migration intentionally does nothing; it exists so that
+-- `ALTER EXTENSION pg_mentat UPDATE TO '1.6.2'` succeeds and the recompiled
+-- module is picked up.

@@ -258,6 +258,22 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_mm_max_min_instant_non_utc_session() {
+        // The text form of an instant ends in a literal `Z`, so it must be UTC
+        // whatever the session TimeZone is. Before 1.6.2 it was rendered in the
+        // session zone: on an America/New_York server a stored 12:00Z read back
+        // as 08:00Z.
+        setup();
+        setup_mm_schema();
+        Spi::run("SET LOCAL TimeZone = 'America/New_York'").expect("set tz");
+        let mx = scalar_result("[:find (max ?at) . :where [?e :mm/at ?at]]");
+        assert_eq!(mx.as_str().expect("str"), "2026-09-08T12:00:00.000000Z");
+        Spi::run("SET LOCAL TimeZone = 'Asia/Kolkata'").expect("set tz");
+        let mn = scalar_result("[:find (min ?at) . :where [?e :mm/at ?at]]");
+        assert_eq!(mn.as_str().expect("str"), "2026-01-15T06:30:00.000000Z");
+    }
+
+    #[pg_test]
     fn test_mm_max_min_string() {
         setup();
         setup_mm_schema();

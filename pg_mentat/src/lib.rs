@@ -779,6 +779,8 @@ mod multi_transaction_workflow_tests;
 #[cfg(any(test, feature = "pg_test"))]
 mod namespace_tests;
 #[cfg(any(test, feature = "pg_test"))]
+mod nesting_tests;
+#[cfg(any(test, feature = "pg_test"))]
 pub mod no_history_tests;
 #[cfg(any(test, feature = "pg_test"))]
 pub mod operational_accessors_tests;

@@ -5,6 +5,56 @@ All notable changes to pg_mentat are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/).
 
+## [1.6.2] - 2026-09-24
+
+### Security
+
+**Deeply nested EDN crashed the server.** The EDN parser recursed once per
+nesting level, so input nested a few thousand levels deep overflowed the
+backend's stack. The backend died with SIGSEGV and the postmaster terminated
+every server process and ran crash recovery, disconnecting all clients. Any role
+that can call `mentat_query`, `mentat_transact`, `mentat_pull`,
+`mentat_pull_many`, or cast text to `mentat.edn` could trigger it; in principle
+that is every role (in practice only superusers before this release, because of
+the `temp_file_limit` bug below). For example, a query whose `:where`
+clause held a vector nested 3,000 deep. All earlier releases are affected.
+
+The parser now rejects input nested deeper than 256 levels, before parsing,
+with an ordinary error (`expected nesting depth at most 256`). The `mentat.edn`
+type's existing 100-level limit is now also checked before parsing; it was
+previously checked afterwards, too late to help. Real queries and
+transactions are unaffected: the deepest one in the test suite nests 5 levels.
+Regression tests cover each entry point above, and the fix is in the shared
+`edn` crate, so the embedded `mentat` crate gets it too.
+
+### Fixed
+
+**`mentat_query` failed for every role that isn't a superuser.** Each query
+sets a few transaction-local limits and planner hints first, including
+`temp_file_limit`, which only superusers may set. Since 1.5.3 that was done in a
+way that turned the refusal into an error, so any non-superuser got
+`ERROR: permission denied to set parameter "temp_file_limit"` on every query.
+On PostgreSQL 13 and 14 superusers got it too (15+ checks parameter ACLs, which
+superusers pass), so on those versions the query path did not work at all. The
+test suite runs as a superuser and CI tests only PostgreSQL 16, so neither
+showed it. Each limit is now set with the caller's own privilege, like `SET
+LOCAL`; one the caller may not set is skipped instead of failing the query.
+`mentat.temp_file_limit` therefore only takes effect for superusers; for other
+roles, set `temp_file_limit` itself (as a superuser, per role or database). New
+test: an ordinary role runs `mentat_query`.
+
+**Instants from `(max ?x)`, `(min ?x)` and other decoded values were off by the
+server's UTC offset.** The value decoder formatted `timestamptz` in the
+session `TimeZone` but appended a literal `Z`, so on a non-UTC server a stored
+`2026-09-08T12:00:00Z` came back as `2026-09-08T08:00:00Z` (America/New_York).
+Instants are now converted to UTC before formatting. Found because the 1.6.1
+regression test fails on any non-UTC machine; a new test pins two non-UTC
+session zones.
+
+### Upgrade
+
+`ALTER EXTENSION pg_mentat UPDATE TO '1.6.2';` — no schema changes.
+
 ## [1.6.1] - 2026-09-08
 
 ### Fixed

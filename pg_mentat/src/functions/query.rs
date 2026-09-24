@@ -717,20 +717,37 @@ fn set_local_guc(name: &str, value: &str) {
     let Ok(c_value) = std::ffi::CString::new(value) else {
         return;
     };
+    // Set with the caller's own privilege: PGC_SUSET for superusers, else
+    // PGC_USERSET, exactly as a SQL `SET LOCAL` would. A parameter the caller
+    // may not set (temp_file_limit is PGC_SUSET) is then refused, and the
+    // refusal must not abort the query: these are best-effort limits and
+    // hints, not correctness requirements. elevel 0 with a session source
+    // would be promoted to ERROR inside set_config_option, so pass DEBUG1
+    // explicitly; set_config_option returns 0 on refusal.
+    //
+    // Before 1.6.2 this passed PGC_USERSET with elevel 0, so every
+    // mentat_query by a non-superuser failed with `permission denied to set
+    // parameter "temp_file_limit"` (on PG15+ superusers passed the ACL check;
+    // on PG13/14 even superusers failed).
+    //
     // SAFETY: name/value are valid NUL-terminated C strings for the duration
     // of the call. set_config_option with GUC_ACTION_LOCAL is the C-level
     // equivalent of `SET LOCAL` and is safe in a read-only / recovery
-    // transaction. elevel 0 (no error throw) so an unknown/invalid GUC is a
-    // no-op rather than aborting the query.
+    // transaction.
     unsafe {
+        let context = if pgrx::pg_sys::superuser() {
+            pgrx::pg_sys::GucContext::PGC_SUSET
+        } else {
+            pgrx::pg_sys::GucContext::PGC_USERSET
+        };
         pgrx::pg_sys::set_config_option(
             c_name.as_ptr(),
             c_value.as_ptr(),
-            pgrx::pg_sys::GucContext::PGC_USERSET,
+            context,
             pgrx::pg_sys::GucSource::PGC_S_SESSION,
             pgrx::pg_sys::GucAction::GUC_ACTION_LOCAL,
             true,
-            0,
+            pgrx::pg_sys::DEBUG1 as i32,
             false,
         );
     }
@@ -1977,6 +1994,11 @@ fn build_numeric_value_decode_expr(alias: &str) -> String {
 
 /// Build a SQL CASE expression that reads from typed value columns and returns TEXT.
 /// Each type-specific column is read directly with appropriate formatting.
+///
+/// Instants: `v_instant` is `timestamptz`, and `to_char` renders a `timestamptz`
+/// in the session's `TimeZone`. The format appends a literal `Z`, so the value
+/// must be converted to UTC first (`AT TIME ZONE 'UTC'`), or every instant is
+/// shifted by the server's offset on any non-UTC server.
 fn build_value_decode_expr(alias: &str) -> String {
     format!(
         "CASE {alias}.value_type_tag \
@@ -1984,7 +2006,7 @@ fn build_value_decode_expr(alias: &str) -> String {
          WHEN {bool_tag} THEN {alias}.v_bool::TEXT \
          WHEN {long_tag} THEN {alias}.v_long::TEXT \
          WHEN {double_tag} THEN 'd:' || ('x' || encode(float8send({alias}.v_double), 'hex'))::bit(64)::bigint::TEXT \
-         WHEN {instant_tag} THEN to_char({alias}.v_instant, 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
+         WHEN {instant_tag} THEN to_char({alias}.v_instant AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') \
          WHEN {str_tag} THEN {alias}.v_text \
          WHEN {kw_tag} THEN ':' || {alias}.v_keyword \
          WHEN {uuid_tag} THEN {alias}.v_uuid::TEXT \

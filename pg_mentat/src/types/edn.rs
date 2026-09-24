@@ -153,6 +153,11 @@ pub(crate) fn parse_and_validate(input: &str) -> Result<Edn, String> {
             MAX_INPUT_SIZE
         ));
     }
+    // Check nesting before parsing: the parser's stack use grows with depth, so
+    // a post-parse depth check (validate_depth below) runs too late to prevent
+    // a stack overflow. check_nesting is linear and uses constant stack.
+    edn::check_nesting(input, MAX_EDN_NESTING)
+        .map_err(|e| format!("EDN nesting depth exceeds maximum of {MAX_EDN_NESTING} ({e})"))?;
     let value_and_span = edn::parse::value(input).map_err(|e| format!("EDN parse error: {e}"))?;
     let value = value_and_span.without_spans();
     let edn_value = Edn::new(value);
