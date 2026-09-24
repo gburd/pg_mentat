@@ -18,6 +18,28 @@ use std::io;
 
 use crate::types::Value;
 
+/// Render a string as an EDN text literal, escaping what `raw_text` cannot read
+/// back literally.
+///
+/// The printer used to emit `"` + the raw string + `"`, which is not
+/// round-trippable: an embedded `"` closed the literal early and an embedded `\`
+/// began an escape the parser then rejected, so printing a value containing
+/// either produced EDN that `parse::value` refused. Newlines and tabs are legal
+/// raw inside a literal, so they are left alone rather than escaped.
+fn escape_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 impl Value {
     /// Return a pretty string representation of this `Value`.
     pub fn to_pretty(&self, width: usize) -> Result<String, io::Error> {
@@ -98,7 +120,7 @@ impl Value {
             Value::NamespacedSymbol(ref v) => pp.text(v.namespace()).append("/").append(v.name()),
             Value::PlainSymbol(ref v) => pp.text(v.to_string()),
             Value::Keyword(ref v) => pp.text(v.to_string()),
-            Value::Text(ref v) => pp.text("\"").append(v.as_str()).append("\""),
+            Value::Text(ref v) => pp.text(escape_text(v)),
             Value::Uuid(ref u) => pp
                 .text("#uuid \"")
                 .append(u.hyphenated().to_string())
@@ -239,5 +261,45 @@ mod test {
   [?id]
   [?id :session/keyword-bar _])]"
         );
+    }
+    /// `\n`/`\t`/`\r` must unescape to the control characters they denote.
+    /// The rule previously echoed the character following the backslash, so
+    /// these yielded the letters `n`/`t`/`r` and `"a\nb"` silently became
+    /// `"anb"` -- data loss for any text carrying a newline or tab.
+    #[test]
+    fn test_string_escapes_unescape_to_control_characters() {
+        let data = parse::value(r#""a\nb\tc\rd""#).unwrap().without_spans();
+        assert_eq!(data, crate::Value::Text("a\nb\tc\rd".into()));
+    }
+
+    /// The passthrough arm: `\\` and `\"` are their own translation.
+    #[test]
+    fn test_backslash_and_quote_escapes_are_preserved() {
+        let data = parse::value(r#""a\\b\"c""#).unwrap().without_spans();
+        assert_eq!(data, crate::Value::Text("a\\b\"c".into()));
+    }
+
+    /// Printing then reparsing must be the identity. The printer emitted the
+    /// raw string, so a value containing `"` closed its literal early and one
+    /// containing `\` began an escape the parser rejected -- EDN this crate
+    /// wrote, this crate could not read.
+    #[test]
+    fn test_text_round_trips_through_the_printer() {
+        for original in [
+            "plain",
+            "has\"a quote",
+            "has\\a backslash",
+            "a\nnewline",
+            "a\ttab",
+            "all: \" \\ \n \t",
+            "",
+        ] {
+            let value = crate::Value::Text(original.to_string());
+            let printed = value.to_pretty(200).unwrap();
+            let reparsed = parse::value(&printed)
+                .unwrap_or_else(|e| panic!("printed {printed:?} is unparsable: {e}"))
+                .without_spans();
+            assert_eq!(reparsed, value, "round-trip changed {original:?}");
+        }
     }
 }

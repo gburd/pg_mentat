@@ -116,7 +116,19 @@ peg::parser!(pub grammar parse() for str {
 
     // TODO: standalone characters: \<char>, \newline, \return, \space and \tab.
     // rule string_standalone_chars() ->
-    rule string_special_char() -> &'input str = "\\" c:$(['\\' | '"' | 'n' | 't' | 'r']) { c }
+    // The escape must be *translated*, not echoed: matching the backslash and
+    // returning the following character verbatim yields the LETTERS 'n'/'t'/'r'
+    // instead of the control characters they denote, so "a\nb" unescaped to
+    // "anb" -- silent data loss for any string carrying a newline or tab.
+    // `\\` and `\"` are their own translation, hence the passthrough arm.
+    rule string_special_char() -> &'input str = "\\" c:$(['\\' | '"' | 'n' | 't' | 'r']) {
+        match c {
+            "n" => "\n",
+            "t" => "\t",
+            "r" => "\r",
+            literal => literal,
+        }
+    }
     rule string_normal_chars() -> &'input str = c:$((!['\"' | '\\'][_])+) { c }
 
     // This is what we need to do in order to unescape. We can't just match the entire string slice:
